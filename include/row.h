@@ -1,14 +1,18 @@
 #ifndef ROW_H_
 #define ROW_H_
 
+#include <stdint.h>
+#include <stdbool.h>
+#include "data_types.h"
+
 /* Row structure that contains:
  * is_deleted: tombstone flag
  * n_columns: amount of columns
- * columns: type-agnostic columns data array. */
+ * values: array of multiple data type values. */
 typedef struct row {
-    int is_deleted;
-    int n_columns;
-    void **columns;
+    bool is_deleted;
+    uint32_t n_columns;
+    Value *values;
 } Row;
 
 #endif
