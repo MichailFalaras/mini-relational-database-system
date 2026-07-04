@@ -1,0 +1,104 @@
+#ifndef EXPRESSIONS_H_
+#define EXPRESSIONS_H_
+
+#include "data_types.h"
+#include <stdint.h>
+
+typedef struct expression_node ExpressionNode;
+
+/* Enum of potential expression entities */
+typedef enum expression_type {
+    EXPR_LITERAL,
+    EXPR_COLUMN_REF,
+    EXPR_UNARY,
+    EXPR_BINARY,
+    EXPR_IS_NULL,
+    EXPR_IS_NOT_NULL,
+    EXPR_IN,
+    EXPR_BETWEEN
+} ExpressionType;
+
+/* Enum of all operator types 
+ * Arithmetic operators: +, -, *, /
+ * Comparison operators: =, <>, <, <=, >, >= 
+ * Logical operators: AND, OR, NOT */
+typedef enum operator_type {
+    OP_EQ,
+    OP_NEQ,
+    OP_LT,
+    OP_LTE,
+    OP_GT,
+    OP_GTE,
+    OP_AND,
+    OP_OR,
+    OP_NOT,
+    OP_ADD,
+    OP_SUB,
+    OP_MUL,
+    OP_DIV
+} OperatorType;
+
+/* Literal value in expression, e.g., integer, float, string */
+typedef struct literal {
+    Value literal;
+} Literal;
+
+/* Column name reference in the expression */
+typedef struct column_ref {
+    char table_name[64];
+    char column_name[64];
+} ColumnRef;
+
+/* Unary expression, including operator + operand */
+typedef struct unary {
+    ExpressionNode *operand;
+    OperatorType op;
+} Unary;
+
+/* Binary expression, including left operand + operator + right operand */
+typedef struct binary {
+    ExpressionNode *left_operand;
+    ExpressionNode *right_operand;
+    OperatorType op;
+} Binary;
+
+/* <column> IS NULL expression */
+typedef struct is_null {
+    ExpressionNode *operand;
+} IsNull;
+
+/* <column> IS NOT NULL expression */
+typedef struct is_not_null {
+    ExpressionNode *operand;
+} IsNotNull;
+
+/* <column> IN <list_of_values> expression */
+typedef struct in {
+    ExpressionNode *operand;
+    ExpressionNode **set_options;
+    uint32_t option_count;
+} In;
+
+/* <column> BETWEEN <lower> AND <upper> expression */
+typedef struct between {
+    ExpressionNode *operand;
+    ExpressionNode *lower;
+    ExpressionNode *upper;
+} Between;
+
+/* Generic expression struct that can be any of the above expression entities */
+typedef struct expression_node {
+    ExpressionType type;
+    union {
+        Literal literal_value;
+        ColumnRef column_value;
+        Unary unary_expr;
+        Binary binary_expr;
+        IsNull is_null_expr;
+        IsNotNull is_not_null_expr;
+        In in_expr;
+        Between between_expr;
+    } expression_data;
+} ExpressionNode;
+
+#endif
