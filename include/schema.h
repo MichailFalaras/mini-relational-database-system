@@ -4,44 +4,31 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "data_types.h"
-
-typedef struct column_constraints ColumnConstraints;
-typedef struct columns Columns;
-
-/* Column constraints that contain: */
-typedef struct column_constraints {
-    bool primary_key;
-    bool foreign_key;
-    char foreign_table_name[64];
-    char foreign_column_name[64];
-    uint32_t foreign_table_index;
-    uint32_t foreign_column_index;
-    bool unique;
-    bool not_null;
-    bool has_index;
-    /* TODO: CHECK */
-} ColumnConstraints;
+#include "expressions.h"
+#include "constraints.h"
 
 /* Columns struct that contains:
  * name: name of column
- * has_index: flag if column has index
- * amount_rows: rows without NULL value
- * amount_null: rows with NULL value*/
-typedef struct columns {
+ * type: data type of column
+ * non_null_rows: rows without NULL value
+ * null_rows: rows with NULL value
+ * not_null: flag if column has constrain NOT NULL. */
+typedef struct column {
     char name[64];
     DataType type;
-    uint32_t amount_rows;
-    uint32_t amount_null;
-    ColumnConstraints constraints;
-} Columns;
+    uint32_t non_null_rows;
+    uint32_t null_rows;
+    bool not_null;
+} Column;
 
 /* Table's schema. Contains:
  * columns: all columns of table
- * amount_columns: amount of columns*/
+ * amount_columns: amount of columns
+ * constraints: constraints array of table schema. */
 typedef struct schema {
-    Columns *columns;
-    uint32_t *primary_key_columns;
+    Column *columns;
     uint32_t amount_columns;
+    Constraint *constraints;    
 } Schema;
 
 #endif 
