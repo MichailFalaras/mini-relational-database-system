@@ -15,7 +15,8 @@ typedef enum expression_type {
     EXPR_IS_NULL,
     EXPR_IS_NOT_NULL,
     EXPR_IN,
-    EXPR_BETWEEN
+    EXPR_BETWEEN,
+    EXPR_FUNCTIONS,
 } ExpressionType;
 
 /* Enum of all operator types 
@@ -86,6 +87,19 @@ typedef struct between {
     ExpressionNode *upper;
 } Between;
 
+typedef enum aggregate_function_types {
+    SUM,
+    COUNT,
+    AVG,
+    MIN,
+    MAX
+} AggregateFunctionTypes;
+
+typedef struct aggregate_function {
+    AggregateFunctionTypes type;
+    ExpressionNode *expression;
+} AggregateFunction;
+
 /* Generic expression struct that can be any of the above expression entities */
 typedef struct expression_node {
     ExpressionType type;
@@ -98,6 +112,7 @@ typedef struct expression_node {
         IsNotNull is_not_null_expr;
         In in_expr;
         Between between_expr;
+        AggregateFunction aggregate_func_expr;
     } expression_data;
 } ExpressionNode;
 
