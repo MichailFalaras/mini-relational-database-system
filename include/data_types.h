@@ -66,6 +66,7 @@ typedef struct blob {
 /* Value and corresponding data type both in this struct. */
 typedef struct value {
     DataType type;
+    bool is_null;
     union {
         int32_t int32_val;
         uint32_t uint32_val;
