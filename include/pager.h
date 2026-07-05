@@ -11,7 +11,7 @@
  * num_pages: amount of pages
  * pages: pointer to pages opened */
 typedef struct pager {
-    size_t fd;
+    int fd;
     size_t file_length;
     uint32_t num_pages;
     Page *pages[MAX_PAGES];
