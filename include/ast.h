@@ -54,36 +54,16 @@ typedef enum ast_node_type {
     AST_ALTER_DROP_CONSTRAINT,
 
     /* Third-Level Nodes */
-   // AST_COLUMN_REF,
     AST_TABLE_REF,
     AST_INDEX_REF,
-
-    // Join
     AST_ON,
 
-    // Expression in WHERE/HAVING/JOIN ON/SET/ CHECK CONSTRAINT
-    //AST_BINARY_EXPR,
-    //AST_UNARY_EXPR,
-    //AST_LITERAL,
-   //AST_FUNCTION_CALL,
-
-    // Table Schema Components
     AST_COLUMN_DEF,
     AST_PRIMARY_KEY,
     AST_FOREIGN_KEY,
     AST_UNIQUE,
     AST_CHECK,
 } ASTNodeType;
-
-/* SELECT Root Node Definition. */
-
-/*typedef struct ast_column_ref {
-    char column_name[64];
-} ColumnRefNode;
-
-typedef struct ast_function_call {
-    
-} FunctionCallNode;*/
 
 typedef struct ast_projection {
     ExpressionNode **expressions;
@@ -156,7 +136,6 @@ typedef struct ast_select {
     OffsetNode *offset;
 } SelectNode;
 
-/* INSERT Root Node Definition. */
 typedef struct ast_into {
     char table_name[64];
     /* Contains table name in both columns. */
@@ -174,8 +153,6 @@ typedef struct ast_insert {
     IntoNode *into;
     ValuesNode *values;
 } InsertNode;
-
-/* UPDATE Root Node Definition. */
 
 typedef struct ast_assignment {
     char column_name[64];
@@ -198,29 +175,29 @@ typedef struct ast_delete {
     WhereNode *where;
 } DeleteNode;
 
-/* CREATE TABLE Root Node Definition. */
 
 typedef enum ast_constraint_type {
     AST_CONSTRAINT_PRIMARY_KEY,
     AST_CONSTRAINT_UNIQUE,
     AST_CONSTRAINT_NOT_NULL,
     AST_CONSTRAINT_FOREIGN_KEY,
-    AST_CONSTRAINT_CHECK
+    AST_CONSTRAINT_CHECK,
+    AST_CONSTRAINT_DEFAULT
 } ASTConstraintType;
 
 typedef struct ast_primary_key_constraint {
     ExpressionNode **column_refs;
     uint32_t num_columns;
-} ASTPrimaryKeyConstraint;
+} PrimaryKeyConstraintNode;
 
 typedef struct ast_unique_constraint {
     ExpressionNode **column_refs;
     uint32_t num_columns;
-} ASTUniqueConstraint;
+} UniqueConstraintNode;
 
 typedef struct ast_not_null_constraint {
     ExpressionNode *column_ref;
-} ASTNotNullConstraint;
+} NotNullConstraintNode;
 
 typedef struct ast_foreign_key_constraint {
     ExpressionNode **local_column_refs;
@@ -230,22 +207,28 @@ typedef struct ast_foreign_key_constraint {
 
     ExpressionNode **referenced_column_refs;
     uint32_t num_referenced_columns;
-} ASTForeignKeyConstraint;
+} ForeignKeyConstraintNode;
 
 typedef struct ast_check_constraint {
     ExpressionNode *check_expr;
-} ASTCheckConstraint;
+} CheckConstraintNode;
+
+typedef struct ast_default_constraint {
+    char column_name[64];
+    ExpressionNode *default_expr;
+} DefaultConstraintNode;
 
 typedef struct ast_constraints {
     char constraint_name[64];
     ASTConstraintType type;
 
     union {
-        ASTPrimaryKeyConstraint primary_key;
-        ASTUniqueConstraint unique;
-        ASTNotNullConstraint not_null;
-        ASTForeignKeyConstraint foreign_key;
-        ASTCheckConstraint check;
+        PrimaryKeyConstraintNode primary_key;
+        UniqueConstraintNode unique;
+        NotNullConstraintNode not_null;
+        ForeignKeyConstraintNode foreign_key;
+        CheckConstraintNode check;
+        DefaultConstraintNode default_value;
     } constraint_data;
 
 } ConstraintsNode;
@@ -261,11 +244,6 @@ typedef struct ast_columns {
     ColumnDefNode **column_defs;
 } ColumnsNode;
 
-/*typedef struct ast_primary_key PrimaryKeyNode;
-typedef struct ast_foreign_key ForeignKeyNode;
-typedef struct ast_unique UniqueNode;
-typedef struct ast_check CheckNode;*/
-
 typedef struct ast_create_table {
     char table_name[64];
     ColumnsNode *columns;
@@ -277,7 +255,6 @@ typedef struct ast_drop_table {
     char table_name[64];
 } DropTableNode;
 
-/* ALTER TABLE Root Definition. */
 typedef struct ast_alter_add {
     ColumnDefNode *column;
 } AlterAddNode;
@@ -328,7 +305,6 @@ typedef struct ast_truncate_table {
     char table_name[64];
 } TruncateTableNode;
 
-/* CREATE INDEX Root Definition. */
 typedef struct ast_create_index {
     char index_name[64];
     char table_name[64];
@@ -343,7 +319,6 @@ typedef struct ast_drop_index {
     char table_name[64];
 } DropIndexNode;
 
-/* TODO: Abstract Syntax Tree Node Structs */
 typedef struct abstract_syntax_tree_node {
     ASTNodeType type;
     union {
