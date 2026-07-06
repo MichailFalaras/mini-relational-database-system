@@ -12,7 +12,17 @@
 typedef struct row {
     bool is_deleted;
     uint32_t n_columns;
-    Value *values;
+    Value **values;
 } Row;
+
+extern Row *row_create(const Value *values, uint32_t n_columns);
+
+extern bool row_mark_deleted(Row *row);
+
+extern Value *row_get_value(const Row *row, uint32_t column_pos);
+
+extern bool *row_set_value(Row *row, uint32_t column_pos, const Value *new_val);
+
+extern void row_free(Row *row);
 
 #endif

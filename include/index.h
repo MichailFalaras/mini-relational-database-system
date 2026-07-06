@@ -26,8 +26,18 @@ typedef struct index_key {
 typedef struct index {
     char name[64];
     IndexType type;
-    IndexKey key;
+    IndexKey *key;
     uint32_t root_page_num;
 } Index;
+
+extern Index *index_create(const char *index_name, IndexType type, IndexKey *key, uint32_t root_page_num);
+
+extern bool index_drop(const char *index_name);
+
+extern bool index_key_has_column(const Index *index, uint32_t index_key);
+
+extern bool index_key_matches_key(const Index *index, const uint32_t *column_ids, uint32_t amount_columns);
+
+extern void index_free(Index *index);
 
 #endif

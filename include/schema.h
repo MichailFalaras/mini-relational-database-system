@@ -6,6 +6,7 @@
 #include "data_types.h"
 #include "expressions.h"
 #include "constraints.h"
+#include "row.h"
 
 /* Columns struct that contains:
  * name: name of column
@@ -27,8 +28,34 @@ typedef struct column {
  * constraints: constraints array of table schema. */
 typedef struct schema {
     Column *columns;
-    uint32_t amount_columns;
-    Constraint *constraints;    
+    uint32_t num_columns;
+    Constraint *constraints;
+    uint32_t num_constraints;
 } Schema;
+
+extern Schema *schema_create(const Column *columns, const Constraint *constraints, uint32_t num_columns,
+                            uint32_t num_constraints);
+
+extern bool schema_add_column(Schema *schema, const Column *new_column);
+
+extern bool schema_drop_column(Schema *schema, const char *col_name);
+
+extern bool schema_rename_column(Schema *schema, const char *old_col_name, const char *new_col_name);
+
+extern bool schema_modify_column(Schema *schema, const char *old_col_name, const Column *new_column);
+
+extern bool schema_add_constraint(Schema *schema, const Constraint *new_constraint);
+
+extern bool schema_drop_constraint(Schema *schema, const char *constraint_name);
+
+extern Column *schema_find_column(const Schema *schema, const char *col_name);
+
+extern uint32_t *schema_find_column_index(const Schema *schema, const char *col_name);
+
+extern bool schema_validate_row(const Schema *schema, const Row *row);
+
+extern bool schema_drop(Schema *schema); 
+
+extern void schema_free(Schema *schema);
 
 #endif 
