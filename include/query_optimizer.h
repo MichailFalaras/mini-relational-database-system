@@ -74,7 +74,7 @@ typedef struct plan_alter_rename_column {
 
 typedef struct plan_alter_modify_column {
     char table_name[64];
-    char col_name[64];
+    char old_column_name[64];
     Column *new_column_definition;
 } AlterModifyColumn;
 
