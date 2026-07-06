@@ -9,7 +9,9 @@ typedef enum constraint_type {
     PRIMARY_KEY,
     FOREIGN_KEY,
     UNIQUE,
-    CHECK
+    CHECK,
+    NOT_NULL,
+    DEFAULT
 } ConstraintType;
 
 /* Primary key struct containing:
@@ -47,6 +49,15 @@ typedef struct check_constraint {
     ExpressionNode *constraint_expr;
 } CheckConstraint;
 
+typedef struct not_null {
+    uint32_t column_ref;
+} NotNullConstraint;
+
+typedef struct default_val {
+    uint32_t column_ref;
+    ExpressionNode *default_expr;
+} DefaultConstraint;
+
 /* Constraint struct containing:
  * constraint_name: name of constraint
  * type: constraint type
@@ -56,10 +67,12 @@ typedef struct constraint {
     char constraint_name[64];
     ConstraintType type;
     union {
-        PrimaryKeyConstraint *primary_key;
-        ForeignKeysConstraint *foreign_keys;
-        UniqueConstraint *unique_cols;
-        CheckConstraint *check;
+        PrimaryKeyConstraint primary_key;
+        ForeignKeysConstraint foreign_keys;
+        UniqueConstraint unique_cols;
+        CheckConstraint check;
+        NotNullConstraint not_null;
+        DefaultConstraint default_value;
     } constraint;
 } Constraint;
 
