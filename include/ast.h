@@ -237,6 +237,7 @@ typedef struct ast_column_def {
     char column_name[64];
     DataType type;
     ConstraintsNode *constraints;
+    uint32_t num_constraints;
 } ColumnDefNode;
 
 typedef struct ast_columns {
@@ -263,9 +264,13 @@ typedef struct ast_alter_drop {
     char column_name[64];
 } AlterDropNode;
 
-typedef struct ast_alter_rename {
+typedef struct ast_alter_rename_table {
     char new_table_name[64];
-} AlterRenameNode;
+} AlterRenameTableNode;
+
+typedef struct ast_alter_rename_col {
+    char new_col_name[64];
+} AlterRenameColNode;
 
 typedef struct ast_alter_modify {
     char column_name[64];
@@ -283,12 +288,12 @@ typedef struct ast_alter_drop_constraint {
 } AlterDropConstraintNode;
 
 typedef struct ast_alter_action {
-    char table_name[64];
     ASTNodeType *type;
     union {
         AlterAddNode alter_add;
         AlterDropNode alter_drop;
-        AlterRenameNode alter_rename;
+        AlterRenameTableNode alter_rename_table;
+        AlterRenameColNode alter_rename_col;
         AlterModifyNode alter_modify;
         AlterAddConstraintNode alter_add_constraint;
         AlterDropConstraintNode alter_drop_constraint;
@@ -351,5 +356,42 @@ typedef struct abstract_syntax_tree_node {
         ConstraintsNode constraints;
     } node_contents;
 } ASTNode;
+
+
+/* Free for all types of AST nodes. (Switch-Statement)*/
+void free_ast_node(ASTNode *node);
+
+/* TODO: static functions in .c file */
+void free_ast_select(SelectNode *node); 
+void free_ast_projection(ProjectionNode *node);
+void free_ast_from(FromNode *node); 
+void free_ast_where(WhereNode *node); 
+void free_ast_group_by(GroupByNode *node);
+void free_ast_having(HavingNode *node);
+void free_ast_order_by(OrderByNode *node);
+void free_ast_joins(JoinNode *node);
+void free_ast_limit(LimitNode *node);
+void free_ast_offset(OffsetNode *node);
+void free_ast_insert(InsertNode *node);
+void free_ast_into(IntoNode *node);
+void free_ast_values(ValuesNode *node);
+void free_ast_update(UpdateNode *node);
+void free_ast_set(SetNode *node);
+void free_ast_delete(DeleteNode *node);
+void free_ast_create_table(CreateTableNode *node);
+void free_ast_columns(ColumnsNode *node);
+void free_ast_column_defs(ColumnDefNode *node);
+void free_ast_constraints(ConstraintsNode *node);
+void free_ast_drop_table(DropTableNode *node);
+void free_ast_alter_table(AlterTableNode *node);
+void free_ast_alter_add_col(AlterAddNode *node);
+void free_ast_alter_drop_col(AlterDropNode *node);
+void free_ast_alter_rename_col(AlterRenameColNode *node);
+void free_ast_alter_rename_table(AlterRenameTableNode *node);
+void free_ast_alter_modify_col(AlterModifyNode *node);
+void free_ast_alter_add_constraint(AlterAddConstraintNode *node);
+void free_ast_alter_drop_constraint(AlterDropConstraintNode *node);
+void free_ast_create_index(CreateIndexNode *node);
+void free_ast_drop_index(DropIndexNode *node);
 
 #endif

@@ -27,9 +27,9 @@ typedef struct column {
  * amount_columns: amount of columns
  * constraints: constraints array of table schema. */
 typedef struct schema {
-    Column *columns;
+    Column **columns;
     uint32_t num_columns;
-    Constraint *constraints;
+    Constraint **constraints;
     uint32_t num_constraints;
 } Schema;
 
@@ -50,7 +50,9 @@ extern bool schema_drop_constraint(Schema *schema, const char *constraint_name);
 
 extern Column *schema_find_column(const Schema *schema, const char *col_name);
 
-extern uint32_t *schema_find_column_index(const Schema *schema, const char *col_name);
+extern uint32_t schema_find_column_index(const Schema *schema, const char *col_name);
+
+extern uint32_t schema_find_constraint_index(const Schema *schema, const char *constraint_name);
 
 extern bool schema_validate_row(const Schema *schema, const Row *row);
 

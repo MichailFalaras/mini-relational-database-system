@@ -7,6 +7,8 @@
 #include "constraints.h"
 #include "index.h"
 #include "row.h"
+#include "parser.h"
+#include "database.h"
 
 /* Operation Types. */
 typedef enum operation_type {
@@ -44,98 +46,124 @@ typedef struct plan_create_table {
 } CreateTable;
 
 typedef struct plan_drop_table {
-    char table_name[64];
+    Table *table;
 } DropTable;
 
 typedef struct plan_alter_rename_table {
-    char old_table_name[64];
+    // AlterActionNode containts both the old and the new name.
+    Table *table;
     char new_table_name[64];
 } AlterRenameTable;
 
 typedef struct plan_truncate_table {
-    char table_name[64];
+    Table *table;
 } TruncateTable;
 
 typedef struct plan_alter_add_column {
-    char table_name[64];
-    Column *new_column;
+    Table *table;
+    Column *new_column_definition;
+    Constraint **new_constraints;
+    uint32_t num_constraints;
 } AlterAddColumn;
 
 typedef struct plan_alter_drop_column {
-    char table_name[64];
-    char col_name[64];
+    Table *table;
+    uint32_t column_array_index;
 } AlterDropColumn;
 
 typedef struct plan_alter_rename_column {
-    char table_name[64];
-    char old_col_name[64];
+    Table *table;
+    Column *column;
     char new_col_name[64];
 } AlterRenameColumn;
 
 typedef struct plan_alter_modify_column {
-    char table_name[64];
-    char old_column_name[64];
+    Table *table;
+    //uint32_t column_array_index;
     Column *new_column_definition;
 } AlterModifyColumn;
 
 typedef struct plan_alter_add_constraint {
-    char table_name[64];
+    Table *table;
     Constraint *constraint;
 } AlterAddConstraint;
 
 typedef struct plan_alter_drop_constraint {
-    char table_name[64];
-    char constraint_name[64];
+    Table *table;
+    uint32_t constraint_array_index;
 } AlterDropConstraint;
 
 typedef struct plan_create_index {
-    char table_name[64];
+    Table *table;
     Index *new_index;
 } CreateIndex;
 
 typedef struct plan_drop_index {
-    char table_name[64];
-    char index_name[64];
+    Table *table;
+    // primary or secondary, that's why its kept a pointer
+    Index *index;
 } DropIndex;
 
 typedef struct plan_seq_scan {
-    char table_name[64];
+    Table *table;
 } SeqScan;
 
 typedef struct plan_index_scan {
-    char table_name[64];
-    char index_name[64];
+    Table *table;
+    // primary or secondary again
+    Index *index;
 } IndexScan;
 
 /* WHERE Condition */
 typedef struct plan_filter {
     ExpressionNode *expression;
+    /* Direct access to columns used in expression. */
+    uint32_t *columns;
+    uint32_t amount_column_refs;
 } Filter;
 
 /* SELECT Columns */
 typedef struct plan_project {
+    // aggregate functions, etc
+    ExpressionNode **expressions;
+    uint32_t num_expressions;
+
     uint32_t *columns;
     uint32_t amount_columns;
 } Project;
 
+typedef enum plan_join_types {
+    INNER,
+    LEFT,
+    RIGHT,
+    OUTER
+} PlanTypes;
+
 typedef struct plan_join {
-    char left_table_name[64];
-    char right_table_name[64];
-    ExpressionNode *join_condition;
+    Table *left_table;
+    Table *right_table;
+    PlanTypes join_type;
+    Filter *on_node;
 } Join;
 
 typedef struct plan_insert {
-    char table[64];
+    Table *table;
+    uint32_t *column_array_indexes;
+    uint32_t num_columns;
     Row *rows;
 } Insert;
 
 typedef struct plan_update {
-    char table_name[64];
+    Table *table;
     Row *new_values;
+    uint32_t *column_array_index;
+    uint32_t num_columns;
+    Filter *filter;
 } Update;
 
 typedef struct plan_delete {
-    char table_name[64];
+    Table *table;
+    Filter *filter;
 } Delete;
 
 /* Plan Nodes containing:
@@ -179,5 +207,38 @@ typedef struct query_plan {
     PlanNode *head;
     uint32_t amount_plan_nodes;
 } QueryPlan;
+
+extern QueryPlan *query_plan_init();
+
+extern bool query_planner(Statement *statement, Database *db);
+
+/* TODO: static functions in .c file */
+PlanNode *plan_node_create(ASTNode *node, Database *db);
+PlanNode *plan_node_create_table(CreateTableNode node, Database *db);
+PlanNode *plan_node_drop_table(DropTableNode node, Database *db);
+PlanNode *plan_node_truncate_table(TruncateTableNode node, Database *db);
+PlanNode *plan_node_alter_action(AlterTableNode node, Database *db);
+PlanNode *plan_node_alter_add_column(AlterAddNode node, Database *db);
+PlanNode *plan_node_alter_drop_column(AlterDropNode node, Database *db);
+PlanNode *plan_node_alter_rename_table(AlterRenameTableNode node, Database *db);
+PlanNode *plan_node_alter_rename_column(AlterRenameColNode node, Database *db);
+PlanNode *plan_node_alter_modify_column(AlterModifyNode node, Database *db);
+PlanNode *plan_node_alter_add_constraint(AlterAddConstraintNode node, Database *db);
+PlanNode *plan_node_alter_drop_constraint(AlterDropConstraint node, Database *db);
+PlanNode *plan_node_create_index(CreateIndexNode node, Database *db);
+PlanNode *plan_node_drop_index(DropIndexNode node, Database *db);
+PlanNode *plan_node_filter(WhereNode node, Database *db);
+PlanNode *plan_node_project(SelectNode node, Database *db);
+PlanNode *plan_node_join(JoinNode node, Database *db);
+PlanNode *plan_node_insert(InsertNode node, Database *db);
+PlanNode *plan_node_delete(DeleteNode node, Database *db);
+PlanNode *plan_node_update(UpdateNode node, Database *db);
+
+PlanNode *plan_node_seq_scan(Database *db);
+PlanNode *plan_node_index_scan(Database *db);
+
+extern bool query_plan_connect_node(QueryPlan *query_plan, PlanNode *new_node);
+
+extern void query_plan_free(QueryPlan *query_plan);
 
 #endif
