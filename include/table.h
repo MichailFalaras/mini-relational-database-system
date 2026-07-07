@@ -19,7 +19,7 @@
 typedef struct table {
     char name[64];
     Schema table_schema;
-    Index primary_index;
+    Index *primary_index;
     Index *secondary_indexes[MAX_INDEXES];
     uint32_t total_secondary_indexes;
     uint32_t row_count;
@@ -55,7 +55,7 @@ extern bool table_drop_index(Table *table, const char *index_name);
 /* Searching Operations. */
 extern Index *table_find_index(const Table *table, const char *index_name);
 
-extern bool table_has_column(const Table *table, const char col_name);
+extern bool table_has_column(const Table *table, const char *col_name);
 
 extern Column *table_find_column(const Table *table, const char *col_name);
 
