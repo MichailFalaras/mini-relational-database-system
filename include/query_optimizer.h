@@ -39,6 +39,12 @@ typedef enum operation_type {
     PLAN_DELETE
 } OperationType;
 
+/* Help Struct for JOIN Projection. */
+typedef struct column_ref {
+    Table *table;
+    uint32_t column_index;
+} ColumnRef;
+
 /* Operation-Specific Data. */
 typedef struct plan_create_table {
     char table_name[64];
@@ -67,19 +73,16 @@ typedef struct plan_alter_add_column {
 } AlterAddColumn;
 
 typedef struct plan_alter_drop_column {
-    Table *table;
-    uint32_t column_array_index;
+    ColumnRef column;
 } AlterDropColumn;
 
 typedef struct plan_alter_rename_column {
-    Table *table;
-    Column *column;
+    ColumnRef column;
     char new_col_name[64];
 } AlterRenameColumn;
 
 typedef struct plan_alter_modify_column {
-    Table *table;
-    //uint32_t column_array_index;
+    ColumnRef column;
     Column *new_column_definition;
 } AlterModifyColumn;
 
@@ -118,7 +121,7 @@ typedef struct plan_index_scan {
 typedef struct plan_filter {
     ExpressionNode *expression;
     /* Direct access to columns used in expression. */
-    uint32_t *columns;
+    ColumnRef *columns;
     uint32_t amount_column_refs;
 } Filter;
 
@@ -128,7 +131,7 @@ typedef struct plan_project {
     ExpressionNode **expressions;
     uint32_t num_expressions;
 
-    uint32_t *columns;
+    ColumnRef *columns;
     uint32_t amount_columns;
 } Project;
 
@@ -147,16 +150,14 @@ typedef struct plan_join {
 } Join;
 
 typedef struct plan_insert {
-    Table *table;
-    uint32_t *column_array_indexes;
+    ColumnRef *columns;
     uint32_t num_columns;
     Row *rows;
 } Insert;
 
 typedef struct plan_update {
-    Table *table;
+    ColumnRef *columns;
     Row *new_values;
-    uint32_t *column_array_index;
     uint32_t num_columns;
     Filter *filter;
 } Update;
@@ -165,6 +166,25 @@ typedef struct plan_delete {
     Table *table;
     Filter *filter;
 } Delete;
+
+typedef struct plan_group_by {
+    ColumnRef *columns;
+} GroupBy;
+
+typedef struct plan_order_by {
+    ExpressionNode *expr;
+    uint32_t amount_expr;
+    ColumnRef *columns;
+    OrderByTypes *type;
+} OrderBy;
+
+typedef struct plan_limit {
+    uint32_t limit;
+} Limit;
+
+typedef struct plan_offset {
+    uint32_t offset;
+} Offset;
 
 /* Plan Nodes containing:
  * type: operation type of plan node
@@ -196,6 +216,10 @@ typedef struct plan_node {
         Insert plan_insert;
         Update plan_update;
         Delete plan_delete;
+        GroupBy plan_group_by;
+        OrderBy plan_order_by;
+        Limit plan_limit;
+        Offset plan_offset;
     } operation;
     struct plan_node *next;
 } PlanNode;
@@ -233,7 +257,11 @@ PlanNode *plan_node_join(JoinNode node, Database *db);
 PlanNode *plan_node_insert(InsertNode node, Database *db);
 PlanNode *plan_node_delete(DeleteNode node, Database *db);
 PlanNode *plan_node_update(UpdateNode node, Database *db);
-
+PlanNode *plan_node_group_by(GroupByNode node, Database *db);
+PlanNode *plan_node_order_by(OrderByNode node, Database *db);
+PlanNode *plan_node_having(HavingNode node, Database *db);
+PlanNode *plan_node_limit(LimitNode node, Database *db);
+PlanNode *plan_node_offset(OffsetNode node, Database *db);
 PlanNode *plan_node_seq_scan(Database *db);
 PlanNode *plan_node_index_scan(Database *db);
 
