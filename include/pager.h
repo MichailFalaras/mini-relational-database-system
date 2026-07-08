@@ -17,4 +17,16 @@ typedef struct pager {
     Page *pages[MAX_PAGES];
 } Pager;
 
+extern Pager *pager_open(const char *filename);
+
+extern bool pager_close(Pager *pager);
+
+extern Page *pager_get_page(Pager *pager, uint32_t page_num);
+
+extern bool pager_flush_page(Pager *pager, uint32_t page_num);
+
+extern bool pager_flush_all(Pager *pager);
+
+extern void pager_free(Pager *pager);
+
 #endif
