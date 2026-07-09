@@ -39,7 +39,7 @@ typedef struct tokenizer {
     uint32_t length;
 } Tokenizer;
 
-extern Tokenizer *tokenizer_init(const char *query);
+extern Tokenizer *tokenizer_init(char *query);
 
 extern TokenArray *token_array_create();
 
