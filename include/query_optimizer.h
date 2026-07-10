@@ -40,10 +40,10 @@ typedef enum operation_type {
 } OperationType;
 
 /* Help Struct for JOIN Projection. */
-typedef struct column_ref {
+typedef struct plan_column_ref {
     Table *table;
     uint32_t column_index;
-} ColumnRef;
+} PlanColumnRef;
 
 /* Operation-Specific Data. */
 typedef struct plan_create_table {
@@ -73,16 +73,16 @@ typedef struct plan_alter_add_column {
 } AlterAddColumn;
 
 typedef struct plan_alter_drop_column {
-    ColumnRef column;
+    PlanColumnRef column;
 } AlterDropColumn;
 
 typedef struct plan_alter_rename_column {
-    ColumnRef column;
+    PlanColumnRef column;
     char new_col_name[64];
 } AlterRenameColumn;
 
 typedef struct plan_alter_modify_column {
-    ColumnRef column;
+    PlanColumnRef column;
     Column *new_column_definition;
 } AlterModifyColumn;
 
@@ -121,7 +121,7 @@ typedef struct plan_index_scan {
 typedef struct plan_filter {
     ExpressionNode *expression;
     /* Direct access to columns used in expression. */
-    ColumnRef *columns;
+    PlanColumnRef *columns;
     uint32_t amount_column_refs;
 } Filter;
 
@@ -131,15 +131,15 @@ typedef struct plan_project {
     ExpressionNode **expressions;
     uint32_t num_expressions;
 
-    ColumnRef *columns;
-    uint32_t amount_columns;
+    PlanColumnRef *columns;
+    uint32_t num_columns;
 } Project;
 
 typedef enum plan_join_types {
-    INNER,
-    LEFT,
-    RIGHT,
-    OUTER
+    PLAN_JOIN_INNER,
+    PLAN_JOIN_LEFT,
+    PLAN_JOIN_RIGHT,
+    PLAN_JOIN_OUTER
 } PlanTypes;
 
 typedef struct plan_join {
@@ -150,13 +150,14 @@ typedef struct plan_join {
 } Join;
 
 typedef struct plan_insert {
-    ColumnRef *columns;
+    PlanColumnRef *columns;
     uint32_t num_columns;
-    Row *rows;
+    Row **rows;
+    uint32_t num_rows;
 } Insert;
 
 typedef struct plan_update {
-    ColumnRef *columns;
+    PlanColumnRef *columns;
     Row *new_values;
     uint32_t num_columns;
     Filter *filter;
@@ -168,13 +169,13 @@ typedef struct plan_delete {
 } Delete;
 
 typedef struct plan_group_by {
-    ColumnRef *columns;
+    PlanColumnRef *columns;
 } GroupBy;
 
 typedef struct plan_order_by {
     ExpressionNode *expr;
     uint32_t amount_expr;
-    ColumnRef *columns;
+    PlanColumnRef *columns;
     OrderByTypes *type;
 } OrderBy;
 
