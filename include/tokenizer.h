@@ -18,14 +18,14 @@ typedef enum token_type {
 
 /* Token struct represented by the token
 itself and its type. */
-typedef struct token{
+typedef struct token_struct {
 	char *token;
 	TokenType type;
 } Token;
 
 /* Array of tokens being sent to parser. */
 typedef struct token_array {
-	Token *tokens;
+	Token **tokens;
 	uint32_t amount_tokens;
 } TokenArray;
 
@@ -43,9 +43,13 @@ extern Tokenizer *tokenizer_init(char *query);
 
 extern TokenArray *token_array_create();
 
-extern bool *token_array_push(TokenArray *token_array, Token *token);
+extern Token *token_create(char *token, TokenType type);
+
+extern void token_array_push(TokenArray *token_array, Token *token);
 
 extern TokenArray *tokenize_query(Tokenizer *tokenizer);
+
+extern Token *read_token(Tokenizer *tokenizer);
 
 extern void tokenizer_free(Tokenizer *tokenizer);
 
