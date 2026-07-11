@@ -1,5 +1,5 @@
-#ifndef UTILS_H_
-#define UTILS_H_
+#ifndef TOKENIZER_INTERNAL_H_
+#define TOKENIZER_INTERNAL_H_
 #include "tokenizer.h"
 
 extern char *read_query();
