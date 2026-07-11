@@ -30,7 +30,6 @@ typedef struct statement {
  * current_position: current position while traversing array. */
 typedef struct parser {
     TokenArray *token_array;
-    uint32_t amount_tokens;
     uint32_t current_position;
 } Parser;
 
