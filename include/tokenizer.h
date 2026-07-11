@@ -53,8 +53,8 @@ extern Token *read_token(Tokenizer *tokenizer);
 
 extern void tokenizer_free(Tokenizer *tokenizer);
 
-extern void token_free(Token *token);
-
 extern void token_array_free(TokenArray *token_array);
+
+extern void token_free(Token *token);
 
 #endif

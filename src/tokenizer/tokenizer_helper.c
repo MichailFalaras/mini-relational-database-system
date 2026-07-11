@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <ctype.h>
+#include <stdbool.h>
 #include "tokenizer_internal.h"
 #include "../../include/tokenizer.h"
 
@@ -13,6 +14,7 @@ char *read_query() {
     char *buffer = NULL, *new_buffer;
     int n;
     int buffer_size = 0, old_buffer_size = 0;
+    bool comment = false;
 
     /* Reads from stdin and stores in dynamically allocated buffer. */
     while ((n = read(STDIN_FILENO, temp, 64)) > 0) {
@@ -27,10 +29,21 @@ char *read_query() {
 
         memcpy(buffer + old_buffer_size, temp, n);
 
-        /* Remove '\n' from multi-line queries.
-        Replace with ' '. */
-        char *temp = strchr(buffer+old_buffer_size, '\n');
+        /* Check if theres "--" comment.*/
+        char *temp = strchr(buffer+old_buffer_size, '-');
         if (temp != NULL) {
+            if (*(temp+1) == '-') {
+                comment = true;
+            }
+        }
+
+         /* Remove '\n' from multi-line queries.
+        Replace with ' '. */
+
+        /* If there's comments before dont remove '\n'
+        so that we know when the comments stop. */
+        temp = strchr(buffer+old_buffer_size, '\n');
+        if ((temp != NULL) && (comment == false)) {
             *temp = ' ';
         }
     }
@@ -182,9 +195,15 @@ bool iskeyword(char *token, bool *double_token_keyword) {
 
 /* Handles reading query for digits/numbers. */
 Token *digit_handling(Tokenizer *tokenizer, char *buffer, int *buffer_size) {
+    bool decimal_found = false;
 
-    while (isdigit(tokenizer->query[tokenizer->current_position]) || tokenizer->query[tokenizer->current_position] == '.') {
-        buffer = move_tokenizer(tokenizer, buffer, buffer_size);       
+    while (isdigit(tokenizer->query[tokenizer->current_position]) ||
+     (!decimal_found && tokenizer->query[tokenizer->current_position] == '.' )) {
+        if (tokenizer->query[tokenizer->current_position] == '.') {
+            decimal_found = true;
+        }
+        
+        buffer = move_tokenizer(tokenizer, buffer, buffer_size);
     }
 
     /* Make token a string. */
@@ -196,6 +215,10 @@ Token *digit_handling(Tokenizer *tokenizer, char *buffer, int *buffer_size) {
 /* Handles reading query for strings. */
 Token *string_handling(Tokenizer *tokenizer, char *buffer, int *buffer_size) {
     do {
+        if (tokenizer->current_position == tokenizer->length) {
+            return NULL;
+        }
+
         buffer = move_tokenizer(tokenizer, buffer, buffer_size); 
     } while (tokenizer->query[tokenizer->current_position] != '\'');
         
@@ -205,10 +228,11 @@ Token *string_handling(Tokenizer *tokenizer, char *buffer, int *buffer_size) {
     return token_create(buffer, STRING);
 }
 
-/* Handles reading query for operators. */
+/* Handles reading query for operators and comments. */
 Token *operator_handling(Tokenizer *tokenizer, char *buffer, int *buffer_size) {
     bool peek_forwards = false;
     switch (tokenizer->query[tokenizer->current_position]) {
+        case '-':
         case '!':
         case '<':
         case '>':
@@ -219,7 +243,23 @@ Token *operator_handling(Tokenizer *tokenizer, char *buffer, int *buffer_size) {
 
     if (peek_forwards && ((tokenizer->current_position+1) < tokenizer->length)
             && (isoperator(tokenizer->query[tokenizer->current_position+1]))) {
-        buffer = move_tokenizer(tokenizer, buffer, buffer_size);    
+        
+        if (buffer[(*buffer_size)-1] == '-') {
+            while (tokenizer->query[tokenizer->current_position] != '\n') {
+
+                if (tokenizer->current_position == tokenizer->length) {
+                    return NULL;
+                }
+
+                buffer = move_tokenizer(tokenizer, buffer, buffer_size);
+            }
+
+            buffer[(*buffer_size)-1] = '\0';
+            tokenizer->current_position++;
+            return token_create(buffer, COMMENT);
+        } else {
+            buffer = move_tokenizer(tokenizer, buffer, buffer_size);
+        }
     }
 
     buffer = move_tokenizer(tokenizer, buffer, buffer_size);

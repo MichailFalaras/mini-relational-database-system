@@ -91,9 +91,9 @@ TokenArray *tokenize_query(Tokenizer *tokenizer) {
 
         Token *token = read_token(tokenizer);
 
-        /* If one token is invalid, then query fails. */
-        // Either EOF or Invalid Token
+        /* If one token is invalid, then query fails. (EOF or Invalid Token) */
         if (token == NULL) {
+            free(token_array);
             return NULL;
         }
 
@@ -158,4 +158,4 @@ void token_free(Token *token_struct) {
     if (token_struct != NULL) {
         free(token_struct->token);
     }
- }
+}
