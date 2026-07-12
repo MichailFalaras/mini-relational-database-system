@@ -8,61 +8,16 @@
 #include "data_types.h"
 
 typedef enum ast_node_type {
-    /* Root Nodes (First-Level Nodes) */
     AST_SELECT,
     AST_INSERT,
     AST_UPDATE,
     AST_DELETE,
-
     AST_CREATE_TABLE,
     AST_DROP_TABLE,
     AST_ALTER_TABLE,
     AST_TRUNCATE_TABLE,
-
     AST_CREATE_INDEX,
     AST_DROP_INDEX,
-
-    /* Second-Level Nodes */
-    // SELECT Clauses
-    AST_PROJECTION,
-    AST_FROM,
-    AST_WHERE,
-    AST_GROUP_BY,
-    AST_ORDER_BY,
-    AST_JOIN,
-    AST_LIMIT,
-    AST_OFFSET,
-    AST_HAVING,
-
-    // INSERT Clauses
-    AST_INTO,
-    AST_VALUES,
-
-    // UPDATE Clauses
-    AST_SET,
-
-    // CREATE TABLE Contents
-    AST_COLUMNS,
-    AST_CONSTRAINTS,
-
-    // ALTER TABLE Clauses
-    AST_ALTER_ADD,
-    AST_ALTER_DROP,
-    AST_ALTER_RENAME,
-    AST_ALTER_MODIFY,
-    AST_ALTER_ADD_CONSTRAINT,
-    AST_ALTER_DROP_CONSTRAINT,
-
-    /* Third-Level Nodes */
-    AST_TABLE_REF,
-    AST_INDEX_REF,
-    AST_ON,
-
-    AST_COLUMN_DEF,
-    AST_PRIMARY_KEY,
-    AST_FOREIGN_KEY,
-    AST_UNIQUE,
-    AST_CHECK,
 } ASTNodeType;
 
 typedef struct ast_projection {
@@ -71,7 +26,8 @@ typedef struct ast_projection {
 } ProjectionNode;
 
 typedef struct ast_from {
-    char table_name[64];
+    ExpressionNode **expressions;
+    uint32_t num_expressions;
 } FromNode;
 
 typedef struct ast_where {
@@ -337,61 +293,7 @@ typedef struct abstract_syntax_tree_node {
         DropTableNode drop_table;
         CreateIndexNode create_index;
         DropIndexNode drop_index;
-
-        ProjectionNode projection;
-        FromNode from;
-        WhereNode where;
-        GroupByNode group_by;
-        HavingNode having;
-        OrderByNode order_by;
-        JoinNode join;
-        OnNode on;
-        LimitNode limit;
-        OffsetNode offset;
-        IntoNode into;
-        ValuesNode values;
-        SetNode set;
-        ColumnDefNode column_def;
-        ColumnsNode columns;
-        ConstraintsNode constraints;
     } node_contents;
 } ASTNode;
-
-
-/* Free for all types of AST nodes. (Switch-Statement)*/
-void free_ast_node(ASTNode *node);
-
-/* TODO: static functions in .c file */
-void free_ast_select(SelectNode *node); 
-void free_ast_projection(ProjectionNode *node);
-void free_ast_from(FromNode *node); 
-void free_ast_where(WhereNode *node); 
-void free_ast_group_by(GroupByNode *node);
-void free_ast_having(HavingNode *node);
-void free_ast_order_by(OrderByNode *node);
-void free_ast_joins(JoinNode *node);
-void free_ast_limit(LimitNode *node);
-void free_ast_offset(OffsetNode *node);
-void free_ast_insert(InsertNode *node);
-void free_ast_into(IntoNode *node);
-void free_ast_values(ValuesNode *node);
-void free_ast_update(UpdateNode *node);
-void free_ast_set(SetNode *node);
-void free_ast_delete(DeleteNode *node);
-void free_ast_create_table(CreateTableNode *node);
-void free_ast_columns(ColumnsNode *node);
-void free_ast_column_defs(ColumnDefNode *node);
-void free_ast_constraints(ConstraintsNode *node);
-void free_ast_drop_table(DropTableNode *node);
-void free_ast_alter_table(AlterTableNode *node);
-void free_ast_alter_add_col(AlterAddNode *node);
-void free_ast_alter_drop_col(AlterDropNode *node);
-void free_ast_alter_rename_col(AlterRenameColNode *node);
-void free_ast_alter_rename_table(AlterRenameTableNode *node);
-void free_ast_alter_modify_col(AlterModifyNode *node);
-void free_ast_alter_add_constraint(AlterAddConstraintNode *node);
-void free_ast_alter_drop_constraint(AlterDropConstraintNode *node);
-void free_ast_create_index(CreateIndexNode *node);
-void free_ast_drop_index(DropIndexNode *node);
 
 #endif
