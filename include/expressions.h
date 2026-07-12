@@ -10,6 +10,7 @@ typedef struct expression_node ExpressionNode;
 typedef enum expression_type {
     EXPR_LITERAL,
     EXPR_COLUMN_REF,
+    EXPR_TABLE_REF,
     EXPR_UNARY,
     EXPR_BINARY,
     EXPR_IS_NULL,
@@ -46,9 +47,12 @@ typedef struct literal {
 
 /* Column name reference in the expression */
 typedef struct column_ref {
-    char table_name[64];
     char column_name[64];
 } ColumnRef;
+
+typedef struct table_ref {
+    char table_name[64];
+} TableRef;
 
 /* Unary expression, including operator + operand */
 typedef struct unary {
@@ -106,6 +110,7 @@ typedef struct expression_node {
     union {
         Literal literal_value;
         ColumnRef column_value;
+        TableRef table_value;
         Unary unary_expr;
         Binary binary_expr;
         IsNull is_null_expr;
@@ -115,5 +120,9 @@ typedef struct expression_node {
         AggregateFunction aggregate_func_expr;
     } expression_data;
 } ExpressionNode;
+
+extern ExpressionNode *expression_node_create(ExpressionType type);
+
+extern OperatorType get_operator_type(char *operator_token);
 
 #endif
