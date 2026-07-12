@@ -243,8 +243,17 @@ typedef struct ast_alter_drop_constraint {
     char constraint_name[64];
 } AlterDropConstraintNode;
 
+typedef enum ast_alter_types {
+    AST_ALTER_ADD,
+    AST_ALTER_DROP,
+    AST_ALTER_RENAME,
+    AST_ALTER_MODIFY,
+    AST_ALTER_ADD_CONSTRAINT,
+    AST_ALTER_DROP_CONSTRAINT
+} ASTAlterType;
+
 typedef struct ast_alter_action {
-    ASTNodeType *type;
+    ASTAlterType type;
     union {
         AlterAddNode alter_add;
         AlterDropNode alter_drop;
