@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "data_types.h"
+#include "expressions.h"
 
 /* Row structure that contains:
  * is_deleted: tombstone flag
@@ -15,13 +16,13 @@ typedef struct row {
     Value **values;
 } Row;
 
-extern Row *row_create(const Value *values, uint32_t n_columns);
+extern Row *row_create(ExpressionNode **values, uint32_t n_columns);
 
 extern bool row_mark_deleted(Row *row);
 
 extern Value *row_get_value(const Row *row, uint32_t column_pos);
 
-extern bool *row_set_value(Row *row, uint32_t column_pos, const Value *new_val);
+extern bool row_set_value(Row *row, uint32_t column_pos, const Value *new_val);
 
 extern void row_free(Row *row);
 
