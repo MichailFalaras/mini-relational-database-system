@@ -85,19 +85,28 @@ typedef struct value {
     } value;
 } Value;
 
-/* Allocate Value structure */
+/* Allocate a Value struct */
 Value *value_alloc(DataType type);
 
-/* Create Value structure */
+/* Create a Value struct */
 Value *value_create(DataType type, const void *value);
 
-/* Copy One Value structure to another Value structure */
+/* Copy One Value struct to another Value struct */
 Value *value_copy(const Value *value);
 
 /* Assign the contents of one Value struct to another */
 bool value_assign(Value *dest, const Value *src);
 
-/* Deallocate Value structure */
+/* Compare two Value structs */
+bool value_compare(const Value *left, const Value *right, int *result);
+
+/* Check if 2 Data Types are compatible */
+bool value_types_compatible(DataType left, DataType right);
+
+/* Check if a Value can be assigned to a target Data Type */
+bool value_can_assign(DataType target, const Value *value);
+
+/* Deallocate Value struct */
 void value_free(Value *value);
 
 #endif
