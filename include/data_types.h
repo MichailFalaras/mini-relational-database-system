@@ -18,7 +18,8 @@ typedef enum data_types {
     TIMESTAMP,
     BLOB,
     BOOL,
-    JSONB
+    JSONB,
+    NULL_TYPE 
 } DataType;
 
 /* NUMERIC/DECIMAL Data Type. */
@@ -40,14 +41,14 @@ typedef struct varchar_n {
     char *string;
 } varchar_n_t;
 
-/* DATE */
+/* DATE, only used for results display */
 typedef struct date {
     uint32_t year;
     uint8_t month;
     uint8_t day;
 } date_t;
 
-/* TIMESTAMP */
+/* TIMESTAMP, only used for results display */
 typedef struct timestamp {
     uint32_t year;
     uint8_t month;
@@ -66,7 +67,6 @@ typedef struct blob {
 /* Value and corresponding data type both in this struct. */
 typedef struct value {
     DataType type;
-    bool is_null;
     union {
         int32_t int32_val;
         uint32_t uint32_val;
@@ -76,12 +76,28 @@ typedef struct value {
         char_n_t char_val;
         varchar_n_t varchar_val;
         char *text_val;
-        uint64_t date_val;
-        uint64_t timestamp_val;
+        uint64_t date_val;  // seconds from Unix epoch
+        uint64_t timestamp_val; // seconds from Unix epoch
         blob_t blob_val;
         bool bool_val;
         jsonb_t jsonb_val;
+        bool null_val;
     } value;
 } Value;
+
+/* Allocate Value structure */
+Value *value_alloc(DataType type);
+
+/* Create Value structure */
+Value *value_create(DataType type, const void *value);
+
+/* Copy One Value structure to another Value structure */
+Value *value_copy(const Value *value);
+
+/* Assign the contents of one Value struct to another */
+bool value_assign(Value *dest, const Value *src);
+
+/* Deallocate Value structure */
+void value_free(Value *value);
 
 #endif
