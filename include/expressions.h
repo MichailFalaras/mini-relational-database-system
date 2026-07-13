@@ -41,7 +41,7 @@ typedef enum operator_type {
 
 /* Literal value in expression, e.g., integer, float, string */
 typedef struct literal {
-    Value literal;
+    Value *literal;
 } Literal;
 
 /* Column name reference in the expression */
