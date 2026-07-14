@@ -100,6 +100,14 @@ extern Constraint *constraint_create_not_null(char *constraint_name, uint32_t co
 
 extern Constraint *constraint_create_default(char *constraint_name, uint32_t column_ref, ExpressionNode *default_expr);
 
+extern bool constraint_has_column(const Constraint *constraint, uint32_t column_index);
+
+extern bool constraint_references_table(const Constraint *constraint, uint32_t table_index);
+
+extern bool constraint_references_column(const Constraint *constraint, uint32_t column_ref);
+
+extern bool constraint_validate_definition(const Constraint *constraint);
+
 extern void constraint_free(Constraint *constraint);
 
 #endif

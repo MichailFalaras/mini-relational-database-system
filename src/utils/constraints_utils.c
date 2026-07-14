@@ -13,7 +13,7 @@ Constraint *constraint_alloc(char *constraint_name, ConstraintType type) {
     }
     strncpy(constraint->constraint_name, constraint_name, 63);
     constraint->constraint_name[63] = '\0';
-    
+
     constraint->type = type;
     memset(&constraint->constraint_data, 0, sizeof(constraint->constraint_data));
 
@@ -69,6 +69,7 @@ Constraint *constraint_copy(const Constraint *source) {
             break;
         default:
             printf("Source type doesn't match existing Constraint types.\n");
+            free(copy);
             return NULL;
     }
 
@@ -184,32 +185,194 @@ Constraint *constraint_create_default(char *constraint_name, uint32_t column_ref
     return constraint;
 }
 
-/* Free Constraint struct and insides. */
-void constraint_free(Constraint *constraint) {
-    if (constraint != NULL) {
-        switch (constraint->type) {
+/* Semantic Binder & Query Planner helper functions. */
+bool constraint_has_column(const Constraint *constraint, uint32_t column_index) {
+
+    if (constraint == NULL) {
+        return false;
+    }
+
+    switch (constraint->type) {
         case PRIMARY_KEY:
-            free(constraint->constraint_data.primary_key.primary_key_columns);
+            for (uint32_t i = 0; i < constraint->constraint_data.primary_key.amount_columns; i++) {
+                if (constraint->constraint_data.primary_key.primary_key_columns[i] == column_index) {
+                    return true;
+                }
+            }
+            
             break;
         case FOREIGN_KEY:
-            free(constraint->constraint_data.foreign_keys.foreign_key_columns);
-            free(constraint->constraint_data.foreign_keys.referenced_columns);
+            for (uint32_t i = 0; i < constraint->constraint_data.foreign_keys.amount_foreign_keys; i++) {
+                if (constraint->constraint_data.foreign_keys.foreign_key_columns[i] == column_index) {
+                    return true;
+                }
+            }
+
             break;
         case UNIQUE:
-            free(constraint->constraint_data.unique_cols.column_refs);
+            for (uint32_t i = 0; i < constraint->constraint_data.unique_cols.amount_columns; i++) {
+                if (constraint->constraint_data.unique_cols.column_refs[i] == column_index) {
+                    return true;
+                }
+            }
+
             break;
         case CHECK:
-            free(constraint->constraint_data.check.column_refs);
-            expression_node_free(constraint->constraint_data.check.constraint_expr);
+            for (uint32_t i = 0; i < constraint->constraint_data.check.amount_columns; i++) {
+                if (constraint->constraint_data.check.column_refs[i] == column_index) {
+                    return true;
+                }
+            }
+
+            break;
+        case NOT_NULL:
+            if (constraint->constraint_data.not_null.column_ref == column_index) {
+                return true;
+            }
+            
+            break;
+        case DEFAULT:
+            if (constraint->constraint_data.default_value.column_ref == column_index) {
+                return true;
+            }
+            break;
+        default:
+            printf("constraint type doesn't match existing Constraint types.\n");
+            return false;
+        }
+
+    return false;
+}
+
+bool constraint_references_table(const Constraint *constraint, uint32_t table_index) {
+    if (constraint == NULL || constraint->type != FOREIGN_KEY) {
+        return false;
+    }
+
+    if (constraint->constraint_data.foreign_keys.referenced_table == table_index) {
+        return true;
+    }
+
+    return false;
+}
+
+bool constraint_references_column(const Constraint *constraint, uint32_t column_ref) {
+    if (constraint == NULL || constraint->type != FOREIGN_KEY) {
+        return false;
+    }
+
+    for (uint32_t i = 0; i < constraint->constraint_data.foreign_keys.amount_referenced_columns; i++) {
+        if (constraint->constraint_data.foreign_keys.referenced_columns[i] == column_ref) {
+            return true;
+        }
+    }
+    
+    return false;
+}
+
+bool constraint_validate_definition(const Constraint *constraint) {
+    if (constraint == NULL) {
+        return false;
+    }
+
+    switch (constraint->type) {
+        case PRIMARY_KEY:
+            if (constraint->constraint_data.primary_key.primary_key_columns == NULL) {
+                return false;
+            }
+
+            if (constraint->constraint_data.primary_key.amount_columns == 0){
+                return false;
+            }
+
+            break;
+        case FOREIGN_KEY:
+            if (constraint->constraint_data.foreign_keys.foreign_key_columns == NULL) {
+                return false;
+            }
+
+            if (constraint->constraint_data.foreign_keys.referenced_columns == NULL) {
+                return false;
+            }
+
+            if (constraint->constraint_data.foreign_keys.amount_foreign_keys != 
+                constraint->constraint_data.foreign_keys.amount_referenced_columns) {
+                return false;
+            }
+
+            if (constraint->constraint_data.foreign_keys.amount_foreign_keys == 0 ||
+            constraint->constraint_data.foreign_keys.amount_referenced_columns == 0) {
+                return false;
+            }
+
+            break;
+        case UNIQUE:
+            if (constraint->constraint_data.unique_cols.column_refs == NULL) {
+                return false;
+            }
+
+            if (constraint->constraint_data.unique_cols.amount_columns == 0) {
+                return false;
+            }
+
+            break;
+        case CHECK:
+            if (constraint->constraint_data.check.constraint_expr == NULL) {
+                return false;
+            }    
+
+            if (constraint->constraint_data.check.column_refs == NULL) {
+                return false;
+            }
+
+            if (constraint->constraint_data.check.amount_columns == 0) {
+                return false;
+            }
+
             break;
         case NOT_NULL:
             break;
         case DEFAULT:
-            expression_node_free(constraint->constraint_data.default_value.default_expr);
+            if (constraint->constraint_data.default_value.default_expr == NULL) {
+                return false;
+            }
+
             break;
         default:
             printf("constraint type doesn't match existing Constraint types.\n");
-            return;
+            return false;
+    }
+
+    return true;
+}
+
+/* Free Constraint struct and insides. */
+void constraint_free(Constraint *constraint) {
+    if (constraint != NULL) {
+        switch (constraint->type) {
+            case PRIMARY_KEY:
+                free(constraint->constraint_data.primary_key.primary_key_columns);
+                break;
+            case FOREIGN_KEY:
+                free(constraint->constraint_data.foreign_keys.foreign_key_columns);
+                free(constraint->constraint_data.foreign_keys.referenced_columns);
+                break;
+            case UNIQUE:
+                free(constraint->constraint_data.unique_cols.column_refs);
+                break;
+            case CHECK:
+                free(constraint->constraint_data.check.column_refs);
+                expression_node_free(constraint->constraint_data.check.constraint_expr);
+                break;
+            case NOT_NULL:
+                break;
+            case DEFAULT:
+                expression_node_free(constraint->constraint_data.default_value.default_expr);
+                break;
+            default:
+                printf("constraint type doesn't match existing Constraint types.\n");
+                free(constraint);
+                return;
         }
 
         free(constraint);
