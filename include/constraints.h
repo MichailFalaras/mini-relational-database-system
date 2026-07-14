@@ -24,9 +24,13 @@ typedef struct primary_key_constraint {
 } PrimaryKeyConstraint;
 
 /* Foreign Keys struct containing:
- * foreign_key_columns & amount of foreign keys
- * referenced tables, referenced columns & amount of
- * referenced columns in that table. */
+ * foreign_key_columns: array of integers of all columns
+ comprising the foreign key
+ * amount_foreign_keys: amount of foreign key columns
+ * referenced_table: index of referenced table
+ * referenced_columns: array of integers of all columns
+ being referenced in the referenced table
+ * amount_referenced_columns: amount of referenced columns. */
 typedef struct foreign_keys_constraint {
     uint32_t *foreign_key_columns;
     uint32_t amount_foreign_keys;

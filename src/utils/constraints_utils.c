@@ -27,49 +27,34 @@ Constraint *constraint_copy(const Constraint *source) {
         return NULL;
     }
 
-    Constraint *copy = constraint_alloc(source->constraint_name, source->type);
-
+    Constraint *copy = NULL;
     switch (source->type) {
         case PRIMARY_KEY:
-            copy->constraint_data.primary_key.amount_columns = source->constraint_data.primary_key.amount_columns;
-
-            copy->constraint_data.primary_key.primary_key_columns = copy_uint32_array(
-                    source->constraint_data.primary_key.primary_key_columns,source->constraint_data.primary_key.amount_columns);
+            copy = constraint_create_primary_key(source->constraint_name, source->constraint_data.primary_key.primary_key_columns,
+                    source->constraint_data.primary_key.amount_columns);
             break;
         case FOREIGN_KEY:
-            copy->constraint_data.foreign_keys.amount_foreign_keys = source->constraint_data.foreign_keys.amount_foreign_keys;
-            copy->constraint_data.foreign_keys.amount_referenced_columns = source->constraint_data.foreign_keys.amount_referenced_columns;
-            copy->constraint_data.foreign_keys.referenced_table = source->constraint_data.foreign_keys.referenced_table;
-
-            copy->constraint_data.foreign_keys.foreign_key_columns = copy_uint32_array(
-                    source->constraint_data.foreign_keys.foreign_key_columns, source->constraint_data.foreign_keys.amount_foreign_keys);
-            copy->constraint_data.foreign_keys.referenced_columns = copy_uint32_array(
+            copy = constraint_create_foreign_keys(source->constraint_name, source->constraint_data.foreign_keys.foreign_key_columns,
+                    source->constraint_data.foreign_keys.amount_foreign_keys, source->constraint_data.foreign_keys.referenced_table,
                     source->constraint_data.foreign_keys.referenced_columns, source->constraint_data.foreign_keys.amount_referenced_columns);
             break;
         case UNIQUE:
-            copy->constraint_data.unique_cols.amount_columns = source->constraint_data.unique_cols.amount_columns;
-
-            copy->constraint_data.unique_cols.column_refs = copy_uint32_array(
-                source->constraint_data.unique_cols.column_refs, source->constraint_data.unique_cols.amount_columns);
+            copy = constraint_create_unique(source->constraint_name, source->constraint_data.unique_cols.column_refs,
+                    source->constraint_data.unique_cols.amount_columns);
             break;
         case CHECK:
-            copy->constraint_data.check.amount_columns = source->constraint_data.check.amount_columns;
-
-            copy->constraint_data.check.column_refs = copy_uint32_array(
-                source->constraint_data.check.column_refs, source->constraint_data.check.amount_columns);
-            copy->constraint_data.check.constraint_expr = expression_node_copy(source->constraint_data.check.constraint_expr);
+            copy = constraint_create_check(source->constraint_name, source->constraint_data.check.constraint_expr,
+                    source->constraint_data.check.column_refs, source->constraint_data.check.amount_columns);
             break;
         case NOT_NULL:
-            copy->constraint_data.not_null.column_ref = source->constraint_data.not_null.column_ref;
+            copy = constraint_create_not_null(source->constraint_name, source->constraint_data.not_null.column_ref);
             break;
         case DEFAULT:
-            copy->constraint_data.default_value.column_ref = source->constraint_data.default_value.column_ref;
-            
-            copy->constraint_data.default_value.default_expr = expression_node_copy(source->constraint_data.default_value.default_expr);
+            copy = constraint_create_default(source->constraint_name, source->constraint_data.default_value.column_ref,
+                    source->constraint_data.default_value.default_expr);
             break;
         default:
             printf("Source type doesn't match existing Constraint types.\n");
-            free(copy);
             return NULL;
     }
 
@@ -77,9 +62,13 @@ Constraint *constraint_copy(const Constraint *source) {
 }
 
 /* Helper function to deep-copy uint32_t array (of column_refs). */
-uint32_t copy_uint32_array(const uint32_t *source, uint32_t amount) {
+uint32_t *copy_uint32_array(const uint32_t *source, uint32_t amount) {
 
     if (source == NULL) {
+        return NULL;
+    }
+
+    if (amount == 0) {
         return NULL;
     }
 
