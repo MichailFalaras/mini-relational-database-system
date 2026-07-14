@@ -106,6 +106,9 @@ bool value_types_compatible(DataType left, DataType right);
 /* Check if a Value can be assigned to a target Data Type */
 bool value_can_assign(DataType target, const Value *value);
 
+/* Converts a Value struct to another data type, if compatible */
+bool value_convert_data_type(DataType target, Value *value);
+
 /* Deallocate Value struct */
 void value_free(Value *value);
 

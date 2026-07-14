@@ -18,6 +18,7 @@ Value *value_alloc(DataType type) {
     return new_value;
 }
 
+
 /* Create Value struct */
 Value *value_create(DataType type, const void *value) {
     Value *new_value = value_alloc(type);
@@ -227,6 +228,7 @@ Value *value_create(DataType type, const void *value) {
      return new_value;
 }
 
+
 /* Copy One Value struct to another Value struct */
 Value *value_copy(const Value *src_value) {
     if (!src_value) {
@@ -285,6 +287,7 @@ Value *value_copy(const Value *src_value) {
     }
 }
 
+
 /* Assign the contents of one Value struct to another */
 bool value_assign(Value *dest, const Value *src) {
     if (!src) {
@@ -322,6 +325,7 @@ bool value_assign(Value *dest, const Value *src) {
     return true;
 }
 
+
 /* Compare two Value structs */
 bool value_compare(const Value *left, const Value *right, int *result) {
     if (!left || !right || !result) {
@@ -329,61 +333,253 @@ bool value_compare(const Value *left, const Value *right, int *result) {
         return false;
     }
 
-    if (left->type != right->type) {
-        printf("value_compare: Input Values are not of the same type.");
-        result = NULL;
+    // Check compatibility of data types
+    if (!value_types_compatible(left->type, right->type)) {
+        printf("value_compare: Data types are not compatible.");
         return false;
     }
 
-    switch(left->type) {
+    // Creating copies that can actually me modified if data type conversion is required
+    Value *left_val = value_copy(left);
+    Value *right_val = value_copy(right);
+
+    if (!left_val || !right_val) {
+        printf("value_compare: Value copies where not created correctly.");
+        value_free(left_val);
+        value_free(right_val);
+        return false;
+    }
+
+    // Convert one data type to another if not the same, but compatible
+    if (left_val->type != right_val->type) {
+        bool converted = value_convert_data_type(right_val->type, left_val);
+
+        if (!converted) {
+            // If the first conversion fails, try the opposite conversion
+            converted = value_convert_data_type(left_val->type, right_val);
+
+            if (!converted) {
+                // If that fails too, the comparison process fails
+                printf("value_compare: Data type conversions couldn't be carried out.");
+                value_free(left_val);
+                value_free(right_val);
+                return false;
+            }
+        }
+    }
+
+    // Final comparison status
+    bool is_success;
+
+    switch(left_val->type) {
         case INTEGER:
-            *result = compare_int32(left->value.int32_val, right->value.int32_val); 
-            return true;
+            *result = compare_int32(left_val->value.int32_val, right_val->value.int32_val); 
+            is_success = true;
+            break;
 
         case UNSIGNED_INTEGER:
-            *result = compare_uint32(left->value.uint32_val, right->value.uint32_val);
-            return true;
+            *result = compare_uint32(left_val->value.uint32_val, right_val->value.uint32_val);
+            is_success = true;
+            break;
 
         case NUMERIC:
-            return compare_numeric(&left->value.numeric_val, &right->value.numeric_val, result);
+            is_success = compare_numeric(&left_val->value.numeric_val, &right_val->value.numeric_val, result);
+            break;
 
         case FLOAT:
-            return compare_float(left->value.float_val, right->value.float_val, result);
+            is_success = compare_float(left_val->value.float_val, right_val->value.float_val, result);
+            break;
 
         case DOUBLE:
-            return compare_double(left->value.double_val, right->value.double_val, result);
+            is_success = compare_double(left_val->value.double_val, right_val->value.double_val, result);
+            break;
 
         case CHAR: 
-            return compare_char_n(&left->value.char_val, &right->value.char_val, result);
+            is_success = compare_char_n(&left_val->value.char_val, &right_val->value.char_val, result);
+            break;
             
         case VARCHAR: 
-            return compare_varchar_n(&left->value.varchar_val, &right->value.varchar_val, result);
+            is_success = compare_varchar_n(&left_val->value.varchar_val, &right_val->value.varchar_val, result);
+            break;
 
         case TEXT:
-            return compare_text(left->value.text_val, right->value.text_val, result);
+            is_success = compare_text(left_val->value.text_val, right_val->value.text_val, result);
+            break;
 
         case DATE:
-            *result = compare_uint64(left->value.date_val, right->value.date_val);
-            return true;
+            *result = compare_uint64(left_val->value.date_val, right_val->value.date_val);
+            is_success = true;
+            break;
 
         case TIMESTAMP:
-            *result = compare_uint64(left->value.timestamp_val, right->value.timestamp_val);
-            return true;
+            *result = compare_uint64(left_val->value.timestamp_val, right_val->value.timestamp_val);
+            is_success = true;
+            break;
 
         case BLOB:
-            return compare_binary(&left->value.blob_val, &right->value.blob_val, result);
+            is_success = compare_binary(&left_val->value.blob_val, &right_val->value.blob_val, result);
+            break;
         
         case BOOL:
-            *result = compare_bool(left->value.bool_val, right->value.bool_val);
-            return true;
+            *result = compare_bool(left_val->value.bool_val, right_val->value.bool_val);
+            is_success = true;
+            break;
 
         /* TODO: JSONB comparison requires JSONB deserialization and parsing of key value pairs */
 
         default:
             printf("value_compare: Unsupported data types.");
+            value_free(left_val);
+            value_free(right_val);
+            return false;
+    }
+
+    value_free(left_val);
+    value_free(right_val);
+    return is_success;
+}
+
+
+/* Check if 2 Data Types are compatible */
+bool value_types_compatible(DataType left, DataType right) {
+    if (left == NULL_TYPE || right == NULL_TYPE)
+        return false;
+
+    if (left == right) 
+        return true;
+
+    // INTEGER, UNSIGNED INTEGER, NUMERIC, FLOAT, & DOUBLE are compatible
+    if (is_numeric_type(left) && is_numeric_type(right))
+        return true;
+
+    // CHAR(n), VARCHAR(n), & TEXT are compatible
+    if (is_text_type(left) && is_text_type(right))
+        return true;
+
+    // DATE & TIMESTAMP are compatible since they're represented as seconds since Unix epoch
+    if ((left == DATE && right == TIMESTAMP) || (left == TIMESTAMP && right == DATE))
+        return true;
+
+    return false;
+}
+
+
+/* Converts a Value struct to another data type, if compatible */
+bool value_convert_data_type(DataType target, Value *value) {
+    if (!value) {
+        printf("value_convert_data_type: Input Value is NULL.");
+        return false;
+    }
+
+    if (target == value->type) 
+        return true;
+
+    if (!value_can_assign(target, value))
+        return false;
+
+    // So far in this version,
+    switch(target) {
+        // only INTEGER -> UNSIGNED INTEGER
+        case UNSIGNED_INTEGER:
+            return convert_to_unsigned_integer(value);
+
+        // only INTEGER -> NUMERIC and UNSIGNED_INTEGER -> NUMERIC
+        case NUMERIC: 
+            return convert_to_numeric(value);
+        
+        // only INTEGER -> FLOAT and UNSIGNED_INTEGER -> FLOAT
+        case FLOAT: 
+            return convert_to_float(value);
+
+        // only INTEGER -> DOUBLE, UNSIGNED_INTEGER -> DOUBLE, and FLOAT -> DOUBLE
+        case DOUBLE: 
+            return convert_to_double(value);
+
+        // only VARCHAR -> CHAR
+        case CHAR: 
+            return convert_to_char(value);
+        
+        // only CHAR -> VARCHAR
+        case VARCHAR: 
+            return convert_to_varchar(value);
+            
+        // only CHAR -> TEXT and VARCHAR -> TEXT
+        case TEXT: 
+           return convert_to_text(value);
+        
+        // only DATE -> TIMESTAMP
+        case TIMESTAMP: 
+            return convert_to_timestamp(value);
+
+        default:
+            printf("value_convert_data_type: Unsupported target data type.");
+            return false;       
+    }
+}
+
+
+/* Check if a Value can be assigned to a target Data Type */
+bool value_can_assign(DataType target, const Value *value) {
+    if (!value) {
+        printf("value_can_assign: Input Value is NULL.");
+        return false;
+    }
+
+    // Any value can be converted to NULL, as long as there's no NOT NULL constraint
+    if (value->type == NULL_TYPE) {
+        return true;
+    }
+
+    // Identical data types
+    if (target == value->type)
+        return true;
+
+    // Allow value conversions as long as the target data type doesn't narrow down
+    // the tested data type.
+    switch (target) {
+        case INTEGER:
+            return (value->type == INTEGER);
+
+        case UNSIGNED_INTEGER:
+            if (value->type == INTEGER)
+                return value->value.int32_val >= 0;
+            
+            return false;
+        
+        case NUMERIC:
+            return (value->type == INTEGER || value->type == UNSIGNED_INTEGER);
+
+        case FLOAT:
+            return (value->type == INTEGER || value->type == UNSIGNED_INTEGER);
+
+        case DOUBLE:
+            return (value->type == INTEGER || value->type == UNSIGNED_INTEGER ||
+                    value->type == FLOAT);
+
+        // These cases only examine the possibility, 
+        // not the actual string length constraints of CHAR(n) and VARCHAR(n)
+        case CHAR:
+        case VARCHAR:
+        case TEXT:
+            return (value->type == CHAR || value->type == VARCHAR || value->type == TEXT);
+
+        case DATE:
+            return false;
+        
+        case TIMESTAMP:
+            return value->type == DATE;
+
+        case BOOL:
+        case BLOB:
+        case JSONB:
+        case NULL_TYPE:
+            return false;
+        
+        default:
             return false;
     }
 }
+
 
 /* Deallocate Value structure */
 void value_free(Value *value) {

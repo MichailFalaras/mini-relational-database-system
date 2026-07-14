@@ -305,3 +305,187 @@ int compare_bool(const bool left, const bool right) {
     else if (left == right) return 0;
     else return 1;
 }
+
+// Data type compatibility Utilities
+bool is_numeric_type(DataType type) {
+    if (type == INTEGER || type == UNSIGNED_INTEGER || type == NUMERIC ||
+        type == FLOAT || type == DOUBLE)
+        return true;
+
+    return false;
+}
+
+bool is_text_type(DataType type) {
+    if (type == CHAR || type == VARCHAR || type == TEXT)
+        return true;
+    
+    return false;
+}
+
+
+// Data type conversion utils
+
+// only INTEGER -> UNSIGNED INTEGER
+bool convert_to_unsigned_integer(Value *value) {
+    uint32_t converted = (uint32_t) value->value.int32_val;
+
+    memset(&value->value, 0, sizeof(value->value));
+    value->type = UNSIGNED_INTEGER;
+    value->value.uint32_val = converted;
+    return true;
+}
+
+// only INTEGER -> NUMERIC and UNSIGNED_INTEGER -> NUMERIC
+bool convert_to_numeric(Value *value) {
+    numeric_t converted = { .sign = 1, .val = 0, .scale = 0};
+
+    if (value->type == INTEGER) {
+        int32_t source_val = value->value.int32_val;
+
+        if (source_val < 0) {
+            converted.sign = -1;
+            converted.val = -(int64_t) source_val;
+        }
+        else {
+            converted.val = (int64_t) source_val;
+        }
+    }
+    else if (value->type == UNSIGNED_INTEGER) {
+        converted.val = value->value.uint32_val;
+    }
+    else {
+        return false;
+    }
+
+    memset(&value->value, 0, sizeof(value->value));
+    value->type = NUMERIC;
+    value->value.numeric_val = converted;
+    return true;
+}
+
+// only INTEGER -> FLOAT and UNSIGNED_INTEGER -> FLOAT
+bool convert_to_float(Value *value) {
+    float converted;
+
+    if (value->type == INTEGER) {
+        converted = (float) value->value.int32_val;
+    }
+    else if (value->type == UNSIGNED_INTEGER) {
+        converted = (float) value->value.uint32_val;
+    }
+    else {
+        return false;
+    }
+
+    memset(&value->value, 0, sizeof(value->value));
+    value->type = FLOAT;
+    value->value.float_val = converted;
+    return true;
+}
+
+// only INTEGER -> DOUBLE, UNSIGNED_INTEGER -> DOUBLE, and FLOAT -> DOUBLE
+bool convert_to_double(Value *value) {
+    double converted;
+
+    if (value->type == INTEGER) {
+        converted = (double) value->value.int32_val;
+    }
+    else if (value->type == UNSIGNED_INTEGER) {
+        converted = (double) value->value.uint32_val;
+    }
+    else if (value->type == FLOAT) {
+        converted = (double) value->value.float_val;
+    }
+    else {
+        return false;
+    }
+
+    memset(&value->value, 0, sizeof(value->value));
+    value->type = DOUBLE;
+    value->value.double_val = converted;
+    return true;
+}
+
+// only VARCHAR -> CHAR
+bool convert_to_char(Value *value) {
+    char_n_t converted = { .n = 0, .string = NULL };
+
+    if (value->type == VARCHAR) {
+        converted.n = value->value.varchar_val.max_n;
+        converted.string = duplicate_string(value->value.varchar_val.string);
+        
+        if (!converted.string) {
+            printf("value_convert_data_type: CHAR string could not be allocated.");
+            return false;
+        }
+    }
+    else {
+        return false;
+    }
+
+    value_free_internal(value);
+    memset(&value->value, 0, sizeof(value->value));
+    value->type = CHAR;
+    value->value.char_val = converted;
+    return true;
+}
+
+// only CHAR -> VARCHAR
+bool convert_to_varchar(Value *value) {
+    varchar_n_t converted = { .max_n = 0, .string = NULL };
+
+    if (value->type == CHAR) {
+        converted.max_n = value->value.char_val.n;
+        converted.string = duplicate_string(value->value.char_val.string);
+
+        if (!converted.string) {
+            printf("value_convert_data_type: VARCHAR string could not be allocated.");
+            return false;
+        }
+    }
+    else {
+        return false;
+    }
+
+    value_free_internal(value);
+    memset(&value->value, 0, sizeof(value->value));
+    value->type = VARCHAR;
+    value->value.varchar_val = converted;
+    return true;
+}
+
+// only CHAR -> TEXT and VARCHAR -> TEXT
+bool convert_to_text(Value *value) {
+    char *converted = NULL;
+
+    if (value->type == CHAR) {
+        converted = duplicate_string(value->value.char_val.string);
+    }
+    else if (value->type == VARCHAR) {
+        converted = duplicate_string(value->value.varchar_val.string);
+    }
+    else {
+        return false;
+    }
+
+    if (!converted) {
+        printf("value_convert_data_type: TEXT string could not be allocated.");
+        return false;
+    }
+
+    value_free_internal(value);
+    memset(&value->value, 0, sizeof(value->value));
+    value->type = TEXT;
+    value->value.text_val = converted;
+    return true;
+}
+
+// only DATE -> TIMESTAMP
+bool convert_to_timestamp(Value *value) {
+    uint64_t converted = value->value.date_val;
+
+    memset(&value->value, 0, sizeof(value->value));
+    value->type = TIMESTAMP;
+    value->value.timestamp_val = converted;
+    return true;
+}

@@ -22,5 +22,18 @@ bool compare_text(const char *left, const char *right, int *result);
 bool compare_binary(const blob_t *left, const blob_t *right, int *result);
 int compare_bool(const bool left, const bool right);
 
+// Data type compatibility Utilities
+bool is_numeric_type(DataType type);
+bool is_text_type(DataType type);
+
+// Data type conversion utils
+bool convert_to_unsigned_integer(Value *value);
+bool convert_to_numeric(Value *value);
+bool convert_to_float(Value *value);
+bool convert_to_double(Value *value);
+bool convert_to_char(Value *value);
+bool convert_to_varchar(Value *value);
+bool convert_to_text(Value *value);
+bool convert_to_timestamp(Value *value);
 
 #endif
