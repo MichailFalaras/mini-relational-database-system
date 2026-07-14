@@ -17,7 +17,7 @@ typedef enum expression_type {
     EXPR_IS_NOT_NULL,
     EXPR_IN,
     EXPR_BETWEEN,
-    EXPR_FUNCTIONS,
+    EXPR_FUNCTIONS
 } ExpressionType;
 
 /* Enum of all operator types 
@@ -42,7 +42,7 @@ typedef enum operator_type {
 
 /* Literal value in expression, e.g., integer, float, string */
 typedef struct literal {
-    Value literal;
+    Value *literal;
 } Literal;
 
 /* Column name reference in the expression */
@@ -124,5 +124,9 @@ typedef struct expression_node {
 extern ExpressionNode *expression_node_create(ExpressionType type);
 
 extern OperatorType get_operator_type(char *operator_token);
+
+extern ExpressionNode *expression_node_copy(const ExpressionNode *source);
+
+extern void expression_node_free(ExpressionNode *expr);
 
 #endif
