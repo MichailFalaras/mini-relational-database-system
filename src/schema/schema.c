@@ -4,6 +4,12 @@
 #include "../../include/schema.h"
 #include "../../include/constraints.h"
 #include "../../include/database.h"
+#include "schema_utils.h"
+
+/* Not Found Index Sentinel. */
+#define ERR_CODE_COL_NOT_FOUND -1
+/* Multiple Columns Found Index Sentinel. */
+#define ERR_CODE_COL_MULTIPLE -2
 
 Column *column_alloc(char *column_name, DataType type, uint32_t not_null_rows,
     uint32_t null_rows) {
@@ -92,6 +98,35 @@ bool schema_drop(Schema *schema, Database *db) {
     schema_free(schema);
     return true;
 } 
+
+Column *schema_find_column(const Schema *schema, const char *col_name) {
+
+    int32_t res = schema_find_column_index(schema, col_name);
+    if (res == ERR_CODE_COL_MULTIPLE || res == ERR_CODE_COL_NOT_FOUND) {
+        return NULL;
+    }
+
+    return schema->columns[res];
+}
+
+int32_t schema_find_column_index(const Schema *schema, const char *col_name) {
+    int found = 0;
+    uint32_t i = 0;
+    int32_t index = 0;
+
+    for (; i < schema->num_columns; i++) {
+        if (!strcasecmp(schema->columns[i]->name, col_name)) {
+            found++;
+            index = i;
+        }
+    }
+
+    if (found > 1) {
+        return ERR_CODE_COL_MULTIPLE; 
+    }
+
+    return found ? index : ERR_CODE_COL_NOT_FOUND;
+}
 
 void schema_free(Schema *schema) {
     if (schema != NULL) {
