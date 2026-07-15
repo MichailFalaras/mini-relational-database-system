@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "../../include/data_types.h"
-#include "../utils/data_types_utils.h"
+#include "data_types_utils.h"
 
 
 /* Allocate Value struct */
@@ -10,7 +10,7 @@ Value *value_alloc(DataType type) {
     Value *new_value = (Value *) calloc(1, sizeof(Value));
     
     if (!new_value) {
-        printf("value_alloc: Memory for Value could not be allocated.");
+        printf("value_alloc: Memory for Value could not be allocated.\n");
         return NULL;
     }
 
@@ -24,7 +24,7 @@ Value *value_create(DataType type, const void *value) {
     Value *new_value = value_alloc(type);
 
     if (!new_value) {
-        printf("value_create: New Value structure is NULL.");
+        printf("value_create: New Value structure is NULL.\n");
         return NULL;
     }
 
@@ -36,7 +36,7 @@ Value *value_create(DataType type, const void *value) {
     }
 
     if (!value) {
-        printf("value_create: Value structure is NULL.");
+        printf("value_create: Value structure is NULL.\n");
         value_free(new_value);
         return NULL;
     }
@@ -70,7 +70,7 @@ Value *value_create(DataType type, const void *value) {
 
             // Verifying input string
             if (!char_n_value->string) {
-                printf("value_create: char(n) string is NULL.");
+                printf("value_create: char(n) string is NULL.\n");
                 value_free(new_value);
                 return NULL;
             }
@@ -79,7 +79,7 @@ Value *value_create(DataType type, const void *value) {
             size_t length = strlen(char_n_value->string);
 
             if (length > char_n_value->n) {
-                printf("value_create: Length of char(n) string exceeds the length structure field.");
+                printf("value_create: Length of char(n) string exceeds the length structure field.\n");
                 value_free(new_value);
                 return NULL;
             }
@@ -89,7 +89,7 @@ Value *value_create(DataType type, const void *value) {
 
             // Validating the result
             if (char_n_value->string && !new_value->value.char_val.string) {
-                printf("value_create: Failed to allocate char(n) string.");
+                printf("value_create: Failed to allocate char(n) string.\n");
                 value_free(new_value);
                 return NULL;
             }
@@ -102,7 +102,7 @@ Value *value_create(DataType type, const void *value) {
 
             // Verifying input string
             if (!varchar_n_value->string) {
-                printf("value_create: varchar(n) string is NULL.");
+                printf("value_create: varchar(n) string is NULL.\n");
                 value_free(new_value);
                 return NULL;
             }
@@ -111,7 +111,7 @@ Value *value_create(DataType type, const void *value) {
             size_t length = strlen(varchar_n_value->string);
 
             if (length > varchar_n_value->max_n) {
-                printf("value_create: Length of varchar(n) string exceeds the length structure field.");
+                printf("value_create: Length of varchar(n) string exceeds the length structure field.\n");
                 value_free(new_value);
                 return NULL;
             }
@@ -121,7 +121,7 @@ Value *value_create(DataType type, const void *value) {
 
             // Validating the result
             if(varchar_n_value->string && !new_value->value.varchar_val.string) {
-                printf("value_create: Failed to allocate varchar(n) string.");
+                printf("value_create: Failed to allocate varchar(n) string.\n");
                 value_free(new_value);
                 return NULL;
             }
@@ -134,7 +134,7 @@ Value *value_create(DataType type, const void *value) {
 
             // Validating the result
             if (!new_value->value.text_val) {
-                printf("value_create: Failed to allocate text string.");
+                printf("value_create: Failed to allocate text string.\n");
                 value_free(new_value);
                 return NULL;
             }
@@ -164,7 +164,7 @@ Value *value_create(DataType type, const void *value) {
 
             // invalid input blob buffer
             if (!blob_value->buffer) {
-                printf("value_create: Input blob is NULL.");
+                printf("value_create: Input blob is NULL.\n");
                 value_free(new_value);
                 return NULL;
             }
@@ -172,7 +172,7 @@ Value *value_create(DataType type, const void *value) {
             new_value->value.blob_val.buffer = (uint8_t *) malloc(blob_value->size);
 
             if(!new_value->value.blob_val.buffer) {
-                printf("value_create: Memory for Blob could not be allocated.");
+                printf("value_create: Memory for Blob could not be allocated.\n");
                 value_free(new_value);
                 return NULL;
             }
@@ -200,7 +200,7 @@ Value *value_create(DataType type, const void *value) {
 
             // invalid input jsonb buffer
             if (!jsonb_value->buffer) {
-                printf("value_create: Input JSONB is NULL.");
+                printf("value_create: Input JSONB is NULL.\n");
                 value_free(new_value);
                 return NULL;
             }
@@ -208,7 +208,7 @@ Value *value_create(DataType type, const void *value) {
             new_value->value.jsonb_val.buffer = (uint8_t *) malloc(jsonb_value->size);
 
             if (!new_value->value.jsonb_val.buffer) {
-                printf("value_create: Memory for JSONB could not be allocated.");
+                printf("value_create: Memory for JSONB could not be allocated.\n");
                 value_free(new_value);
                 return NULL;
             }
@@ -220,7 +220,7 @@ Value *value_create(DataType type, const void *value) {
         }
 
         default:
-            printf("value_create: Unsupported data type.");
+            printf("value_create: Unsupported data type.\n");
             value_free(new_value);
             return NULL;
     }
@@ -232,7 +232,7 @@ Value *value_create(DataType type, const void *value) {
 /* Copy One Value struct to another Value struct */
 Value *value_copy(const Value *src_value) {
     if (!src_value) {
-        printf("value_copy: Source Value structure is NULL.");
+        printf("value_copy: Source Value structure is NULL.\n");
         return NULL;
     }
 
@@ -282,7 +282,7 @@ Value *value_copy(const Value *src_value) {
             return value_create(NULL_TYPE, NULL);
 
         default:
-            printf("value_copy: Unsupported data type.");
+            printf("value_copy: Unsupported data type.\n");
             return NULL;
     }
 }
@@ -291,24 +291,24 @@ Value *value_copy(const Value *src_value) {
 /* Assign the contents of one Value struct to another */
 bool value_assign(Value *dest, const Value *src) {
     if (!src) {
-        printf("value_assign: Source Value structure is NULL.");
+        printf("value_assign: Source Value structure is NULL.\n");
         return false;
     }
 
     if (!dest) {
-        printf("value_assign: Destination Value structure is NULL.");
+        printf("value_assign: Destination Value structure is NULL.\n");
         return false;
     }
 
     if (src == dest) {
-        printf("value_assign: Source & Destination Value structures are equal.");
+        printf("value_assign: Source & Destination Value structures are equal.\n");
         return true;
     }
 
     Value *copy = value_copy(src);
 
     if (!copy) {
-        printf("value_assign: Temporary copy Value could not be allocated.");
+        printf("value_assign: Temporary copy Value could not be allocated.\n");
         return false;
     }
 
@@ -329,13 +329,13 @@ bool value_assign(Value *dest, const Value *src) {
 /* Compare two Value structs */
 bool value_compare(const Value *left, const Value *right, int *result) {
     if (!left || !right || !result) {
-        printf("value_compare: Input parameters contain NULL.");
+        printf("value_compare: Input parameters contain NULL.\n");
         return false;
     }
 
     // Check compatibility of data types
     if (!value_types_compatible(left->type, right->type)) {
-        printf("value_compare: Data types are not compatible.");
+        printf("value_compare: Data types are not compatible.\n");
         return false;
     }
 
@@ -344,7 +344,7 @@ bool value_compare(const Value *left, const Value *right, int *result) {
     Value *right_val = value_copy(right);
 
     if (!left_val || !right_val) {
-        printf("value_compare: Value copies where not created correctly.");
+        printf("value_compare: Value copies where not created correctly.\n");
         value_free(left_val);
         value_free(right_val);
         return false;
@@ -360,7 +360,7 @@ bool value_compare(const Value *left, const Value *right, int *result) {
 
             if (!converted) {
                 // If that fails too, the comparison process fails
-                printf("value_compare: Data type conversions couldn't be carried out.");
+                printf("value_compare: Data type conversions couldn't be carried out.\n");
                 value_free(left_val);
                 value_free(right_val);
                 return false;
@@ -428,7 +428,7 @@ bool value_compare(const Value *left, const Value *right, int *result) {
         /* TODO: JSONB comparison requires JSONB deserialization and parsing of key value pairs */
 
         default:
-            printf("value_compare: Unsupported data types.");
+            printf("value_compare: Unsupported data types.\n");
             value_free(left_val);
             value_free(right_val);
             return false;
@@ -467,7 +467,7 @@ bool value_types_compatible(DataType left, DataType right) {
 /* Converts a Value struct to another data type, if compatible */
 bool value_convert_data_type(DataType target, Value *value) {
     if (!value) {
-        printf("value_convert_data_type: Input Value is NULL.");
+        printf("value_convert_data_type: Input Value is NULL.\n");
         return false;
     }
 
@@ -512,7 +512,7 @@ bool value_convert_data_type(DataType target, Value *value) {
             return convert_to_timestamp(value);
 
         default:
-            printf("value_convert_data_type: Unsupported target data type.");
+            printf("value_convert_data_type: Unsupported target data type.\n");
             return false;       
     }
 }
@@ -521,7 +521,7 @@ bool value_convert_data_type(DataType target, Value *value) {
 /* Check if a Value can be assigned to a target Data Type */
 bool value_can_assign(DataType target, const Value *value) {
     if (!value) {
-        printf("value_can_assign: Input Value is NULL.");
+        printf("value_can_assign: Input Value is NULL.\n");
         return false;
     }
 
@@ -584,7 +584,7 @@ bool value_can_assign(DataType target, const Value *value) {
 /* Deallocate Value structure */
 void value_free(Value *value) {
     if (!value) {
-        printf("value_free: Value structure is already NULL.");
+        printf("value_free: Value structure is already NULL.\n");
         return;
     }
 
