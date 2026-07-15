@@ -5,7 +5,7 @@
 
 #define ASSERT(condition) \
     if (!(condition)) { \
-        return -1; \
+        return 1; \
     }
 
 int test_empty_query() {
@@ -15,7 +15,7 @@ int test_empty_query() {
     ASSERT(tokenizer == NULL);
 
     tokenizer_free(tokenizer);
-    return 1;
+    return 0;
 }
 
 int test_select_query() {
@@ -36,7 +36,7 @@ int test_select_query() {
 
     tokenizer_free(tokenizer);
     token_array_free(token_array);
-    return 1;
+    return 0;
 }
 
 int test_update_query() {
@@ -63,7 +63,7 @@ int test_update_query() {
 
     tokenizer_free(tokenizer);
     token_array_free(token_array);
-    return 1;
+    return 0;
 }
 
 int test_insert_query() {
@@ -94,7 +94,7 @@ int test_insert_query() {
 
     tokenizer_free(tokenizer);
     token_array_free(token_array);
-    return 1;
+    return 0;
 }
 
 int test_delete_query() {
@@ -118,7 +118,7 @@ int test_delete_query() {
 
     tokenizer_free(tokenizer);
     token_array_free(token_array);
-    return 1;
+    return 0;
 }
 
 int test_create_table_query() {
@@ -143,7 +143,7 @@ int test_create_table_query() {
 
     tokenizer_free(tokenizer);
     token_array_free(token_array);
-    return 1;
+    return 0;
 }
 
 int test_invalid_character_query() {
@@ -156,7 +156,7 @@ int test_invalid_character_query() {
     ASSERT(token_array == NULL);
 
     tokenizer_free(tokenizer);
-    return 1;
+    return 0;
 }
 
 int test_comment_query() {
@@ -178,12 +178,12 @@ int test_comment_query() {
 
     tokenizer_free(tokenizer);
     token_array_free(token_array);
-    return 1;
+    return 0;
 }
 
 void generate_output(int result, int test_num, char *test_desc) {
     int space = 40 - strlen(test_desc);
-    char *result_str = result ? "SUCCESS" : "ERROR";
+    char *result_str = result == 0 ? "SUCCESS" : "ERROR";
 
     printf("TEST[%d]: %s - %*s\n", test_num, test_desc, space, result_str);
 }
