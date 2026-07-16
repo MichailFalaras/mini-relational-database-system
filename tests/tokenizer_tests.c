@@ -1,14 +1,13 @@
 #include <stdio.h>
-//#include <ASSERT.h>
 #include <string.h>
-#include "../../include/tokenizer.h"
+#include "./../include/tokenizer.h"
 
 #define ASSERT(condition) \
     if (!(condition)) { \
         return 1; \
     }
 
-int test_empty_query() {
+static int test_empty_query() {
     char *query = strdup("");
 
     Tokenizer *tokenizer = tokenizer_init(query);
@@ -18,7 +17,7 @@ int test_empty_query() {
     return 0;
 }
 
-int test_select_query() {
+static int test_select_query() {
     char *query = strdup("SELECT * FROM users;");
 
     Tokenizer *tokenizer = tokenizer_init(query);
@@ -39,7 +38,7 @@ int test_select_query() {
     return 0;
 }
 
-int test_update_query() {
+static int test_update_query() {
     char *query = strdup("UPDATE table SET col1 = 1.23 WHERE id = 1;");
 
     Tokenizer *tokenizer = tokenizer_init(query);
@@ -66,7 +65,7 @@ int test_update_query() {
     return 0;
 }
 
-int test_insert_query() {
+static int test_insert_query() {
     char *query = strdup("INSERT INTO table (col1, col2) VALUES ('John', 'Doe');");
 
     Tokenizer *tokenizer = tokenizer_init(query);
@@ -97,7 +96,7 @@ int test_insert_query() {
     return 0;
 }
 
-int test_delete_query() {
+static int test_delete_query() {
     char *query = strdup("DELETE FROM table WHERE age < 18;");
 
     Tokenizer *tokenizer = tokenizer_init(query);
@@ -121,7 +120,7 @@ int test_delete_query() {
     return 0;
 }
 
-int test_create_table_query() {
+static int test_create_table_query() {
     char *query = strdup("CREATE TABLE table (col1 INTEGER PRIMARY KEY);");
 
     Tokenizer *tokenizer = tokenizer_init(query);
@@ -146,7 +145,7 @@ int test_create_table_query() {
     return 0;
 }
 
-int test_invalid_character_query() {
+static int test_invalid_character_query() {
     char *query = strdup("SELECT @ FROM table;");
 
     Tokenizer *tokenizer = tokenizer_init(query);
@@ -159,7 +158,7 @@ int test_invalid_character_query() {
     return 0;
 }
 
-int test_comment_query() {
+static int test_comment_query() {
     char *query = strdup("SELECT * -- comment1_@*+\nFROM table;");
 
     Tokenizer *tokenizer = tokenizer_init(query);
@@ -181,6 +180,8 @@ int test_comment_query() {
     return 0;
 }
 
+/* ---------- Logging Helper ---------- */
+
 void generate_output(int result, int test_num, char *test_desc) {
     int space = 40 - strlen(test_desc);
     char *result_str = result == 0 ? "SUCCESS" : "ERROR";
@@ -188,7 +189,7 @@ void generate_output(int result, int test_num, char *test_desc) {
     printf("TEST[%d]: %s - %*s\n", test_num, test_desc, space, result_str);
 }
 
-int main() {
+int main(int argc, char *argv[]) {
     int result;
     printf("> STARTING TESTS\n");
 

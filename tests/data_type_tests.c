@@ -1,6 +1,6 @@
 #include <stdio.h>
 #include <string.h>
-#include "../../include/data_types.h"
+#include "./../include/data_types.h"
 
 #define ASSERT(condition) \
     if (!(condition)) { \
