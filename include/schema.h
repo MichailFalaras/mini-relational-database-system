@@ -42,7 +42,7 @@ extern bool schema_drop_column(Schema *schema, Database *db, const char *col_nam
 
 extern bool schema_rename_column(Schema *schema, const char *old_col_name, const char *new_col_name);
 
-extern bool schema_modify_column(Schema *schema, const char *old_col_name, const Column *new_column);
+extern bool schema_modify_column(Schema *schema, Database *db, const char *old_col_name, Column *new_column);
 
 extern bool schema_add_constraint(Schema *schema, const Constraint *new_constraint);
 

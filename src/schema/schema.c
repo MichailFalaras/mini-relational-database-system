@@ -5,6 +5,7 @@
 #include "../../include/constraints.h"
 #include "../../include/database.h"
 #include "schema_utils.h"
+#include "../constraints/constraints_utils.h"
 
 /* Not Found Index Sentinel. */
 #define ERR_CODE_COL_NOT_FOUND -1
@@ -101,6 +102,10 @@ bool schema_drop(Schema *schema, Database *db) {
 
 Column *schema_find_column(const Schema *schema, const char *col_name) {
 
+    if (schema == NULL) {
+        return NULL;
+    }
+
     int32_t res = schema_find_column_index(schema, col_name);
     if (res == ERR_CODE_COL_MULTIPLE || res == ERR_CODE_COL_NOT_FOUND) {
         return NULL;
@@ -114,6 +119,10 @@ int32_t schema_find_column_index(const Schema *schema, const char *col_name) {
     uint32_t i = 0;
     int32_t index = 0;
 
+    if (schema == NULL) {
+        return ERR_CODE_COL_NOT_FOUND;
+    }
+
     for (; i < schema->num_columns; i++) {
         if (!strcasecmp(schema->columns[i]->name, col_name)) {
             found++;
@@ -126,6 +135,143 @@ int32_t schema_find_column_index(const Schema *schema, const char *col_name) {
     }
 
     return found ? index : ERR_CODE_COL_NOT_FOUND;
+}
+
+bool schema_add_column(Schema *schema, const Column *new_column) {
+
+    if (schema == NULL || new_column == NULL) {
+        return false;
+    }
+
+    int32_t res = schema_find_column_index(schema, new_column->name);
+    /* Multiple or already existing column returns error. */
+    if (res != ERR_CODE_COL_NOT_FOUND) {
+        return false;
+    }
+
+    schema->num_columns++;
+    schema->columns = (Column **) resize_array(schema->columns, schema->num_columns);
+    schema->columns[schema->num_columns-1] = column_alloc(new_column->name, new_column->type,
+                                            new_column->non_null_rows, new_column->null_rows);
+
+    return true;
+}
+
+bool schema_drop_column(Schema *schema, Database *db, const char *col_name) {
+
+    if (schema == NULL) {
+        return false;
+    }
+    
+    int32_t res = schema_find_column_index(schema, col_name);
+    if (res == ERR_CODE_COL_NOT_FOUND || res == ERR_CODE_COL_MULTIPLE) {
+        return false;
+    }
+
+    for (uint32_t i = 0; i < db->table_count; i++) {
+        if (db->tables[i]->table_schema == schema) {
+            continue;
+        }
+        
+        Schema *current_schema = db->tables[i]->table_schema;
+        for (uint32_t j = 0; j < current_schema->num_constraints; j++) {
+            if (current_schema->constraints[j]->type != FOREIGN_KEY) {
+                continue;
+            }
+
+            if (constraint_references_column(current_schema->constraints[j], res)) {
+                return false;
+            }
+        }
+    }
+
+    for (uint32_t i = 0; i < schema->num_constraints;) {
+        if (schema->constraints[i]->type == FOREIGN_KEY) {
+            i++;
+            continue;
+        }
+
+        if (constraint_references_column(schema->constraints[i], res)){
+            constraint_free(schema->constraints[i]);
+            close_array_gap(schema->constraints, schema->num_constraints, i);
+            schema->num_constraints--;
+            schema->constraints = (Constraint **) resize_array(schema->constraints, schema->num_constraints);
+        } else {
+            constraint_shift_indexes(schema->constraints[i], res);
+            i++;
+        }
+    }
+
+
+    free(schema->columns[res]);
+    close_array_gap(schema->columns, schema->num_columns, res);
+    schema->num_columns--;
+    schema->columns = (Column **) resize_array(schema->columns, schema->num_columns);
+
+    return true;
+}
+
+bool schema_rename_column(Schema *schema, const char *old_col_name, const char *new_col_name) {
+
+    if (schema == NULL) {
+        return false;
+    }
+
+    int32_t res = schema_find_column_index(schema, new_col_name);
+    if (res != ERR_CODE_COL_NOT_FOUND) {
+        return false;
+    }
+
+    res = schema_find_column_index(schema, old_col_name);
+    if (res == ERR_CODE_COL_NOT_FOUND || res == ERR_CODE_COL_MULTIPLE) {
+        return false;
+    }
+
+    Column *column = schema_find_column(schema, old_col_name);
+    strncpy(column->name, new_col_name, 63);
+    column->name[63] = '\0';
+
+    return true;
+}
+
+bool schema_modify_column(Schema *schema, Database *db, const char *old_col_name, Column *new_column) {
+
+    if (schema == NULL || new_column == NULL) {
+        return false;
+    }
+
+    int32_t res = schema_find_column_index(schema, old_col_name);
+    if (res == ERR_CODE_COL_NOT_FOUND || res == ERR_CODE_COL_MULTIPLE) {
+        return false;
+    }
+
+    if (schema->columns[res]->type != new_column->type) {
+        for (uint32_t i = 0; i < db->table_count; i++) {
+            if (db->tables[i]->table_schema == schema) {
+                continue;
+            }
+        
+            Schema *current_schema = db->tables[i]->table_schema;
+            for (uint32_t j = 0; j < current_schema->num_constraints; j++) {
+                if (current_schema->constraints[j]->type != FOREIGN_KEY) {
+                    continue;
+                }
+
+                if (constraint_references_column(current_schema->constraints[j], res)) {
+                    return false;
+                }
+            }
+        }
+    }
+
+    /* NOT NULL check in schema_..._constraint funcs*/
+
+    Column *temp = schema->columns[res];
+    schema->columns[res] = column_alloc(new_column->name, new_column->type, 
+        new_column->non_null_rows, new_column->null_rows);
+
+    free(temp);
+    return true;
 }
 
 void schema_free(Schema *schema) {
