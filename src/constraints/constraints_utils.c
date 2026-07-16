@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "../../include/constraints.h"
+#include "../../include/schema.h"
 #include "constraints_utils.h"
 
 /* Helper function to deep-copy uint32_t array (of column_refs). */
@@ -72,4 +73,61 @@ void constraint_shift_indexes(Constraint *constraint, uint32_t index_threshold) 
             printf("constraint type doesn't match existing Constraint types.\n");
             return;
     }
+}
+
+bool constraint_validate_column_refs(const Database *db, const Constraint *constraint, uint32_t num_columns) {
+
+    if (db == NULL || constraint == NULL || num_columns == 0) {
+        return false;
+    }
+
+    switch (constraint->type) {
+        case PRIMARY_KEY:
+            for (uint32_t i = 0; i < constraint->constraint_data.primary_key.amount_columns; i++) {
+                if (constraint->constraint_data.primary_key.primary_key_columns[i] >= num_columns) {
+                    return false;
+                }
+            }
+            break;
+        case FOREIGN_KEY:
+            for (uint32_t i = 0; i < constraint->constraint_data.foreign_keys.amount_foreign_keys; i++) {
+                if (constraint->constraint_data.foreign_keys.foreign_key_columns[i] >= num_columns) {
+                    return false;
+                }
+            }
+
+            /* Referenced table index might not exist too. */
+            if (constraint->constraint_data.foreign_keys.referenced_table >= db->table_count) {
+                return false;
+            }
+
+            uint32_t ref_num_columns = db->tables[constraint->constraint_data.foreign_keys.referenced_table]->table_schema->num_columns;
+            for (uint32_t i = 0; i < constraint->constraint_data.foreign_keys.amount_referenced_columns; i++) {
+                if (constraint->constraint_data.foreign_keys.referenced_columns[i] >= ref_num_columns) {
+                    return false;
+                }
+            }
+            break;
+        case UNIQUE:
+            for (uint32_t i = 0; i < constraint->constraint_data.unique_cols.amount_columns; i++) {
+                if (constraint->constraint_data.unique_cols.column_refs[i] >= num_columns) {
+                    return false;
+                }
+            }
+            break;
+        case CHECK:
+            for (uint32_t i = 0; i < constraint->constraint_data.check.amount_columns; i++) {
+                if (constraint->constraint_data.check.column_refs[i] >= num_columns) {
+                    return false;
+                }
+            }
+            break;
+        case NOT_NULL:
+        case DEFAULT: break;
+        default:
+            printf("constraint type doesn't match existing Constraint types.\n");
+            return false;
+    }
+
+    return true;
 }
