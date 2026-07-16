@@ -68,7 +68,7 @@ Schema *schema_create(const Column **columns, const Constraint **constraints, ui
     return schema;
 }
 
-bool schema_drop(Schema *schema, Database *db) {
+bool schema_drop(Schema *schema, const Database *db) {
 
     if (schema == NULL || db == NULL) {
         return false;
@@ -157,7 +157,7 @@ bool schema_add_column(Schema *schema, const Column *new_column) {
     return true;
 }
 
-bool schema_drop_column(Schema *schema, Database *db, const char *col_name) {
+bool schema_drop_column(Schema *schema, const Database *db, const char *col_name) {
 
     if (schema == NULL) {
         return false;
@@ -193,7 +193,7 @@ bool schema_drop_column(Schema *schema, Database *db, const char *col_name) {
 
         if (constraint_references_column(schema->constraints[i], res)){
             constraint_free(schema->constraints[i]);
-            close_array_gap(schema->constraints, schema->num_constraints, i);
+            close_array_gap((void **)schema->constraints, schema->num_constraints, i);
             schema->num_constraints--;
             schema->constraints = (Constraint **) resize_array(schema->constraints, schema->num_constraints);
         } else {
@@ -204,7 +204,7 @@ bool schema_drop_column(Schema *schema, Database *db, const char *col_name) {
 
 
     free(schema->columns[res]);
-    close_array_gap(schema->columns, schema->num_columns, res);
+    close_array_gap((void **)schema->columns, schema->num_columns, res);
     schema->num_columns--;
     schema->columns = (Column **) resize_array(schema->columns, schema->num_columns);
 
@@ -234,7 +234,7 @@ bool schema_rename_column(Schema *schema, const char *old_col_name, const char *
     return true;
 }
 
-bool schema_modify_column(Schema *schema, Database *db, const char *old_col_name, Column *new_column) {
+bool schema_modify_column(Schema *schema, const Database *db, const char *old_col_name, Column *new_column) {
 
     if (schema == NULL || new_column == NULL) {
         return false;
@@ -273,6 +273,73 @@ bool schema_modify_column(Schema *schema, Database *db, const char *old_col_name
     free(temp);
     return true;
 }
+
+int32_t schema_find_constraint_index(const Schema *schema, const char *constraint_name) {
+    int found = 0;
+    uint32_t i = 0;
+    int32_t index = 0;
+
+    if (schema == NULL) {
+        return ERR_CODE_COL_NOT_FOUND;
+    }
+
+    for (; i < schema->num_constraints; i++) {
+        if (!strcasecmp(schema->constraints[i]->constraint_name, constraint_name)) {
+            found++;
+            index = i;
+        }
+    }
+
+    if (found > 1) {
+        return ERR_CODE_COL_MULTIPLE; 
+    }
+
+    return found ? index : ERR_CODE_COL_NOT_FOUND;
+}
+
+bool schema_add_constraint(Schema *schema, const Database *db, const Constraint *new_constraint) {
+
+    if (schema == NULL || new_constraint == NULL) {
+        return false;
+    }
+
+    int32_t res = schema_find_constraint_index(schema, new_constraint->constraint_name);
+    if (res != ERR_CODE_COL_NOT_FOUND) {
+        return false;
+    }
+
+    bool valid = constraint_validate_column_refs(db, new_constraint, schema->num_columns);
+    if (valid == false) {
+        return false;
+    }
+
+    schema->num_constraints++;
+    schema->constraints = (Constraint **) resize_array(schema->constraints, schema->num_constraints);
+    schema->constraints[schema->num_constraints-1] = constraint_copy(new_constraint);
+
+    return true;
+}
+
+bool schema_drop_constraint(Schema *schema, const char *constraint_name) {
+
+    if (schema == NULL) {
+        return false;
+    }
+
+    int32_t res = schema_find_constraint_index(schema, constraint_name);
+    if (res == ERR_CODE_COL_NOT_FOUND || res == ERR_CODE_COL_MULTIPLE) {
+        return false;
+    }
+
+    constraint_free(schema->constraints[res]);
+    close_array_gap((void **)schema->constraints, schema->num_constraints, res);
+    schema->num_constraints--;
+    schema->constraints = (Constraint **) resize_array(schema->constraints, schema->num_constraints);
+
+    return true;
+}
+
+
 
 void schema_free(Schema *schema) {
     if (schema != NULL) {

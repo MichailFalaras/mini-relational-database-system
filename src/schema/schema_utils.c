@@ -7,7 +7,7 @@
 void close_array_gap(void **array, uint32_t count, uint32_t index_of_deletion) {
 
     if (array == NULL || count == 0 || index_of_deletion >= count) {
-        return NULL;
+        return;
     }
 
     for (uint32_t i = index_of_deletion; i < count-1; i++) {
