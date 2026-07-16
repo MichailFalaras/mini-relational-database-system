@@ -556,12 +556,14 @@ bool value_can_assign(DataType target, const Value *value) {
             return (value->type == INTEGER || value->type == UNSIGNED_INTEGER ||
                     value->type == FLOAT);
 
-        // These cases only examine the possibility, 
-        // not the actual string length constraints of CHAR(n) and VARCHAR(n)
         case CHAR:
+            return (value->type == VARCHAR);
+
         case VARCHAR:
+            return (value->type == CHAR);            
+    
         case TEXT:
-            return (value->type == CHAR || value->type == VARCHAR || value->type == TEXT);
+            return (value->type == CHAR || value->type == VARCHAR);
 
         case DATE:
             return false;
