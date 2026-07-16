@@ -61,27 +61,6 @@ Constraint *constraint_copy(const Constraint *source) {
     return copy;
 }
 
-/* Helper function to deep-copy uint32_t array (of column_refs). */
-uint32_t *copy_uint32_array(const uint32_t *source, uint32_t amount) {
-
-    if (source == NULL) {
-        return NULL;
-    }
-
-    if (amount == 0) {
-        return NULL;
-    }
-
-    uint32_t *copy = (uint32_t *) malloc(amount*sizeof(uint32_t));
-    if (copy == NULL) {
-        perror("copy_uint32_array");
-        exit(1);
-    }
-
-    memcpy(copy, source, amount*sizeof(uint32_t));
-    return copy;
-}
-
 /* ASTConstraintNode are only created when we CREATE TABLE or ALTER TABLE constraints.
  * Therefore, before this function gets called, Query Planner figures out in which
  * index the columns have been saved.
@@ -233,6 +212,7 @@ bool constraint_has_column(const Constraint *constraint, uint32_t column_index) 
     return false;
 }
 
+/* For Foreign-Key only. */
 bool constraint_references_table(const Constraint *constraint, uint32_t table_index) {
     if (constraint == NULL || constraint->type != FOREIGN_KEY) {
         return false;
@@ -245,15 +225,60 @@ bool constraint_references_table(const Constraint *constraint, uint32_t table_in
     return false;
 }
 
+/* For all types of constraints. */
 bool constraint_references_column(const Constraint *constraint, uint32_t column_ref) {
-    if (constraint == NULL || constraint->type != FOREIGN_KEY) {
+    if (constraint == NULL) {
         return false;
     }
 
-    for (uint32_t i = 0; i < constraint->constraint_data.foreign_keys.amount_referenced_columns; i++) {
-        if (constraint->constraint_data.foreign_keys.referenced_columns[i] == column_ref) {
-            return true;
-        }
+    switch (constraint->type) {
+        case PRIMARY_KEY:
+            for (uint32_t i = 0; i < constraint->constraint_data.primary_key.amount_columns; i++) {
+                if (constraint->constraint_data.primary_key.primary_key_columns[i] == column_ref) {
+                    return true;
+                }
+            }
+            break;
+        case FOREIGN_KEY:
+            for (uint32_t i = 0; i < constraint->constraint_data.foreign_keys.amount_foreign_keys; i++) {
+                if (constraint->constraint_data.foreign_keys.foreign_key_columns[i] == column_ref) {
+                    return true;
+                }
+            }
+
+            for (uint32_t i = 0; i < constraint->constraint_data.foreign_keys.amount_referenced_columns; i++) {
+                if (constraint->constraint_data.foreign_keys.referenced_columns[i] == column_ref) {
+                    return true;
+                }
+            }
+            break;
+        case UNIQUE:
+            for (uint32_t i = 0; i < constraint->constraint_data.unique_cols.amount_columns; i++) {
+                if (constraint->constraint_data.unique_cols.column_refs[i] == column_ref) {
+                    return true;
+                }
+            }
+            break;
+        case CHECK:
+            for (uint32_t i = 0; i < constraint->constraint_data.check.amount_columns; i++) {
+                if (constraint->constraint_data.check.column_refs[i] == column_ref) {
+                    return true;
+                }
+            }
+            break;
+        case NOT_NULL:
+            if(constraint->constraint_data.not_null.column_ref == column_ref) {
+                return true;
+            }
+            break;
+        case DEFAULT:
+            if(constraint->constraint_data.default_value.column_ref == column_ref) {
+                return true;
+            }
+            break;
+        default:
+            printf("constraint type doesn't match existing Constraint types.\n");
+            return;
     }
     
     return false;
