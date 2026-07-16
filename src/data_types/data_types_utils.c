@@ -8,7 +8,7 @@
 // Creates a duplicate string for creation of CHAR(n), VARCHAR(n), TEXT data types
 char *duplicate_string(const char *str) {
     if (!str) {
-        printf("duplicate_string: Input string is NULL.");
+        printf("duplicate_string: Input string is NULL.\n");
         return NULL;
     }
 
@@ -16,7 +16,7 @@ char *duplicate_string(const char *str) {
 
     char *new_str = (char *) malloc(length + 1);
     if (!new_str) {
-        printf("duplicate_string: Duplicate string memory could not be allocated.");
+        printf("duplicate_string: Duplicate string memory could not be allocated.\n");
         return NULL;
     }
 
@@ -28,7 +28,7 @@ char *duplicate_string(const char *str) {
 // Deallocation helper also used in value_assign for the temporary copy
 void value_free_internal(Value *value) {
     if (!value) {
-        printf("value_free_internal: Value structure is already NULL.");
+        printf("value_free_internal: Value structure is already NULL.\n");
         return;
     }
 
@@ -86,7 +86,7 @@ int compare_uint64(const uint64_t left, const uint64_t right) {
 // Static helper -> Remove trailing 0's
 static void normalize_numeric(int64_t *value, uint32_t *scale) {
     if (!value || !scale) {
-        printf("normalize_numeric: Input parameters contain NULL.");
+        printf("normalize_numeric: Input parameters contain NULL.\n");
         return;
     }
 
@@ -99,17 +99,17 @@ static void normalize_numeric(int64_t *value, uint32_t *scale) {
 // Static helper -> Equalize lower scale value by multiplying by 10
 static bool multiply_by_10_checked(int64_t value, int64_t *result) {
     if (!result) {
-        printf("multiply_by_10_checked: result value is NULL.");
+        printf("multiply_by_10_checked: result value is NULL.\n");
         return false;
     }
 
     if (value > INT64_MAX / 10) {
-        printf("multiply_by_10_checked: input value overflows.");
+        printf("multiply_by_10_checked: input value overflows.\n");
         return false;
     } 
     
     if(value < INT64_MIN / 10) {
-        printf("multiply_by_10_checked: input value underflows.");
+        printf("multiply_by_10_checked: input value underflows.\n");
         return false;
     }
 
@@ -119,12 +119,12 @@ static bool multiply_by_10_checked(int64_t value, int64_t *result) {
 
 bool compare_numeric(const numeric_t *left, const numeric_t *right, int *result) {
     if (!left || !right) {
-        printf("compare_char_n: Input operands contain NULL.");
+        printf("compare_char_n: Input operands contain NULL.\n");
         return false;
     }
 
     if (!result) {
-        printf("compare_char_n: Input result flag is NULL.");
+        printf("compare_char_n: Input result flag is NULL.\n");
         return false;
     }
 
@@ -169,12 +169,12 @@ bool compare_numeric(const numeric_t *left, const numeric_t *right, int *result)
 
 bool compare_float(const float left, const float right, int *result) {
     if (isnan(left) || isnan(right)) {
-        printf("compare_float: NaN comparison operands.");
+        printf("compare_float: NaN comparison operands.\n");
         return false;
     }
 
     if (!result) {
-        printf("compare_float: Input result flag is NULL.");
+        printf("compare_float: Input result flag is NULL.\n");
         return false;
     }
 
@@ -187,12 +187,12 @@ bool compare_float(const float left, const float right, int *result) {
 
 bool compare_double(const double left, const double right, int *result) {
     if (isnan(left) || isnan(right)) {
-        printf("compare_double: NaN comparison operands.");
+        printf("compare_double: NaN comparison operands.\n");
         return false;
     }
 
     if (!result) {
-        printf("compare_double: Input result flag is NULL.");
+        printf("compare_double: Input result flag is NULL.\n");
         return false;
     }
 
@@ -205,12 +205,12 @@ bool compare_double(const double left, const double right, int *result) {
 
 bool compare_char_n(const char_n_t *left, const char_n_t *right, int *result) {
     if (!left || !right) {
-        printf("compare_char_n: Input operands contain NULL.");
+        printf("compare_char_n: Input operands contain NULL.\n");
         return false;
     }
 
     if (!result) {
-        printf("compare_char_n: Input result flag is NULL.");
+        printf("compare_char_n: Input result flag is NULL.\n");
         return false;
     }
 
@@ -225,12 +225,12 @@ bool compare_char_n(const char_n_t *left, const char_n_t *right, int *result) {
 
 bool compare_varchar_n(const varchar_n_t *left, const varchar_n_t *right, int *result) {
     if (!left || !right) {
-        printf("compare_varchar_n: Input operands contain NULL.");
+        printf("compare_varchar_n: Input operands contain NULL.\n");
         return false;
     }
 
     if (!result) {
-        printf("compare_varchar_n: Input result flag is NULL.");
+        printf("compare_varchar_n: Input result flag is NULL.\n");
         return false;
     }
 
@@ -245,12 +245,12 @@ bool compare_varchar_n(const varchar_n_t *left, const varchar_n_t *right, int *r
 
 bool compare_text(const char *left, const char *right, int *result) {
     if (!left || !right) {
-        printf("compare_text: Input operands contain NULL.");
+        printf("compare_text: Input operands contain NULL.\n");
         return false;
     }
 
     if (!result) {
-        printf("compare_text: Input result flag is NULL.");
+        printf("compare_text: Input result flag is NULL.\n");
         return false;
     }
 
@@ -265,12 +265,12 @@ bool compare_text(const char *left, const char *right, int *result) {
 
 bool compare_binary(const blob_t *left, const blob_t *right, int *result) {
     if (!left || !right) {
-        printf("compare_binary: Input operands contain NULL.");
+        printf("compare_binary: Input operands contain NULL.\n");
         return false;
     }
 
     if (!result) {
-        printf("compare_binary: Input result flag is NULL.");
+        printf("compare_binary: Input result flag is NULL.\n");
         return false;
     }
 
@@ -415,7 +415,7 @@ bool convert_to_char(Value *value) {
         converted.string = duplicate_string(value->value.varchar_val.string);
         
         if (!converted.string) {
-            printf("value_convert_data_type: CHAR string could not be allocated.");
+            printf("value_convert_data_type: CHAR string could not be allocated.\n");
             return false;
         }
     }
@@ -439,7 +439,7 @@ bool convert_to_varchar(Value *value) {
         converted.string = duplicate_string(value->value.char_val.string);
 
         if (!converted.string) {
-            printf("value_convert_data_type: VARCHAR string could not be allocated.");
+            printf("value_convert_data_type: VARCHAR string could not be allocated.\n");
             return false;
         }
     }
@@ -469,7 +469,7 @@ bool convert_to_text(Value *value) {
     }
 
     if (!converted) {
-        printf("value_convert_data_type: TEXT string could not be allocated.");
+        printf("value_convert_data_type: TEXT string could not be allocated.\n");
         return false;
     }
 
