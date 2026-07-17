@@ -1,8 +1,11 @@
 #ifndef EXPRESSIONS_H_
 #define EXPRESSIONS_H_
 
-#include "data_types.h"
 #include <stdint.h>
+#include "data_types.h"
+#include "database.h"
+#include "execution_engine.h"
+#include "transaction.h"
 
 typedef struct expression_node ExpressionNode;
 
@@ -48,6 +51,9 @@ typedef struct literal {
 /* Column name reference in the expression */
 typedef struct column_ref {
     char column_name[64];
+
+    int32_t relation_index;
+    int32_t column_index;
 } ColumnRef;
 
 typedef struct table_ref {
@@ -121,11 +127,26 @@ typedef struct expression_node {
     } expression_data;
 } ExpressionNode;
 
+/* Subject to change. */
+typedef struct relation_context {
+    Table *table;
+    Row *row;
+} RelationContext;
+
+typedef struct evaluation_context {
+    Database *db;
+    RelationContext *relation_context;
+    uint32_t relations_count;
+    Transaction *transaction;
+} EvaluationContext;
+
 extern ExpressionNode *expression_node_create(ExpressionType type);
 
 extern OperatorType get_operator_type(char *operator_token);
 
 extern ExpressionNode *expression_node_copy(const ExpressionNode *source);
+
+Value *evaluate_expression(const ExpressionNode *expr, const EvaluationContext *context);
 
 extern void expression_node_free(ExpressionNode *expr);
 
