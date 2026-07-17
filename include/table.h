@@ -18,7 +18,8 @@
  * row_count: amount of rows. */
 typedef struct table {
     char name[64];
-    Schema table_schema;
+    bool is_deleted;
+    Schema *table_schema;
     Index *primary_index;
     Index *secondary_indexes[MAX_INDEXES];
     uint32_t total_secondary_indexes;
