@@ -3,6 +3,7 @@
 #include <string.h>
 #include "../../include/expressions.h"
 
+/* Create ExpressionNode. */
 ExpressionNode *expression_node_create(ExpressionType type) {
 
     ExpressionNode *expr_node = (ExpressionNode*) malloc(sizeof(ExpressionNode));
@@ -22,6 +23,7 @@ ExpressionNode *expression_node_create(ExpressionType type) {
     return expr_node;
 }
 
+/* Get operator type from operator token. */
 OperatorType get_operator_type(char *operator_token) {
     OperatorType type;
 
@@ -302,6 +304,7 @@ Value *evaluate_expression(const ExpressionNode *expr, const EvaluationContext *
     return NULL;
 }
 
+/* ExpressionNode Free. */
 void expression_node_free(ExpressionNode *expr) {
     if (expr != NULL) {
         switch (expr->type) {

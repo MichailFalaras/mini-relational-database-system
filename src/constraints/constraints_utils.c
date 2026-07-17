@@ -26,6 +26,8 @@ uint32_t *copy_uint32_array(const uint32_t *source, uint32_t amount) {
     return copy;
 }
 
+/* When Column gets removed, you have to update the Constraints column refs to
+match the new indexes.*/
 void constraint_shift_indexes(Constraint *constraint, uint32_t index_threshold) {
 
     if (constraint == NULL) {
@@ -75,6 +77,7 @@ void constraint_shift_indexes(Constraint *constraint, uint32_t index_threshold) 
     }
 }
 
+/* Check if column_refs are valid. */
 bool constraint_validate_column_refs(const Database *db, const Constraint *constraint, uint32_t num_columns) {
 
     if (db == NULL || constraint == NULL || num_columns == 0) {

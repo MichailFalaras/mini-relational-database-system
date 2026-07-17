@@ -4,6 +4,9 @@
 #include <stdint.h>
 #include "../../include/schema.h"
 
+/* Both functions probably should be moved to a global utils file. */
+
+/* Close array gap when we free pointer in the array. */
 void close_array_gap(void **array, uint32_t count, uint32_t index_of_deletion) {
 
     if (array == NULL || count == 0 || index_of_deletion >= count) {
@@ -17,6 +20,7 @@ void close_array_gap(void **array, uint32_t count, uint32_t index_of_deletion) {
     array[count-1] = NULL;
 }
 
+/* Resize array to a bigger/smaller size. */
 void **resize_array(void **array, uint32_t new_size) {
 
     if (new_size == 0) {
