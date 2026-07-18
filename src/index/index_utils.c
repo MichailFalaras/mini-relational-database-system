@@ -15,7 +15,7 @@ Index *index_metadata_create(const char *index_name, IndexType type, const Index
         return NULL;
     }
 
-    if (!key || !key->column_index_keys || key->num_keys == 0) {
+    if (!key || !key->column_index_array || key->num_columns == 0) {
         printf("index_metadata_create: Invalid Index key.\n");
         return NULL;
     }
@@ -41,7 +41,7 @@ Index *index_metadata_create(const char *index_name, IndexType type, const Index
 
     strcpy(new_index->name, index_name);
     
-    new_index->key = index_key_create(key->column_index_keys, key->num_keys);
+    new_index->key = index_key_create(key->column_index_array, key->num_columns);
     if (!new_index->key) {
         printf("index_metadata_create: Index key could not be deep-copied.\n");
         index_free(new_index);

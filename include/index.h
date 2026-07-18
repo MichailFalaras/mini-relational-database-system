@@ -11,11 +11,11 @@ typedef enum index_type {
 } IndexType;
 
 /* Index key contains:
- * column_index_keys: indexes to the columns that are the keys
- * amount_keys: amount of keys for index*/
+ * column_index_array: index array to the columns that comprise the index key
+ * num_columns: amount of columns for index key */
 typedef struct index_key {
-    uint32_t *column_index_keys;
-    uint32_t num_keys;
+    uint32_t *column_index_array;
+    uint32_t num_columns;
 } IndexKey;
 
 /* Logical BTree node struct that contains:
@@ -48,10 +48,13 @@ extern IndexKey *index_key_create(const uint32_t *column_indexes, uint32_t num_c
 /* Free Index key */
 extern void index_key_free(IndexKey *key);
 
-/* Check for columns in Index */
+/* Check if Index key contains a particular column */
 extern bool index_key_has_column(const Index *index, uint32_t index_key);
 
+/* Check if Index key matches all of its fields */
 extern bool index_key_matches_key(const Index *index, const uint32_t *column_ids, uint32_t num_columns);
 
+/* Check if Index key matches a prefix of columns */
+extern bool index_key_matches_prefix( const Index *index, const uint32_t *column_ids, uint32_t num_columns);
 
 #endif
