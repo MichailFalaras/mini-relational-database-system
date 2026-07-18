@@ -11,11 +11,11 @@ typedef enum index_type {
 } IndexType;
 
 /* Index key contains:
- * column_index_keys: indexes to the columns that are the keys
- * amount_keys: amount of keys for index*/
+ * column_index_array: index array to the columns that comprise the index key
+ * num_columns: amount of columns for index key */
 typedef struct index_key {
-    uint32_t *column_index_keys;
-    uint32_t amount_keys;
+    uint32_t *column_index_array;
+    uint32_t num_columns;
 } IndexKey;
 
 /* Logical BTree node struct that contains:
@@ -30,14 +30,31 @@ typedef struct index {
     uint32_t root_page_num;
 } Index;
 
-extern Index *index_create(const char *index_name, IndexType type, IndexKey *key, uint32_t root_page_num);
+/* Physical creation of Index on disk */
+extern Index *index_create(const char *index_name, IndexType type, const IndexKey *key, Pager *pager);
 
-extern bool index_drop(const char *index_name);
+/* Physical deletion of Index on disk */
+extern bool index_drop(Index *index, Pager *pager);
 
+/* Creation of logical Index struct */
+extern Index *index_metadata_create(const char *index_name, IndexType type, IndexKey *key, uint32_t root_page_num);
+
+/* Deallocation of logical Index struct */
+extern void index_free(Index *index);
+
+/* Create Index key */
+extern IndexKey *index_key_create(const uint32_t *column_indexes, uint32_t num_columns);
+
+/* Free Index key */
+extern void index_key_free(IndexKey *key);
+
+/* Check if Index key contains a particular column */
 extern bool index_key_has_column(const Index *index, uint32_t index_key);
 
-extern bool index_key_matches_key(const Index *index, const uint32_t *column_ids, uint32_t amount_columns);
+/* Check if Index key matches all of its fields */
+extern bool index_key_matches_key(const Index *index, const uint32_t *column_ids, uint32_t num_columns);
 
-extern void index_free(Index *index);
+/* Check if Index key matches a prefix of columns */
+extern bool index_key_matches_prefix( const Index *index, const uint32_t *column_ids, uint32_t num_columns);
 
 #endif
