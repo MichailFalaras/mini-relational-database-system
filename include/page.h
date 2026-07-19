@@ -25,4 +25,14 @@ typedef struct page {
     time_t last_interacted;
 } Page;
 
+extern Page *page_create(uint32_t page_num);
+
+extern bool page_mark_dirty(Page *page);
+
+extern bool page_touch(Page *page);
+
+extern bool page_clear(Page *page);
+
+extern void page_free(Page *page);
+
 #endif
