@@ -2,13 +2,44 @@
 #define QUERY_OPTIMIZER_H_
 
 #include <stdint.h>
-#include "schema.h"
-#include "expressions.h"
-#include "constraints.h"
-#include "index.h"
-#include "row.h"
-#include "parser.h"
-#include "database.h"
+#include <stdbool.h>
+typedef struct database Database;
+typedef struct table Table;
+typedef struct schema Schema;
+typedef struct column Column;
+typedef struct constraint Constraint;
+typedef struct index Index;
+typedef struct expression_node ExpressionNode;
+typedef struct row Row;
+
+/* Forward Declarations. */
+typedef struct statement Statement;
+typedef struct ast_node ASTNode;
+typedef struct ast_create_table CreateTableNode;
+typedef struct ast_drop_table DropTableNode;
+typedef struct ast_truncate_table TruncateTableNode;
+typedef struct ast_alter_table AlterTableNode;
+typedef struct ast_alter_add AlterAddNode;
+typedef struct ast_alter_drop AlterDropNode;
+typedef struct ast_alter_rename_table AlterRenameTableNode;
+typedef struct ast_alter_rename_col AlterRenameColNode;
+typedef struct ast_alter_modify AlterModifyNode;
+typedef struct ast_add_constraint AlterAddConstraintNode;
+typedef struct ast_drop_constraint AlterDropConstraintNode;
+typedef struct ast_create_index CreateIndexNode;
+typedef struct ast_drop_index DropIndexNode;
+typedef struct ast_where WhereNode;
+typedef struct ast_select SelectNode;
+typedef struct ast_join JoinNode;
+typedef struct ast_insert InsertNode;
+typedef struct ast_delete DeleteNode;
+typedef struct ast_update UpdateNode;
+typedef struct ast_group_by GroupByNode;
+typedef struct ast_order_by OrderByNode;
+typedef struct ast_having HavingNode;
+typedef struct ast_limit LimitNode;
+typedef struct ast_offset OffsetNode;
+typedef enum order_by_types OrderByTypes;
 
 /* Operation Types. */
 typedef enum operation_type {

@@ -3,9 +3,9 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include "expressions.h"
-#include "schema.h"
 #include "data_types.h"
+
+typedef struct expression_node ExpressionNode;
 
 typedef enum ast_node_type {
     /* Root Nodes (First-Level Nodes) */
@@ -279,7 +279,7 @@ typedef struct ast_alter_modify {
 
 typedef struct ast_alter_add_constraint {
     char constraint_name[64];
-    ConstraintType new_type;
+    ASTConstraintType new_type;
     char column_name[64];
 } AlterAddConstraintNode;
 

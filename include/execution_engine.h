@@ -2,10 +2,16 @@
 #define  EXECUTION_ENGINE_H_
 
 #include <stdint.h>
-#include "database.h"
-#include "row.h"
-#include "query_optimizer.h"
-#include "transaction.h"
+
+/* Forward Declarations. */
+typedef struct schema Schema;
+typedef struct database Database;
+typedef struct row Row;
+typedef struct query_plan QueryPlan;
+typedef struct plan_node PlanNode;
+typedef struct value Value;
+typedef struct transaction Transaction;
+#include "expressions.h"
 
 typedef enum execution_status {
     EXECUTION_SUCCESS,
@@ -39,6 +45,31 @@ typedef struct execution_result {
 extern ExecutionEngine *execution_engine_init(Database *db);
 
 extern ExecutionResult *execution_engine_query(const QueryPlan *query_plan);
+
+
+/* -- First version of execute_operation for evaluate_expression, subject to change.*/
+/* Switch case with all different types of operations from expression.h*/
+
+/* Only if:
+ * left_val == NULL && right_val == NULL there's error, because
+ * its possibly a unary/NOT operation with only one value. */
+extern Value *execute_operation(Value *left_val, Value *right_val, OperatorType type);
+/* Each operation handler function. (Probably private)*/
+
+/* Comparisons return Value with type BOOL.*/
+Value *execute_equality(Value *left_val, Value *right_val);
+Value *execute_inequality(Value *left_val, Value *right_val);
+Value *execute_less_than(Value *left_val, Value *right_val);
+Value *execute_less_than_equal(Value *left_val, Value *right_val);
+Value *execute_greater_than(Value *left_val, Value *right_val);
+Value *execute_greater_than_equal(Value *left_val, Value *right_val);
+Value *execute_logical_and(Value *left_val, Value *right_val);
+Value *execute_logical_or(Value *left_val, Value *right_val);
+Value *execute_logical_not(Value *val);
+Value *execute_addition(Value *left_val, Value *right_val);
+Value *execute_subtraction(Value *left_val, Value *right_val);
+Value *execute_multiplication(Value *left_val, Value *right_val);
+Value *execute_division(Value *left_val, Value *right_val);
 
 /* TODO: static functions in .c file */
 ExecutionResult *execute_create_table(ExecutionEngine *engine, PlanNode *plan_node);

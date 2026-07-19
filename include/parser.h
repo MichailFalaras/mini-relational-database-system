@@ -4,7 +4,9 @@
 #include <stdint.h>
 #include "tokenizer.h"
 #include "ast.h"
-#include "database.h"
+
+/* Forward Declarations. */
+typedef struct database Database;
 
 typedef enum statement_type {
     STMT_CREATE_TABLE,

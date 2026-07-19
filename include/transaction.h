@@ -2,7 +2,8 @@
 #define TRANSACTION_H_
 
 #include <stdint.h>
-#include "database.h"
+#include <stdbool.h>
+typedef struct database Database;
 
 typedef enum transaction_state {
     TRANSACTION_NONE,
