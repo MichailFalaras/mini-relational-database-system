@@ -3,6 +3,42 @@
 #include <string.h>
 #include <stdint.h>
 #include "../../include/schema.h"
+#include "../../include/database.h"
+#include "../../include/table.h"
+#include "../../include/constraints.h"
+#include "../src/constraints/constraints_utils.h"
+
+void shift_indexes(Schema *schema, Database *db, uint32_t index_threshold) {
+
+    for (uint32_t i = 0; i < schema->num_constraints; i++) {
+        constraint_shift_indexes(schema->constraints[i], index_threshold);
+    }
+
+    uint32_t table_index;
+    for (uint32_t i = 0; i < db->table_count; i++) {
+        if (db->tables[i]->table_schema == schema) {
+            table_index = i;
+        }
+    }
+
+    for (uint32_t i = 0; i < db->table_count; i++) {
+        if (i == table_index) {
+            continue;
+        }
+
+        Schema *current_schema = db->tables[i]->table_schema;
+        for (uint32_t j = 0; j < current_schema->num_constraints; j++) {
+            if (current_schema->constraints[j]->type != FOREIGN_KEY) {
+                continue;
+            }
+
+            if (constraint_references_table(current_schema->constraints[j], table_index)) {
+                constraint_shift_indexes(current_schema->constraints[j], index_threshold);
+            }
+        }
+    }
+}
+
 
 /* Both functions probably should be moved to a global utils file. */
 

@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "../../include/constraints.h"
+#include "constraints_utils.h"
 #include "../../include/expressions.h"
 
 /* Allocate memory for Constraint struct. */
@@ -21,7 +22,7 @@ Constraint *constraint_alloc(char *constraint_name, ConstraintType type) {
 }
 
 /* Deep-copy for Constraint structs. */
-Constraint *constraint_copy(const Constraint *source) {
+Constraint *constraint_copy(Constraint *source) {
 
     if (source == NULL) {
         return NULL;
@@ -240,11 +241,11 @@ bool constraint_references_column(const Constraint *constraint, uint32_t column_
             }
             break;
         case FOREIGN_KEY:
-            for (uint32_t i = 0; i < constraint->constraint_data.foreign_keys.amount_foreign_keys; i++) {
+            /*for (uint32_t i = 0; i < constraint->constraint_data.foreign_keys.amount_foreign_keys; i++) {
                 if (constraint->constraint_data.foreign_keys.foreign_key_columns[i] == column_ref) {
                     return true;
                 }
-            }
+            }*/
 
             for (uint32_t i = 0; i < constraint->constraint_data.foreign_keys.amount_referenced_columns; i++) {
                 if (constraint->constraint_data.foreign_keys.referenced_columns[i] == column_ref) {
@@ -278,7 +279,7 @@ bool constraint_references_column(const Constraint *constraint, uint32_t column_
             break;
         default:
             printf("constraint type doesn't match existing Constraint types.\n");
-            return;
+            return false;
     }
     
     return false;

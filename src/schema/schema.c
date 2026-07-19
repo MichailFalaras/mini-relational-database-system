@@ -1,11 +1,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 #include "../../include/schema.h"
-#include "../../include/constraints.h"
-#include "../../include/database.h"
 #include "schema_utils.h"
-#include "../constraints/constraints_utils.h"
+#include "../../include/database.h"
+#include "../../include/constraints.h"
+#include "../src/constraints/constraints_utils.h"
+#include "../../include/expressions.h"
+#include "../../include/row.h"
+#include "../../include/table.h"
 
 /* Not Found Index Sentinel. */
 #define ERR_CODE_COL_NOT_FOUND -1
@@ -32,7 +36,7 @@ Column *column_alloc(char *column_name, DataType type, uint32_t not_null_rows,
 }
 
 /* Create Schema. */
-Schema *schema_create(const Column **columns, const Constraint **constraints, uint32_t num_columns,
+Schema *schema_create(Column **columns, Constraint **constraints, uint32_t num_columns,
     uint32_t num_constraints) {
 
     Schema *schema = (Schema *) calloc(1, sizeof(Schema));
@@ -142,7 +146,7 @@ int32_t schema_find_column_index(const Schema *schema, const char *col_name) {
 }
 
 /* Schema add column (deep-copy).*/
-bool schema_add_column(Schema *schema, const Column *new_column) {
+bool schema_add_column(Schema *schema, Column *new_column) {
 
     if (schema == NULL || new_column == NULL) {
         return false;
@@ -155,7 +159,7 @@ bool schema_add_column(Schema *schema, const Column *new_column) {
     }
 
     schema->num_columns++;
-    schema->columns = (Column **) resize_array(schema->columns, schema->num_columns);
+    schema->columns = (Column **) resize_array((void **) schema->columns, schema->num_columns);
     schema->columns[schema->num_columns-1] = column_alloc(new_column->name, new_column->type,
                                             new_column->non_null_rows, new_column->null_rows);
 
@@ -164,7 +168,7 @@ bool schema_add_column(Schema *schema, const Column *new_column) {
 
 /* Schema drop column if it isn't referenced by any other tables.
  * Also deletes constraints related to the column. */
-bool schema_drop_column(Schema *schema, const Database *db, const char *col_name) {
+bool schema_drop_column(Schema *schema, Database *db, const char *col_name) {
 
     if (schema == NULL) {
         return false;
@@ -185,7 +189,7 @@ bool schema_drop_column(Schema *schema, const Database *db, const char *col_name
             if (current_schema->constraints[j]->type != FOREIGN_KEY) {
                 continue;
             }
-
+            
             if (constraint_references_column(current_schema->constraints[j], res)) {
                 return false;
             }
@@ -193,18 +197,23 @@ bool schema_drop_column(Schema *schema, const Database *db, const char *col_name
     }
 
     for (uint32_t i = 0; i < schema->num_constraints;) {
+
         if (schema->constraints[i]->type == FOREIGN_KEY) {
             i++;
             continue;
         }
 
         if (constraint_references_column(schema->constraints[i], res)){
+
+            if (schema->constraints[i]->type == PRIMARY_KEY){
+                return false;
+            }
+
             constraint_free(schema->constraints[i]);
             close_array_gap((void **)schema->constraints, schema->num_constraints, i);
             schema->num_constraints--;
-            schema->constraints = (Constraint **) resize_array(schema->constraints, schema->num_constraints);
+            schema->constraints = (Constraint **) resize_array((void **) schema->constraints, schema->num_constraints);
         } else {
-            constraint_shift_indexes(schema->constraints[i], res);
             i++;
         }
     }
@@ -213,7 +222,10 @@ bool schema_drop_column(Schema *schema, const Database *db, const char *col_name
     free(schema->columns[res]);
     close_array_gap((void **)schema->columns, schema->num_columns, res);
     schema->num_columns--;
-    schema->columns = (Column **) resize_array(schema->columns, schema->num_columns);
+    schema->columns = (Column **) resize_array((void **) schema->columns, schema->num_columns);
+
+    shift_indexes(schema, db, res);
+
 
     return true;
 }
@@ -308,7 +320,7 @@ int32_t schema_find_constraint_index(const Schema *schema, const char *constrain
 }
 
 /* Schema add constraint. */
-bool schema_add_constraint(Schema *schema, const Database *db, const Constraint *new_constraint) {
+bool schema_add_constraint(Schema *schema, const Database *db, Constraint *new_constraint) {
 
     if (schema == NULL || new_constraint == NULL) {
         return false;
@@ -325,7 +337,7 @@ bool schema_add_constraint(Schema *schema, const Database *db, const Constraint 
     }
 
     schema->num_constraints++;
-    schema->constraints = (Constraint **) resize_array(schema->constraints, schema->num_constraints);
+    schema->constraints = (Constraint **) resize_array((void **) schema->constraints, schema->num_constraints);
     schema->constraints[schema->num_constraints-1] = constraint_copy(new_constraint);
 
     return true;
@@ -346,7 +358,7 @@ bool schema_drop_constraint(Schema *schema, const char *constraint_name) {
     constraint_free(schema->constraints[res]);
     close_array_gap((void **)schema->constraints, schema->num_constraints, res);
     schema->num_constraints--;
-    schema->constraints = (Constraint **) resize_array(schema->constraints, schema->num_constraints);
+    schema->constraints = (Constraint **) resize_array((void **) schema->constraints, schema->num_constraints);
 
     return true;
 }

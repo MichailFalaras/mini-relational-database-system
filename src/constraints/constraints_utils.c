@@ -1,9 +1,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include "../../include/constraints.h"
 #include "../../include/schema.h"
 #include "constraints_utils.h"
+#include "../../include/database.h"
+#include "../../include/table.h"
 
 /* Helper function to deep-copy uint32_t array (of column_refs). */
 uint32_t *copy_uint32_array(const uint32_t *source, uint32_t amount) {
@@ -43,12 +46,12 @@ void constraint_shift_indexes(Constraint *constraint, uint32_t index_threshold) 
             }
             break;
         case FOREIGN_KEY:
-            for (uint32_t i = 0; i < constraint->constraint_data.foreign_keys.amount_foreign_keys; i++) {
+            /*for (uint32_t i = 0; i < constraint->constraint_data.foreign_keys.amount_foreign_keys; i++) {
+                
                 if (constraint->constraint_data.foreign_keys.foreign_key_columns[i] > index_threshold) {
                     constraint->constraint_data.foreign_keys.foreign_key_columns[i]--;
                 }
-            }
-
+            }*/
             for (uint32_t i = 0; i < constraint->constraint_data.foreign_keys.amount_referenced_columns; i++) {
                 if (constraint->constraint_data.foreign_keys.referenced_columns[i] > index_threshold) {
                     constraint->constraint_data.foreign_keys.referenced_columns[i]--;
@@ -126,6 +129,9 @@ bool constraint_validate_column_refs(const Database *db, const Constraint *const
             }
             break;
         case NOT_NULL:
+            if (constraint->constraint_data.not_null.column_ref >= num_columns) {
+                return false;
+            }
         case DEFAULT: break;
         default:
             printf("constraint type doesn't match existing Constraint types.\n");
