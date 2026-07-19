@@ -2,9 +2,13 @@
 #define TABLE_H_
 
 #include <stdint.h>
-#include "index.h"
-#include "pager.h"
-#include "schema.h"
+#include <stdbool.h>
+
+/* Forward Declarations. */
+typedef struct schema Schema;
+typedef struct index Index;
+typedef struct column Column;
+typedef struct constraint Constraint;
 
 #define MAX_INDEXES 8
 

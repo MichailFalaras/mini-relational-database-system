@@ -3,8 +3,10 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include "data_types.h"
-#include "expressions.h"
+
+/* Forward Declarations. */
+typedef struct expression_node ExpressionNode;
+typedef struct value Value;
 
 /* Row structure that contains:
  * is_deleted: tombstone flag

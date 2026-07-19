@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include "../../include/row.h"
 #include "../../include/expressions.h"
+#include "../../include/data_types.h"
 
 /* Create Row Struct & Initialize with Value copies. */
 Row *row_create(ExpressionNode **values, uint32_t n_columns) {

@@ -2,11 +2,16 @@
 #define  EXECUTION_ENGINE_H_
 
 #include <stdint.h>
-#include "database.h"
-#include "row.h"
-#include "query_optimizer.h"
-#include "transaction.h"
-#include "data_types.h"
+
+/* Forward Declarations. */
+typedef struct schema Schema;
+typedef struct database Database;
+typedef struct row Row;
+typedef struct query_plan QueryPlan;
+typedef struct plan_node PlanNode;
+typedef struct value Value;
+typedef struct transaction Transaction;
+#include "expressions.h"
 
 typedef enum execution_status {
     EXECUTION_SUCCESS,

@@ -1,8 +1,10 @@
 #ifndef DATABASE_H_
 #define DATABASE_H_
 
-#include "pager.h"
-#include "table.h"
+#include <stdint.h>
+typedef struct pager Pager;
+typedef struct table Table;
+
 #define MAX_TABLES 16  
 
 /* Database struct contains:

@@ -1,8 +1,9 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include "../../include/constraints.h"
-#include "../../include/database.h"
+#include <stdbool.h>
+#include <stdint.h>
+
+/* Forward Declarations. */
+typedef struct database Database;
+typedef struct constraint Constraint;
 
 extern uint32_t *copy_uint32_array(const uint32_t *source, uint32_t amount);
 

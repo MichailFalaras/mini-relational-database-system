@@ -2,11 +2,12 @@
 #define EXPRESSIONS_H_
 
 #include <stdint.h>
-#include "data_types.h"
-#include "database.h"
-#include "execution_engine.h"
-#include "transaction.h"
 
+typedef struct database Database;
+typedef struct transaction Transaction;
+typedef struct value Value;
+typedef struct table Table;
+typedef struct row Row;
 typedef struct expression_node ExpressionNode;
 
 /* Enum of potential expression entities */

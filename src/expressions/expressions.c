@@ -1,7 +1,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "../../include/execution_engine.h"
 #include "../../include/expressions.h"
+#include "../../include/database.h"
+#include "../../include/transaction.h"
+#include "../../include/data_types.h"
+#include "../../include/table.h"
+#include "../../include/row.h"
+
 
 /* Create ExpressionNode. */
 ExpressionNode *expression_node_create(ExpressionType type) {

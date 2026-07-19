@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "../../include/data_types.h"
-#include "../utils/data_types_utils.h"
+#include "data_types_utils.h"
 
 
 /* Allocate Value struct */

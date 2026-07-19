@@ -1,8 +1,8 @@
 #ifndef INDEX_H_
 #define INDEX_H_
 
-#include "pager.h"
-#include "data_types.h"
+#include <stdint.h>
+#include <stdbool.h>
 
 /* Index type. */
 typedef enum index_type {

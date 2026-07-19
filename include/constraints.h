@@ -2,7 +2,8 @@
 #define CONSTRAINTS_H_
 
 #include <stdint.h>
-#include "expressions.h"
+#include <stdbool.h>
+typedef struct expression_node ExpressionNode;
 
 /* Constraint Type. */
 typedef enum constraint_type {
@@ -85,10 +86,7 @@ typedef struct constraint {
 
 extern Constraint *constraint_alloc(char *constraint_name, ConstraintType type);
 
-extern Constraint *constraint_copy(const Constraint *source);
-
-/* Should go into helper .c file. */
-extern uint32_t copy_uint32_array(const uint32_t *source, uint32_t amount);
+extern Constraint *constraint_copy(Constraint *source);
 
 extern Constraint *constraint_create_primary_key(char *constraint_name, uint32_t *column_refs, uint32_t amount_columns);
 
