@@ -23,23 +23,20 @@ typedef struct constraint Constraint;
 typedef struct table {
     char name[64];
     bool is_deleted;
-    Schema *table_schema;
+    Schema* table_schema;
     Index *primary_index;
     Index *secondary_indexes[MAX_INDEXES];
     uint32_t total_secondary_indexes;
     uint32_t row_count;
 } Table;
 
-/* Basic Table Operations. */
-extern Table *table_create(const char *table_name, const Schema *schema);
+/* Table metadata operations */
+extern Table *table_metadata_screate(const char *table_name, const Schema *schema);
 
-extern bool table_drop(Table *table);
+extern void table_free(Table *table);
 
 extern bool table_alter_rename(Table *table, const char *new_name);
 
-extern bool table_truncate(Table *table);
-
-/* ALTER TABLE Operations. */
 extern bool table_alter_add_col(Table *table, const Column *new_col);
 
 extern bool table_alter_drop_col(Table *table, const char *col_name);
@@ -52,19 +49,22 @@ extern bool table_alter_add_constraint(Table *table, const Constraint *constrain
 
 extern bool table_alter_drop_constraint(Table *table, const char *constraint_name);
 
-/* Basic Index Operations. */
-extern bool table_create_index(Table *table, const Index *new_index);
-
-extern bool table_drop_index(Table *table, const char *index_name);
-
-/* Searching Operations. */
 extern Index *table_find_index(const Table *table, const char *index_name);
 
 extern bool table_has_column(const Table *table, const char *col_name);
 
 extern Column *table_find_column(const Table *table, const char *col_name);
 
-/* Deallocation. */
-extern void table_free(Table *table);
+
+/* Table disk operations */
+extern bool table_create(Table *table, Pager *pager);
+
+extern bool table_drop(Table *table, Pager *pager);
+
+extern bool table_truncate(Table *table, Pager *pager);
+
+extern bool table_create_index(Table *table, const Index *new_index, Pager *page);
+
+extern bool table_drop_index(Table *table, const char *index_name, Pager *page);
 
 #endif
