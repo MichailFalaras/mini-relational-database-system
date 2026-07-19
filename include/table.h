@@ -31,7 +31,7 @@ typedef struct table {
 } Table;
 
 /* Table metadata operations */
-extern Table *table_metadata_screate(const char *table_name, const Schema *schema);
+extern Table *table_metadata_create(const char *table_name, const Schema *schema);
 
 extern void table_free(Table *table);
 

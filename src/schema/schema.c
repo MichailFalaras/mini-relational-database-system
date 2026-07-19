@@ -74,6 +74,86 @@ Schema *schema_create(Column **columns, Constraint **constraints, uint32_t num_c
     return schema;
 }
 
+/* Copies a Schema to a newly-created Table's schema field */
+extern Schema *schema_copy(const Schema *schema) {
+    if (!schema) {
+        printf("schema_copy: Input schema is NULL.\n");
+        return NULL;
+    }
+
+    if (schema->num_columns > 0 && !schema->columns) {
+        printf("schema_copy: Source columns array is NULL.\n");
+        return NULL;
+    }
+
+    if (schema->num_constraints > 0 && !schema->constraints) {
+        printf("schema_copy: Source constraints array is NULL.\n");
+        return NULL;
+    }
+
+    Schema *copy = (Schema *) calloc(1, sizeof(Schema));
+    if (!copy) {
+        printf("schema_copy: Copy could not be allocated.\n");
+        return NULL;
+    }
+
+    copy->num_columns = schema->num_columns;
+    copy->num_constraints = schema->num_constraints;
+
+    if (copy->num_columns > 0) {
+        copy->columns = (Column **) calloc(schema->num_columns, sizeof(Column *));
+        if (!copy->columns) {
+            printf("schema_copy: Columns pointer array could not be allocated.\n");
+            schema_free(copy);
+            return NULL;
+        }
+
+        for (uint32_t i = 0; i < copy->num_columns; i++) {
+            if (!schema->columns[i]) {
+                printf("schema_copy: Source column %u is NULL.\n", i);
+                schema_free(copy);
+                return NULL;
+            }
+
+            copy->columns[i] = (Column *) malloc(sizeof(Column));
+            if (!copy->columns[i]) {
+                printf("schema_copy: Column %u could not be allocated.\n", i);
+                schema_free(copy);
+                return NULL;
+            }
+
+            *copy->columns[i] = *schema->columns[i];
+        }
+    }
+
+    if (copy->num_constraints > 0) {
+        copy->constraints = (Constraint **) calloc(schema->num_constraints, sizeof(Constraint *));
+        if (!copy->constraints) {
+            printf("schema_copy: Constraints pointer array could not be allocated.\n");
+            schema_free(copy);
+            return NULL;
+        }
+
+        for (uint32_t i = 0; i < schema->num_constraints; i++) {
+            if (!schema->constraints[i]) {
+                printf("schema_copy: Source constraint %u is NULL.\n", i);
+                schema_free(copy);
+                return NULL;
+            }
+
+            copy->constraints[i] = constraint_copy(schema->constraints[i]);
+            if (!copy->constraints[i]) {
+                printf("schema_copy: Constraint %u could not be allocated.\n", i);
+                schema_free(copy);
+                return NULL;
+            }
+        }
+        
+    }
+
+    return copy;
+}
+
 /* Drop Schema if only if its columns aren't referenced in any
 other tables. */
 bool schema_drop(Schema *schema, const Database *db) {
