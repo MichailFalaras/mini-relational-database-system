@@ -203,3 +203,70 @@ void table_free(Table *table) {
 
     free(table);
 }
+
+/* Check if a table has a particular column */
+bool table_has_column(const Table *table, const char *col_name) {
+    if (!table || !table->table_schema) {
+        printf("table_has_column: Invalid input table.\n");
+        return false;
+    }
+
+    if (!col_name || col_name[0] == '\0') {
+        printf("table_has_column: Invalid input column name.\n");
+        return false;
+    }
+
+    // As long as there's a valid index for the searched column, the column exists
+    if (schema_find_column_index(table->table_schema, col_name) >= 0) {
+        return true;
+    }
+
+    return false;
+}
+
+/* Returns a pointer to a table's column */
+Column *table_find_column(const Table *table, const char *col_name) {
+    if (!table || !table->table_schema) {
+        printf("table_find_column: Invalid input table.\n");
+        return NULL;
+    }
+
+    if (!col_name || col_name[0] == '\0') {
+        printf("table_find_column: Invalid input column name.\n");
+        return NULL;
+    }
+
+    return schema_find_column(table->table_schema, col_name);
+}
+
+/* Returns a pointer to a table's index */
+Index *table_find_index(const Table *table, const char *index_name) {
+    if (!table) {
+        printf("table_find_index: Input table is NULL.\n");
+        return NULL;
+    }
+
+    if (!index_name || index_name[0] == '\0') {
+        printf("table_find_index: Invalid input index name.\n");
+        return NULL;
+    }
+
+    // Checking for a primary index match
+    if(table->primary_index && strcasecmp(table->primary_index->name, index_name) == 0) {
+        return table->primary_index;
+    }
+
+    // And then for any secondary index match
+    for (uint32_t i = 0; i < table->total_secondary_indexes; i++) {
+        if (!table->secondary_indexes[i]) {
+            printf("table_find_index: Table has NULL secondary index.\n");
+            return NULL;
+        }
+
+        if (strcasecmp(table->secondary_indexes[i]->name, index_name) == 0) {
+            return table->secondary_indexes[i];
+        }
+    }
+
+    return NULL;
+}
