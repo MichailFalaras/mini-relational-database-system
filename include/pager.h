@@ -11,7 +11,7 @@ typedef struct page Page;
 /* Pager component that reads/writes pages from the disk
  * fd: file descriptor of database file (e.g. users.db)
  * file_length: file length of database file
- * num_pages: amount of pages
+ * num_pages: amount of pages in disk
  * pages: pointer to pages opened */
 typedef struct pager {
     int fd;
