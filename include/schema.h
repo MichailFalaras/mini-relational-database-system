@@ -58,6 +58,8 @@ extern int32_t schema_find_constraint_index(const Schema *schema, const char *co
 
 extern bool schema_validate_row(const Schema *schema, const Row *row, const EvaluationContext *context);
 
+extern Schema *schema_copy(const Schema *schema);
+
 extern bool schema_drop(Schema *schema, const Database *db); 
 
 extern Column *column_alloc(char *column_name, DataType type, uint32_t not_null_rows,
