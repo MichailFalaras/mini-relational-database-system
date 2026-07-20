@@ -27,6 +27,15 @@ bool page_mark_dirty(Page *page) {
     return true;
 }
 
+bool page_mark_clean(Page *page) {
+    if (page == NULL) {
+        return false;
+    }
+
+    page->is_dirty = false;
+    return true;
+}
+
 /* Might also need to create a page if it doesn't
 already exist. */
 bool page_touch(Page *page) {

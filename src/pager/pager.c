@@ -128,6 +128,68 @@ Page *pager_get_page(Pager *pager, uint32_t page_num) {
     return page;
 }
 
+/* Flush all pages to the disk. */
+bool pager_flush_all(Pager *pager) {
+    bool res;
+
+    for (uint32_t i = 0; i < pager->num_pages; i++) {
+        if (pager->pages[i] == NULL || pager->pages[i]->is_dirty == false) {
+            continue;
+        }
+
+        res = pager_flush_page(pager, i);
+        if (res == false) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/* Flush specific page to the disk. */
+bool pager_flush_page(Pager *pager, uint32_t page_num) {
+
+    if (pager == NULL || page_num >= MAX_PAGES) {
+        return false;
+    }
+
+    if (pager->pages[page_num] == NULL) {
+        return false;
+    }
+
+    if (pager->pages[page_num]->is_dirty == false) {
+        return false;
+    }
+
+    off_t pos = lseek(pager->fd, (off_t) page_num*PAGE_SIZE, SEEK_SET);
+    if (pos < 0) {
+        perror("pager_flush_page");
+        exit(1);
+    }
+
+    bool res = write_page_size(pager, pager->pages[page_num]);
+    if (res == false) {
+        return false;
+    }
+    
+    off_t current_file_length = lseek(pager->fd, (off_t) 0, SEEK_END);
+    if (current_file_length < 0) {
+        perror("pager_flush_page");
+        exit(1);
+    }
+
+    res = page_mark_clean(pager->pages[page_num]);
+    if (res == false) {
+        return false;
+    }
+
+    if (current_file_length > pager->file_length) {
+        pager->file_length += PAGE_SIZE;
+    }
+    
+    return true;       
+}
+
 /* Free pager component and caches pages. */
 void pager_free(Pager *pager) {
     if (pager != NULL) {
