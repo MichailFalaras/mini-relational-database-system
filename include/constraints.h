@@ -33,13 +33,14 @@ typedef struct primary_key_constraint {
  being referenced in the referenced table
  * amount_referenced_columns: amount of referenced columns. */
 typedef struct foreign_keys_constraint {
-    uint32_t *foreign_key_columns;
-    uint32_t amount_foreign_keys;
-
     uint32_t referenced_table;
+
+    uint32_t *foreign_key_columns;
+    uint32_t amount_columns;
+    
     uint32_t *referenced_columns;
     uint32_t amount_referenced_columns;
-} ForeignKeysConstraint;
+} ForeignKeyConstraint;
 
 /* Unique constraint struct containing:
  * column_ids: array of integers of the columns that
@@ -76,7 +77,7 @@ typedef struct constraint {
     ConstraintType type;
     union {
         PrimaryKeyConstraint primary_key;
-        ForeignKeysConstraint foreign_keys;
+        ForeignKeyConstraint foreign_key;
         UniqueConstraint unique_cols;
         CheckConstraint check;
         NotNullConstraint not_null;
@@ -107,6 +108,10 @@ extern bool constraint_has_column(const Constraint *constraint, uint32_t column_
 extern bool constraint_references_table(const Constraint *constraint, uint32_t table_index);
 
 extern bool constraint_references_column(const Constraint *constraint, uint32_t column_ref);
+
+extern bool foreign_key_references_column(const Constraint *constraint, uint32_t column_ref);
+
+extern bool foreign_key_uses_column(const Constraint *constraint, uint32_t column_ref);
 
 extern bool constraint_validate_definition(const Constraint *constraint);
 
