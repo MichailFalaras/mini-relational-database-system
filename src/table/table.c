@@ -9,6 +9,7 @@
 
 #define INVALID_ROOT_PAGE UINT32_MAX
 
+
 /* Creation of logical Table struct */
 Table *table_metadata_create(const char *table_name, const Schema *schema) {
     // Input validation
@@ -174,6 +175,7 @@ Table *table_metadata_create(const char *table_name, const Schema *schema) {
     return new_table;
 }
 
+
 /* Deallocation of logical Table struct */
 void table_free(Table *table) {
     if (!table) {
@@ -204,6 +206,7 @@ void table_free(Table *table) {
     free(table);
 }
 
+
 /* Check if a table has a particular column */
 bool table_has_column(const Table *table, const char *col_name) {
     if (!table || !table->table_schema) {
@@ -224,6 +227,7 @@ bool table_has_column(const Table *table, const char *col_name) {
     return false;
 }
 
+
 /* Returns a pointer to a table's column */
 Column *table_find_column(const Table *table, const char *col_name) {
     if (!table || !table->table_schema) {
@@ -238,6 +242,7 @@ Column *table_find_column(const Table *table, const char *col_name) {
 
     return schema_find_column(table->table_schema, col_name);
 }
+
 
 /* Returns a pointer to a table's index */
 Index *table_find_index(const Table *table, const char *index_name) {
@@ -269,4 +274,26 @@ Index *table_find_index(const Table *table, const char *index_name) {
     }
 
     return NULL;
+}
+
+
+/* Rename Table */
+bool table_alter_rename(Table *table, const char *new_name) {
+    if (!table) {
+        printf("table_alter_rename: Input table is NULL.\n");
+        return false;
+    }
+
+    if (!new_name || new_name[0] == '\0') {
+        printf("table_alter_rename: Invalid input name.\n");
+        return false;
+    }
+
+    if (strlen(new_name) >= sizeof(table->name)) {
+        printf("table_alter_rename: New name exceeds table name length limit.\n");
+        return false;
+    }
+    
+    strcpy(table->name, new_name);
+    return true;
 }

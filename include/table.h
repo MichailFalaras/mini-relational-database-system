@@ -9,6 +9,7 @@ typedef struct schema Schema;
 typedef struct index Index;
 typedef struct column Column;
 typedef struct constraint Constraint;
+typedef struct pager Pager;
 
 #define MAX_INDEXES 8
 
