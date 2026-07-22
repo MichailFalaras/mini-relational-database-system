@@ -4,11 +4,12 @@
 #include <string.h>
 #include "../../include/page.h"
 
+/* Create page. */
 Page *page_create(uint32_t page_num) {
     Page *page = (Page *) calloc(1, sizeof(Page));
     if (page == NULL) {
         perror("page_create");
-        exit(1);
+        return NULL;
     }
 
     page->is_dirty = false;
@@ -18,8 +19,26 @@ Page *page_create(uint32_t page_num) {
     return page;
 }
 
+/* Create PageZeroMetadata struct & initialize it. */
+PageZeroMetadata *page_zero_create(void) {
+    PageZeroMetadata *page_zero = (PageZeroMetadata *) calloc(1, sizeof(PageZeroMetadata));
+    if (!page_zero) {
+        perror("page_zero_create");
+        return NULL;
+    }
+
+    memcpy(page_zero->magic, "rdbms-c-v", 10);
+    page_zero->version = 1;
+    page_zero->page_size = PAGE_SIZE;
+    page_zero->catalog_root = 1;
+    page_zero->free_list_head = 0;
+    
+    return page_zero;
+}
+
+/* Mark a page dirty. */
 bool page_mark_dirty(Page *page) {
-    if (page == NULL) {
+    if (!page) {
         return false;
     }
 
@@ -27,8 +46,9 @@ bool page_mark_dirty(Page *page) {
     return true;
 }
 
+/* Mark a page clean. */
 bool page_mark_clean(Page *page) {
-    if (page == NULL) {
+    if (!page) {
         return false;
     }
 
@@ -36,10 +56,9 @@ bool page_mark_clean(Page *page) {
     return true;
 }
 
-/* Might also need to create a page if it doesn't
-already exist. */
+/* Update time of last interaction with page. */
 bool page_touch(Page *page) {
-    if (page == NULL) {
+    if (!page) {
         return false;
     }
 
@@ -47,17 +66,24 @@ bool page_touch(Page *page) {
     return true;
 }
 
+/* Clear page, mark it dirty and update time of
+last interaction. */
 bool page_clear(Page *page) {
-    if (page == NULL) {
+    if (!page) {
         return false;
     }
 
     /* In order for page change's to be written back in disk. */
     page->is_dirty = true;
     memset(page->page_data, 0, PAGE_SIZE); 
+    if (!page_touch(page)) {
+        return false;
+    }
+
     return true;
 }
 
+/* Free page. */
 void page_free(Page *page) {
     if (page != NULL) {
         free(page);
