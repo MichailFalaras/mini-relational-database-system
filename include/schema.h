@@ -38,7 +38,7 @@ typedef struct schema {
 extern Schema *schema_create(Column **columns, Constraint **constraints, uint32_t num_columns,
                             uint32_t num_constraints);
 
-extern bool schema_can_drop(Schema *schema, const Database *db); 
+extern bool schema_can_drop(const Schema *schema, const Database *db); 
 
 extern bool schema_add_column(Schema *schema, Column *new_column);
 
@@ -46,7 +46,7 @@ extern bool schema_drop_column(Schema *schema, Database *db, const char *col_nam
 
 extern bool schema_rename_column(Schema *schema, const char *old_col_name, const char *new_col_name);
 
-extern bool schema_modify_column(Schema *schema, const Database *db, const char *old_col_name, Column *new_column);
+extern bool schema_modify_column(Schema *schema, const Database *db, const char *old_col_name, const Column *new_column);
 
 extern bool schema_add_constraint(Schema *schema, const Database *db, Constraint *new_constraint);
 

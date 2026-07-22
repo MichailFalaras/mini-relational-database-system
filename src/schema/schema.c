@@ -156,7 +156,7 @@ extern Schema *schema_copy(const Schema *schema) {
 
 /* Drop Schema if only if its columns aren't referenced in any
 other tables. */
-bool schema_can_drop(Schema *schema, const Database *db) {
+bool schema_can_drop(const Schema *schema, const Database *db) {
     if (!schema || !db) {
         return false;
     }
@@ -463,7 +463,7 @@ bool schema_rename_column(Schema *schema, const char *old_col_name, const char *
 }
 
 /* Schema modify column if it isn't referenced by any other tables. */
-bool schema_modify_column(Schema *schema, const Database *db, const char *old_col_name, Column *new_column) {
+bool schema_modify_column(Schema *schema, const Database *db, const char *old_col_name, const Column *new_column) {
     // Validating the input data
     if (!schema || !db || !new_column) {
         return false;
