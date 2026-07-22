@@ -96,6 +96,41 @@ Pager *pager_open(const char *filename) {
     return pager;
 }
 
+/* Create Page 0 and System Catalog Page and store it in cache ready
+to be flushed. */
+bool pager_initialize_new_database(Pager *pager) {
+    if (pager == NULL) {
+        return false;
+    }
+
+    PageZeroMetadata *page_zero_metadata = page_zero_create();
+    Page *page = pager_get_page(pager, 0);
+    if (!page) {
+        return false;
+    }
+
+    /* Struct has attribute "packed" so no padding is being stored. */
+    memcpy(page->page_data, page_zero_metadata, sizeof(PageZeroMetadata));
+    free(page_zero_metadata);
+    if (!page_mark_dirty(page)) {
+        return false;
+    }
+
+    page = pager_get_page(pager, 1);
+    if (!page) {
+        return false;
+    }
+    /* B+Tree functions responsible for storing information in system catalog
+     * since it's normal B+Tree. */
+    if (!page_clear(page)) {
+        return false;
+    }
+
+    pager->num_pages += 2;
+    pager->file_length = pager->num_pages * PAGE_SIZE;
+    return true;
+}
+
 /* Close pager and flush all dirty pages back to the disk. */
 bool pager_close(Pager *pager) {
 
@@ -189,6 +224,83 @@ bool pager_release_page(Pager *pager, uint32_t page_num) {
     /* Will be extremely resource consuming writing 0s on every page being
     freed. Just keep the garbage.
     memset(page->page_data, 0, PAGE_SIZE); */
+
+    return true;
+}
+
+/* Remove page from cache and flushing it to the disk. */
+bool pager_evict_page(Pager *pager, uint32_t page_num) {
+    if (pager == NULL || page_num >= MAX_PAGES) {
+        return false;
+    }
+
+    /* If it is not in the cache. */
+    if (pager->pages[page_num] == NULL) {
+        return true;
+    }
+
+    if (pager->pages[page_num]->is_dirty == true) {
+        bool res = pager_flush_page(pager, page_num);
+        if (res == false) {
+            return false;
+        }
+    }
+
+    page_free(pager->pages[page_num]);
+    pager->pages[page_num] = NULL;
+
+    return true;
+}
+
+/* Removing least recently used page from cache and flushing it. */
+bool pager_evict_lru(Pager *pager) {
+    if (pager == NULL) {
+        return false;
+    }
+
+    time_t lru = time(NULL);
+    uint32_t lru_page_num;
+    bool found = false;
+    for (uint32_t i = 0; i < MAX_PAGES; i++) {
+        if (pager->pages[i] == NULL) {
+            continue;
+        }
+
+        if (pager->pages[i]->last_interacted <= lru) {
+            found = true;
+            lru = pager->pages[i]->last_interacted;
+            lru_page_num = i;
+        }
+    }
+
+    if (!found) {
+        return false;
+    }
+
+    if (!pager_evict_page(pager, lru_page_num)) {
+        return false;
+    }
+
+    return true;
+}
+
+/* Removing all pages from cache and flushing them. */
+bool pager_evict_all(Pager *pager) {
+
+    if (pager == NULL) {
+        return false;
+    }
+
+    /* MAX_PAGES because there might be more pages in RAM than the disk. */
+    for (uint32_t i = 0; i < MAX_PAGES; i++) {
+        if (pager->pages[i] == NULL) {
+            continue;
+        }
+
+        if (!pager_evict_page(pager, i)) {
+            fprintf(stderr, "Page eviction failed.\n");
+        }
+    }
 
     return true;
 }

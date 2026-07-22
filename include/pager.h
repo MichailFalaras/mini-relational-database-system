@@ -26,9 +26,19 @@ extern Pager *pager_create(int fd, size_t file_length, uint32_t num_pages);
 
 extern Pager *pager_open(const char *filename);
 
+extern bool pager_initialize_new_database(Pager *pager);
+
 extern bool pager_close(Pager *pager);
 
 extern Page *pager_get_page(Pager *pager, uint32_t page_num);
+
+extern Page *pager_release_page(Pager *pager, uint32_t page_num);
+
+extern bool pager_evict_page(Pager *pager, uint32_t page_num);
+
+extern bool pager_evict_lru(Pager *pager);
+
+extern bool pager_evict_all(Pager *pager);
 
 extern bool pager_flush_page(Pager *pager, uint32_t page_num);
 
