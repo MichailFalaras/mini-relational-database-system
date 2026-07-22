@@ -30,8 +30,8 @@ uint32_t *copy_uint32_array(const uint32_t *source, uint32_t amount) {
 }
 
 /* When Column gets removed, you have to update the Constraints column refs to
-match the new indexes.*/
-void constraint_shift_indexes(Constraint *constraint, uint32_t index_threshold) {
+match the new indexes, which means decrementing the position indexes after the removed Column */
+void constraint_shift_local_column_refs(Constraint *constraint, uint32_t index_threshold) {
 
     if (constraint == NULL) {
         return;
@@ -45,19 +45,15 @@ void constraint_shift_indexes(Constraint *constraint, uint32_t index_threshold) 
                 }
             }
             break;
+
         case FOREIGN_KEY:
-            /*for (uint32_t i = 0; i < constraint->constraint_data.foreign_keys.amount_foreign_keys; i++) {
-                
-                if (constraint->constraint_data.foreign_keys.foreign_key_columns[i] > index_threshold) {
-                    constraint->constraint_data.foreign_keys.foreign_key_columns[i]--;
-                }
-            }*/
-            for (uint32_t i = 0; i < constraint->constraint_data.foreign_keys.amount_referenced_columns; i++) {
-                if (constraint->constraint_data.foreign_keys.referenced_columns[i] > index_threshold) {
-                    constraint->constraint_data.foreign_keys.referenced_columns[i]--;
+            for (uint32_t i = 0; i < constraint->constraint_data.foreign_key.amount_columns; i++) {
+                if (constraint->constraint_data.foreign_key.foreign_key_columns[i] > index_threshold) {
+                    constraint->constraint_data.foreign_key.foreign_key_columns[i]--;
                 }
             }
             break;
+
         case UNIQUE:
             for (uint32_t i = 0; i < constraint->constraint_data.unique_cols.amount_columns; i++) {
                 if (constraint->constraint_data.unique_cols.column_refs[i] > index_threshold) {
@@ -65,6 +61,7 @@ void constraint_shift_indexes(Constraint *constraint, uint32_t index_threshold) 
                 }
             }
             break;
+
         case CHECK:
             for (uint32_t i = 0; i < constraint->constraint_data.check.amount_columns; i++) {
                 if (constraint->constraint_data.check.column_refs[i] > index_threshold) {
@@ -72,11 +69,42 @@ void constraint_shift_indexes(Constraint *constraint, uint32_t index_threshold) 
                 }
             }
             break;
+
         case NOT_NULL:
-        case DEFAULT: break;
+            if (constraint->constraint_data.not_null.column_ref > index_threshold) {
+                constraint->constraint_data.not_null.column_ref--;
+            }
+            break;
+
+        case DEFAULT: 
+            if (constraint->constraint_data.default_value.column_ref > index_threshold) {
+                constraint->constraint_data.default_value.column_ref--;
+            }
+            break;
+
         default:
             printf("constraint type doesn't match existing Constraint types.\n");
-            return;
+            break;
+    }
+}
+
+
+/* Decrements the referenced column indexes of another table's constraint */
+void constraint_shift_referenced_column_refs(Constraint *constraint, uint32_t index_threshold) {
+    if (!constraint || constraint->type != FOREIGN_KEY) {
+        return;
+    }
+
+    ForeignKeyConstraint *foreign_key = &constraint->constraint_data.foreign_key;
+
+    if (foreign_key->amount_referenced_columns > 0 && !foreign_key->referenced_columns) {
+        return;
+    }
+
+    for (uint32_t i = 0; i < foreign_key->amount_referenced_columns; i++) {
+        if (foreign_key->referenced_columns[i] > index_threshold) {
+            foreign_key->referenced_columns[i]--;
+        }
     }
 }
 
@@ -95,25 +123,33 @@ bool constraint_validate_column_refs(const Database *db, const Constraint *const
                 }
             }
             break;
-        case FOREIGN_KEY:
-            for (uint32_t i = 0; i < constraint->constraint_data.foreign_keys.amount_foreign_keys; i++) {
-                if (constraint->constraint_data.foreign_keys.foreign_key_columns[i] >= num_columns) {
+
+        case FOREIGN_KEY: {
+            /* Checking referencing FOREIGN KEY columns */
+            const ForeignKeyConstraint *foreign_key = &constraint->constraint_data.foreign_key;
+
+            for (uint32_t i = 0; i < foreign_key->amount_columns; i++) {
+                if (foreign_key->foreign_key_columns[i] >= num_columns) {
                     return false;
                 }
             }
 
-            /* Referenced table index might not exist too. */
-            if (constraint->constraint_data.foreign_keys.referenced_table >= db->table_count) {
+            // Referenced table index might not exist too.
+            if (foreign_key->referenced_table >= db->table_count) {
                 return false;
             }
 
-            uint32_t ref_num_columns = db->tables[constraint->constraint_data.foreign_keys.referenced_table]->table_schema->num_columns;
-            for (uint32_t i = 0; i < constraint->constraint_data.foreign_keys.amount_referenced_columns; i++) {
-                if (constraint->constraint_data.foreign_keys.referenced_columns[i] >= ref_num_columns) {
+            /* Checking referenced FOREIGN KEY columns of target table */
+            uint32_t ref_num_columns = db->tables[foreign_key->referenced_table]->table_schema->num_columns;
+
+            for (uint32_t i = 0; i < foreign_key->amount_referenced_columns; i++) {
+                if (foreign_key->referenced_columns[i] >= ref_num_columns) {
                     return false;
                 }
             }
             break;
+
+        }
         case UNIQUE:
             for (uint32_t i = 0; i < constraint->constraint_data.unique_cols.amount_columns; i++) {
                 if (constraint->constraint_data.unique_cols.column_refs[i] >= num_columns) {
@@ -121,6 +157,7 @@ bool constraint_validate_column_refs(const Database *db, const Constraint *const
                 }
             }
             break;
+
         case CHECK:
             for (uint32_t i = 0; i < constraint->constraint_data.check.amount_columns; i++) {
                 if (constraint->constraint_data.check.column_refs[i] >= num_columns) {
@@ -128,11 +165,19 @@ bool constraint_validate_column_refs(const Database *db, const Constraint *const
                 }
             }
             break;
+
         case NOT_NULL:
             if (constraint->constraint_data.not_null.column_ref >= num_columns) {
                 return false;
             }
-        case DEFAULT: break;
+            break;
+
+        case DEFAULT:
+            if (constraint->constraint_data.default_value.column_ref >= num_columns) {
+                return false;
+            }
+            break;
+
         default:
             printf("constraint type doesn't match existing Constraint types.\n");
             return false;

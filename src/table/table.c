@@ -4,10 +4,13 @@
 #include <stdint.h>
 #include "../../include/table.h"
 #include "../../include/schema.h"
+#include "../schema/schema_utils.h"
 #include "../../include/constraints.h"
 #include "../../include/index.h"
+#include"../index/index_utils.h"
 
 #define INVALID_ROOT_PAGE UINT32_MAX
+
 
 /* Creation of logical Table struct */
 Table *table_metadata_create(const char *table_name, const Schema *schema) {
@@ -39,6 +42,13 @@ Table *table_metadata_create(const char *table_name, const Schema *schema) {
         return NULL;
     }
 
+    new_table->secondary_indexes = (Index **) calloc(MAX_INDEXES, sizeof(Index *));
+    if (!new_table->secondary_indexes) {
+        printf("table_metadata_create: Secondary indexes pointer array could not be allocated\n");
+        table_free(new_table);
+        return NULL;
+    }
+
     // Table fields assignment
     if (strlen(table_name) >= sizeof(new_table->name)) {
         printf("table_metadata_create: Input table name exceeds length limit.\n");
@@ -54,7 +64,7 @@ Table *table_metadata_create(const char *table_name, const Schema *schema) {
         table_free(new_table);
         return NULL;
     }
-
+    
     // Already assigned by calloc(), but displayed for display of logical initialization
     new_table->primary_index = NULL;
 
@@ -174,6 +184,7 @@ Table *table_metadata_create(const char *table_name, const Schema *schema) {
     return new_table;
 }
 
+
 /* Deallocation of logical Table struct */
 void table_free(Table *table) {
     if (!table) {
@@ -188,11 +199,17 @@ void table_free(Table *table) {
     }
 
     // Free any secondary indexes
-    for (uint32_t i = 0; i < MAX_INDEXES; i++) {
-        if (table->secondary_indexes[i]) {
-            index_free(table->secondary_indexes[i]);
-            table->secondary_indexes[i] = NULL;
+    if (table->secondary_indexes) {
+
+        for (uint32_t i = 0; i < MAX_INDEXES; i++) {
+            if (table->secondary_indexes[i]) {
+                index_free(table->secondary_indexes[i]);
+                table->secondary_indexes[i] = NULL;
+            }
         }
+        
+        free(table->secondary_indexes);
+        table->secondary_indexes = NULL;
     }
 
     // Free schema
@@ -203,6 +220,7 @@ void table_free(Table *table) {
 
     free(table);
 }
+
 
 /* Check if a table has a particular column */
 bool table_has_column(const Table *table, const char *col_name) {
@@ -224,6 +242,7 @@ bool table_has_column(const Table *table, const char *col_name) {
     return false;
 }
 
+
 /* Returns a pointer to a table's column */
 Column *table_find_column(const Table *table, const char *col_name) {
     if (!table || !table->table_schema) {
@@ -238,6 +257,7 @@ Column *table_find_column(const Table *table, const char *col_name) {
 
     return schema_find_column(table->table_schema, col_name);
 }
+
 
 /* Returns a pointer to a table's index */
 Index *table_find_index(const Table *table, const char *index_name) {
@@ -269,4 +289,188 @@ Index *table_find_index(const Table *table, const char *index_name) {
     }
 
     return NULL;
+}
+
+
+/* Rename Table */
+bool table_alter_rename(Table *table, const char *new_name) {
+    if (!table) {
+        printf("table_alter_rename: Input table is NULL.\n");
+        return false;
+    }
+
+    if (!new_name || new_name[0] == '\0') {
+        printf("table_alter_rename: Invalid input name.\n");
+        return false;
+    }
+
+    if (strlen(new_name) >= sizeof(table->name)) {
+        printf("table_alter_rename: New name exceeds table name length limit.\n");
+        return false;
+    }
+
+    strcpy(table->name, new_name);
+    return true;
+}
+
+
+/* Add Column to the Table */
+bool table_alter_add_col(Table *table, const Column *new_col) {
+    if (!table || !table->table_schema) {
+        printf("table_alter_add_col: Invalid input Table.\n");
+        return false;
+    }
+
+    if (!new_col) {
+        printf("table_alter_add_col: Input Column is NULL.\n");
+        return false;
+    }
+
+    if (!schema_add_column(table->table_schema, new_col)) {
+        printf("table_alter_add_col: Input Column could not be added to the table.\n");
+        return false;
+    }
+
+    return true;
+}
+
+
+/* Drop Column from the Table */
+bool table_alter_drop_col(Table *table, Database *db, const char *col_name) {
+    // Validating input data
+    if (!table || !table->table_schema) {
+        printf("table_alter_drop_col: Invalid input Table.\n");
+        return false;
+    }
+
+    if (!db) {
+        printf("table_alter_drop_col: Input database is NULL.\n");
+        return false;
+    }
+
+    if (!col_name || col_name[0] == '\0') {
+        printf("table_alter_drop_col: Invalid input Column name.\n");
+        return false;
+    }
+
+    // Checking if the column exists in the table
+    int32_t col_pos = schema_find_column_index(table->table_schema, col_name);
+    if (col_pos < 0) {
+        printf("table_alter_drop_col: Input Column doesn't exist on the table.\n");
+        return false;
+    }
+
+    // Checking if the column belongs in the primary index, in order to reject the drop operation
+    if (table->primary_index && index_key_has_column(table->primary_index, (uint32_t) col_pos)) {
+        printf("table_alter_drop_col: Column belongs to the primary index.\n");
+        return false;
+    }
+
+    if (table->total_secondary_indexes > 0 && !table->secondary_indexes) {
+        printf("table_alter_drop_col: Secondary-index array is NULL.\n");
+        return false;
+    }
+
+    // Also checking if the column belongs in a secondary index, in order to reject the drop operation
+    for (uint32_t i = 0; i < table->total_secondary_indexes; i++) {
+        if (!table->secondary_indexes[i]) {
+            printf("table_alter_drop_col: Table has invalid secondary index.\n");
+            return false;
+        }
+
+        if (index_key_has_column(table->secondary_indexes[i], (uint32_t) col_pos)) {
+            printf("table_alter_drop_col: Column belongs to secondary index.\n");
+            return false;
+        }
+    }
+
+    // Only if the secondary indexes are dropped, does the schema get updated
+    if (!schema_drop_column(table->table_schema, db, col_name)) {
+        printf("table_alter_add_col: Input Column could not be removed from the table.\n");
+        return false;
+    }
+
+    // Decrement the indexes of subsequent columns that are present in any remaining index
+    if (table->primary_index &&
+        !index_key_shift_after_column_drop(table->primary_index, (uint32_t) col_pos)) {
+        
+        printf("table_alter_drop_col: Primary index metadata could not be shifted.\n");
+        return false;
+    }
+
+    for (uint32_t i = 0; i < table->total_secondary_indexes; i++) {
+        if (table->secondary_indexes[i] &&
+            !index_key_shift_after_column_drop(table->secondary_indexes[i], (uint32_t) col_pos)) { 
+
+            printf("table_alter_drop_col: Secondary index metadata could not be shifted.\n");
+            return false;
+        }
+
+    }
+
+    return true;
+}
+
+
+/* Rename column in a Table */
+bool table_alter_rename_col(Table *table, const char *old_col_name, const char *new_col_name) {
+    // Vaidating inputs
+    if (!table || !table->table_schema) {
+        printf("table_alter_rename_col: Invalid input table.\n");
+        return false;
+    }
+
+    if (!old_col_name || old_col_name[0] == '\0') {
+        printf("table_alter_rename_col: Invalid current column name.\n");
+        return false;
+    }
+
+    if (!new_col_name || new_col_name[0] == '\0') {
+        printf("table_alter_rename_col: Invalid new column name.\n");
+        return false;
+    }
+
+    if (strlen(new_col_name) >= sizeof(((Column *) 0)->name)) {
+        printf("table_alter_rename_col: New column name exceeds length limit.\n");
+        return false;
+    }
+
+    if (!schema_rename_column(table->table_schema, old_col_name, new_col_name)) {
+        printf("table_alter_rename_col: Column could not be renamed.\n");
+        return false;
+    }
+
+    return true;
+}
+
+
+/* Modify column in a Table */
+bool table_alter_modify_col(Table *table, const Database *db, const char *old_col_name, const Column *new_column_def) {
+    // Vaidating inputs
+    if (!table || !table->table_schema) {
+        printf("table_alter_modify_col: Invalid input table.\n");
+        return false;
+    }
+
+    if (!db) {
+        printf("table_alter_modify_col: Input database is NULL.\n");
+        return false;
+    }
+
+    if (!old_col_name || old_col_name[0] == '\0') {
+        printf("table_alter_modify_col: Invalid current column name.\n");
+        return false;
+    }
+
+    if (!new_column_def) {
+        printf("table_alter_modify_col: New Column is NULL.\n");
+        return false;
+    }
+
+    if (!schema_modify_column(table->table_schema, db, old_col_name, new_column_def)) {
+        printf("table_alter_modify_col: Target column could not be modified.\n");
+        return false;
+    }
+
+    return true;
 }

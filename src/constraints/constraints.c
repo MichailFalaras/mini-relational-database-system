@@ -35,9 +35,9 @@ Constraint *constraint_copy(Constraint *source) {
                     source->constraint_data.primary_key.amount_columns);
             break;
         case FOREIGN_KEY:
-            copy = constraint_create_foreign_keys(source->constraint_name, source->constraint_data.foreign_keys.foreign_key_columns,
-                    source->constraint_data.foreign_keys.amount_foreign_keys, source->constraint_data.foreign_keys.referenced_table,
-                    source->constraint_data.foreign_keys.referenced_columns, source->constraint_data.foreign_keys.amount_referenced_columns);
+            copy = constraint_create_foreign_keys(source->constraint_name, source->constraint_data.foreign_key.foreign_key_columns,
+                    source->constraint_data.foreign_key.amount_columns, source->constraint_data.foreign_key.referenced_table,
+                    source->constraint_data.foreign_key.referenced_columns, source->constraint_data.foreign_key.amount_referenced_columns);
             break;
         case UNIQUE:
             copy = constraint_create_unique(source->constraint_name, source->constraint_data.unique_cols.column_refs,
@@ -93,13 +93,13 @@ Constraint *constraint_create_foreign_keys(char *constraint_name, uint32_t *fore
 
     Constraint *constraint = constraint_alloc(constraint_name, FOREIGN_KEY);
 
-    constraint->constraint_data.foreign_keys.foreign_key_columns = copy_uint32_array(foreign_key_columns,
+    constraint->constraint_data.foreign_key.foreign_key_columns = copy_uint32_array(foreign_key_columns,
                                                                                     amount_foreign_keys);
-    constraint->constraint_data.foreign_keys.amount_foreign_keys = amount_foreign_keys;
-    constraint->constraint_data.foreign_keys.referenced_table = referenced_table;
-    constraint->constraint_data.foreign_keys.referenced_columns = copy_uint32_array(referenced_columns,
+    constraint->constraint_data.foreign_key.amount_columns = amount_foreign_keys;
+    constraint->constraint_data.foreign_key.referenced_table = referenced_table;
+    constraint->constraint_data.foreign_key.referenced_columns = copy_uint32_array(referenced_columns,
                                                                                     amount_referenced_columns);
-    constraint->constraint_data.foreign_keys.amount_referenced_columns = amount_referenced_columns;
+    constraint->constraint_data.foreign_key.amount_referenced_columns = amount_referenced_columns;
     
     return constraint;
 }
@@ -171,8 +171,8 @@ bool constraint_has_column(const Constraint *constraint, uint32_t column_index) 
             
             break;
         case FOREIGN_KEY:
-            for (uint32_t i = 0; i < constraint->constraint_data.foreign_keys.amount_foreign_keys; i++) {
-                if (constraint->constraint_data.foreign_keys.foreign_key_columns[i] == column_index) {
+            for (uint32_t i = 0; i < constraint->constraint_data.foreign_key.amount_columns; i++) {
+                if (constraint->constraint_data.foreign_key.foreign_key_columns[i] == column_index) {
                     return true;
                 }
             }
@@ -219,20 +219,18 @@ bool constraint_references_table(const Constraint *constraint, uint32_t table_in
         return false;
     }
 
-    if (constraint->constraint_data.foreign_keys.referenced_table == table_index) {
-        return true;
-    }
-
-    return false;
+    return constraint->constraint_data.foreign_key.referenced_table == table_index;
 }
 
-/* For all types of constraints. */
+/* For all types of constraints,
+ except FOREIGN KEY that can either reference or use a Column */
 bool constraint_references_column(const Constraint *constraint, uint32_t column_ref) {
     if (constraint == NULL) {
         return false;
     }
 
     switch (constraint->type) {
+
         case PRIMARY_KEY:
             for (uint32_t i = 0; i < constraint->constraint_data.primary_key.amount_columns; i++) {
                 if (constraint->constraint_data.primary_key.primary_key_columns[i] == column_ref) {
@@ -240,19 +238,7 @@ bool constraint_references_column(const Constraint *constraint, uint32_t column_
                 }
             }
             break;
-        case FOREIGN_KEY:
-            /*for (uint32_t i = 0; i < constraint->constraint_data.foreign_keys.amount_foreign_keys; i++) {
-                if (constraint->constraint_data.foreign_keys.foreign_key_columns[i] == column_ref) {
-                    return true;
-                }
-            }*/
 
-            for (uint32_t i = 0; i < constraint->constraint_data.foreign_keys.amount_referenced_columns; i++) {
-                if (constraint->constraint_data.foreign_keys.referenced_columns[i] == column_ref) {
-                    return true;
-                }
-            }
-            break;
         case UNIQUE:
             for (uint32_t i = 0; i < constraint->constraint_data.unique_cols.amount_columns; i++) {
                 if (constraint->constraint_data.unique_cols.column_refs[i] == column_ref) {
@@ -260,6 +246,7 @@ bool constraint_references_column(const Constraint *constraint, uint32_t column_
                 }
             }
             break;
+
         case CHECK:
             for (uint32_t i = 0; i < constraint->constraint_data.check.amount_columns; i++) {
                 if (constraint->constraint_data.check.column_refs[i] == column_ref) {
@@ -267,16 +254,22 @@ bool constraint_references_column(const Constraint *constraint, uint32_t column_
                 }
             }
             break;
+
         case NOT_NULL:
             if(constraint->constraint_data.not_null.column_ref == column_ref) {
                 return true;
             }
             break;
+
         case DEFAULT:
             if(constraint->constraint_data.default_value.column_ref == column_ref) {
                 return true;
             }
             break;
+        
+        case FOREIGN_KEY:
+            return false;
+
         default:
             printf("constraint type doesn't match existing Constraint types.\n");
             return false;
@@ -284,6 +277,48 @@ bool constraint_references_column(const Constraint *constraint, uint32_t column_
     
     return false;
 }
+
+/* Check if a FOREIGN KEY references another table's column */
+bool foreign_key_references_column(const Constraint *constraint, uint32_t column_ref) {
+    if (!constraint || constraint->type != FOREIGN_KEY)
+        return false;
+
+    const ForeignKeyConstraint *foreign_key_contraint = &constraint->constraint_data.foreign_key;
+
+    if (foreign_key_contraint->amount_referenced_columns > 0 &&
+        !foreign_key_contraint->referenced_columns) {
+        return false;
+    }
+
+    for (uint32_t i = 0; i < foreign_key_contraint->amount_referenced_columns; i++) {
+        if (foreign_key_contraint->referenced_columns[i] == column_ref) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/* Check if a FOREIGN KEY uses a column as a part of it */
+bool foreign_key_uses_column(const Constraint *constraint, uint32_t column_ref) {
+    if (!constraint || constraint->type != FOREIGN_KEY)
+        return false;
+
+    const ForeignKeyConstraint *foreign_key_contraint = &constraint->constraint_data.foreign_key;
+
+    if (foreign_key_contraint->amount_columns > 0 &&
+        !foreign_key_contraint->foreign_key_columns) {
+        return false;
+    }
+
+    for (uint32_t i = 0; i < foreign_key_contraint->amount_columns; i++) {
+        if (foreign_key_contraint->foreign_key_columns[i] == column_ref) {
+            return true;
+        }
+    }
+    
+    return false;
+}  
 
 bool constraint_validate_definition(const Constraint *constraint) {
     if (constraint == NULL) {
@@ -302,21 +337,21 @@ bool constraint_validate_definition(const Constraint *constraint) {
 
             break;
         case FOREIGN_KEY:
-            if (constraint->constraint_data.foreign_keys.foreign_key_columns == NULL) {
+            if (constraint->constraint_data.foreign_key.foreign_key_columns == NULL) {
                 return false;
             }
 
-            if (constraint->constraint_data.foreign_keys.referenced_columns == NULL) {
+            if (constraint->constraint_data.foreign_key.referenced_columns == NULL) {
                 return false;
             }
 
-            if (constraint->constraint_data.foreign_keys.amount_foreign_keys != 
-                constraint->constraint_data.foreign_keys.amount_referenced_columns) {
+            if (constraint->constraint_data.foreign_key.amount_columns != 
+                constraint->constraint_data.foreign_key.amount_referenced_columns) {
                 return false;
             }
 
-            if (constraint->constraint_data.foreign_keys.amount_foreign_keys == 0 ||
-            constraint->constraint_data.foreign_keys.amount_referenced_columns == 0) {
+            if (constraint->constraint_data.foreign_key.amount_columns == 0 ||
+            constraint->constraint_data.foreign_key.amount_referenced_columns == 0) {
                 return false;
             }
 
@@ -369,8 +404,8 @@ void constraint_free(Constraint *constraint) {
                 free(constraint->constraint_data.primary_key.primary_key_columns);
                 break;
             case FOREIGN_KEY:
-                free(constraint->constraint_data.foreign_keys.foreign_key_columns);
-                free(constraint->constraint_data.foreign_keys.referenced_columns);
+                free(constraint->constraint_data.foreign_key.foreign_key_columns);
+                free(constraint->constraint_data.foreign_key.referenced_columns);
                 break;
             case UNIQUE:
                 free(constraint->constraint_data.unique_cols.column_refs);
