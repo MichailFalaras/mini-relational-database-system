@@ -3,7 +3,8 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include<fcntl.h>
+#include <fcntl.h>
+
 #define MAX_PAGES 100
 
 typedef struct page Page;
@@ -12,6 +13,7 @@ typedef struct page Page;
  * fd: file descriptor of database file (e.g. users.db)
  * file_length: file length of database file
  * num_pages: amount of pages in disk
+ * (Use MAX_PAGES to talk about pages in RAM)
  * pages: pointer to pages opened */
 typedef struct pager {
     int fd;

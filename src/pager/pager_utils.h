@@ -8,4 +8,6 @@ typedef struct page Page;
 
 extern bool write_page_size(Pager *pager, Page *page);
 
+extern bool read_page_size(Pager *pager, Page *page);
+
 #endif
