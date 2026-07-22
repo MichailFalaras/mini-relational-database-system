@@ -6,7 +6,7 @@
 #include "schema_utils.h"
 #include "../../include/database.h"
 #include "../../include/constraints.h"
-#include "../src/constraints/constraints_utils.h"
+#include "../constraints/constraints_utils.h"
 #include "../../include/expressions.h"
 #include "../../include/row.h"
 #include "../../include/table.h"
@@ -359,7 +359,7 @@ bool schema_drop_column(Schema *schema, Database *db, const char *col_name) {
     // part of the primary key. We don't drop any other constraints in this phase, because if a PRIMARY
     // KEY is discovered later in the constraints traversal (and thus cancels the drop), 
     // there would be no way to recover the deleted columns.
-    for (uint32_t i = 0; i < schema->num_constraints;) {
+    for (uint32_t i = 0; i < schema->num_constraints; i++) {
 
         if (!schema->constraints[i]) {
             return false;
@@ -473,10 +473,6 @@ bool schema_modify_column(Schema *schema, const Database *db, const char *old_co
         return false;
     }
 
-    if (!new_column->name || new_column->name[0] == '\0') {
-        return false;
-    }
-
     if (schema->num_columns > 0 && !schema->columns) {
         return false;
     }
@@ -561,8 +557,17 @@ bool schema_modify_column(Schema *schema, const Database *db, const char *old_co
                 return false;
             }
 
-            if (schema->constraints[i]->type == FOREIGN_KEY &&
-                foreign_key_uses_column(schema->constraints[i], (uint32_t) column_index)) {
+            if (schema->constraints[i]->type != FOREIGN_KEY) {
+                continue;
+            }
+
+            bool uses_local_column = foreign_key_uses_column(schema->constraints[i], (uint32_t) column_index);
+
+            bool references_same_table_column =
+                constraint_references_table(schema->constraints[i], target_table_index) &&
+                foreign_key_references_column(schema->constraints[i], (uint32_t) column_index);
+
+            if (uses_local_column || references_same_table_column) {
                 return false;
             }
         }

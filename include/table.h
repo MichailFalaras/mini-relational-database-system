@@ -10,6 +10,7 @@ typedef struct index Index;
 typedef struct column Column;
 typedef struct constraint Constraint;
 typedef struct pager Pager;
+typedef struct database Database;
 
 #define MAX_INDEXES 8
 
@@ -26,7 +27,7 @@ typedef struct table {
     bool is_deleted;
     Schema* table_schema;
     Index *primary_index;
-    Index *secondary_indexes[MAX_INDEXES];
+    Index **secondary_indexes;
     uint32_t total_secondary_indexes;
     uint32_t row_count;
 } Table;
@@ -40,9 +41,9 @@ extern bool table_alter_rename(Table *table, const char *new_name);
 
 extern bool table_alter_add_col(Table *table, const Column *new_col);
 
-extern bool table_alter_drop_col(Table *table, const char *col_name);
+extern bool table_alter_drop_col(Table *table, Database *db, const char *col_name);
 
-extern bool table_alter_modify_col(Table *table, const char *old_col_name, const Column *new_column_def);
+extern bool table_alter_modify_col(Table *table, const Database *db, const char *old_col_name, const Column *new_column_def);
 
 extern bool table_alter_rename_col(Table *table, const char *old_col_name, const char *new_col_name);
 

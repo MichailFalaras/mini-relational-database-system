@@ -47,9 +47,9 @@ void constraint_shift_local_column_refs(Constraint *constraint, uint32_t index_t
             break;
 
         case FOREIGN_KEY:
-            for (uint32_t i = 0; i < constraint->constraint_data.foreign_key.amount_referenced_columns; i++) {
-                if (constraint->constraint_data.foreign_key.referenced_columns[i] > index_threshold) {
-                    constraint->constraint_data.foreign_key.referenced_columns[i]--;
+            for (uint32_t i = 0; i < constraint->constraint_data.foreign_key.amount_columns; i++) {
+                if (constraint->constraint_data.foreign_key.foreign_key_columns[i] > index_threshold) {
+                    constraint->constraint_data.foreign_key.foreign_key_columns[i]--;
                 }
             }
             break;
@@ -90,8 +90,8 @@ void constraint_shift_local_column_refs(Constraint *constraint, uint32_t index_t
 
 
 /* Decrements the referenced column indexes of another table's constraint */
-void constraint_shift_referenced_column_reds(Constraint *constraint, uint32_t index_threshold) {
-    if (!constraint || constraint != FOREIGN_KEY) {
+void constraint_shift_referenced_column_refs(Constraint *constraint, uint32_t index_threshold) {
+    if (!constraint || constraint->type != FOREIGN_KEY) {
         return;
     }
 

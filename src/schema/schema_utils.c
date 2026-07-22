@@ -6,7 +6,7 @@
 #include "../../include/database.h"
 #include "../../include/table.h"
 #include "../../include/constraints.h"
-#include "../src/constraints/constraints_utils.h"
+#include "../constraints/constraints_utils.h"
 
 void shift_column_refs_after_drop(Schema *schema, Database *db, uint32_t index_threshold) {
     if (!schema || !db) {
@@ -17,7 +17,7 @@ void shift_column_refs_after_drop(Schema *schema, Database *db, uint32_t index_t
         return;
     }
 
-    if (!schema->constraints) {
+    if (schema->num_constraints > 0 && !schema->constraints) {
         return;
     }
 
@@ -33,7 +33,7 @@ void shift_column_refs_after_drop(Schema *schema, Database *db, uint32_t index_t
     uint32_t target_table_index = UINT32_MAX;
 
     for (uint32_t i = 0; i < db->table_count; i++) {
-        if (!db->tables) {
+        if (!db->tables[i]) {
             return;
         }
 
