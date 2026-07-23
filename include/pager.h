@@ -14,11 +14,13 @@ typedef struct page Page;
  * file_length: file length of database file
  * num_pages: amount of pages in disk
  * (Use MAX_PAGES to talk about pages in RAM)
- * pages: pointer to pages opened */
+ * pages: pointer to pages opened 
+ * access_counter: used to determine LRU pages safer. */
 typedef struct pager {
     int fd;
     size_t file_length;
     uint32_t num_pages;
+    uint64_t access_counter;
     Page *pages[MAX_PAGES];
 } Pager;
 
@@ -32,7 +34,7 @@ extern bool pager_close(Pager *pager);
 
 extern Page *pager_get_page(Pager *pager, uint32_t page_num);
 
-extern Page *pager_release_page(Pager *pager, uint32_t page_num);
+extern bool pager_release_page(Pager *pager, uint32_t page_num);
 
 extern bool pager_evict_page(Pager *pager, uint32_t page_num);
 

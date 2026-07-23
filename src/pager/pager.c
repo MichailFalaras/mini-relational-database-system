@@ -19,6 +19,7 @@ Pager *pager_create(int fd, size_t file_length, uint32_t num_pages) {
     pager->fd = fd;
     pager->file_length = file_length;
     pager->num_pages = num_pages;
+    pager->access_counter = 0;
     return pager;
 }
 
@@ -30,21 +31,26 @@ bool pager_allocate_page(Pager *pager, uint32_t *out_page_num) {
         return false;
     }
 
-    if (pager->num_pages >= MAX_PAGES) {
-        printf("Database is full.\n");
-        return false;
-    }
-
     Page *zero = pager_get_page(pager, 0);
     if (!zero) {
         return false;
     }
 
+    FreePageResult res = get_free_page(pager, out_page_num);
+    if (res == FREE_PAGE_ERROR) {
+        return false;
+
     /* No free pages. */
-    if (!get_free_page(pager, out_page_num)) {
+    } else if (res == FREE_PAGE_EMPTY) {
+
+        if (pager->num_pages >= MAX_PAGES) {
+            printf("Database is full.\n");
+            return false;
+        }
+
         *out_page_num = pager->num_pages;
         pager->num_pages++;
-    } 
+    }
     /* Else, free page num is stored in out_page_num automatically. */
 
     return true;
@@ -84,7 +90,6 @@ Pager *pager_open(const char *filename) {
     }
 
     Pager *pager = pager_create(fd, len, num_pages);
-    /*
     if (len == 0) {
         if (!pager_initialize_new_database(pager)) {
             fprintf(stderr, "Failed to initialize new databse with Pages 0 and 1.\n");
@@ -92,20 +97,26 @@ Pager *pager_open(const char *filename) {
             close(fd);
             return NULL;
         }
-    }*/
+    }
     return pager;
 }
 
 /* Create Page 0 and System Catalog Page and store it in cache ready
 to be flushed. */
 bool pager_initialize_new_database(Pager *pager) {
-    if (pager == NULL) {
+    if (pager == NULL || pager->file_length != 0
+        || pager->num_pages == 0) {
         return false;
     }
 
     PageZeroMetadata *page_zero_metadata = page_zero_create();
+    if (!page_zero_metadata) {
+        return false;
+    }
+
     Page *page = pager_get_page(pager, 0);
     if (!page) {
+        free(page_zero_metadata);
         return false;
     }
 
@@ -113,21 +124,30 @@ bool pager_initialize_new_database(Pager *pager) {
     memcpy(page->page_data, page_zero_metadata, sizeof(PageZeroMetadata));
     free(page_zero_metadata);
     if (!page_mark_dirty(page)) {
+        page_free(page);
+        pager->pages[0] = NULL;
         return false;
     }
 
     page = pager_get_page(pager, 1);
     if (!page) {
+        page_free(page);
+        page_free(pager->pages[0]);
+        pager->pages[0] = NULL;
+        pager->pages[1] = NULL;
         return false;
     }
     /* B+Tree functions responsible for storing information in system catalog
      * since it's normal B+Tree. */
-    if (!page_clear(page)) {
+    if (!page_clear(pager, page)) {
+        page_free(page);
+        page_free(pager->pages[0]);
+        pager->pages[0] = NULL;
+        pager->pages[1] = NULL;
         return false;
     }
 
-    pager->num_pages += 2;
-    pager->file_length = pager->num_pages * PAGE_SIZE;
+    pager->num_pages = 2;
     return true;
 }
 
@@ -157,25 +177,33 @@ bool pager_close(Pager *pager) {
 to be stored in the disk. */
 Page *pager_get_page(Pager *pager, uint32_t page_num) {
 
-    if (!pager || page_num >= MAX_PAGES) {
+    if (!pager || page_num >= pager->num_pages ||
+        page_num >= MAX_PAGES) {
         return NULL;
     }
 
     /* Index of pager->pages corresponds to page_num. */
     if (pager->pages[page_num] != NULL) {
-        if (!page_touch(pager->pages[page_num])) {
+        if (!page_touch(pager, pager->pages[page_num])) {
             return NULL;
         }
 
         return pager->pages[page_num];
     }
 
-    Page *page = page_create(page_num);
+    Page *page = page_create(pager, page_num);
+    if (!page) {
+        return NULL;
+    }
+
+    /* Means page is only in cache/RAM, because we update file length only
+     * when we flush pages. */
     if ((off_t) page_num * (off_t) PAGE_SIZE >= pager->file_length) {
         pager->pages[page_num] = page;
         return page;
     }
 
+    /* Get page from disk. */
     off_t pos = lseek(pager->fd, (off_t) page_num * (off_t) PAGE_SIZE, SEEK_SET);
     if (pos < 0) {
         perror("pager_get_page");
@@ -188,12 +216,20 @@ Page *pager_get_page(Pager *pager, uint32_t page_num) {
         return NULL;
     }
 
-    page_touch(page);
+    if (!page_touch(pager, page)) {
+        page_free(page);
+        return NULL;
+    }
     pager->pages[page_num] = page;
     return page;
 }
 
 /* Free page and connect it to the beginning of the list of free pages. */
+
+/* Released page should not be accessible by the B+Tree.
+ * Meaning, while traversing the B+Tree you might still access the
+ * released/freed page resulting in reading garbage values.
+ * B+Tree should handle this problem. */
 bool pager_release_page(Pager *pager, uint32_t page_num) {
 
     if (!pager || page_num >= pager->num_pages) {
@@ -213,6 +249,9 @@ bool pager_release_page(Pager *pager, uint32_t page_num) {
         sizeof(uint32_t)
     );
 
+    /* Not complete protection of system catalog, since it might
+     * have more than one pages for either internal or leaf nodes.
+     * But that is B+Tree's responsibilities to protect those pages. */
     if (page_num == 0 || system_catalog == page_num) {
         return false;
     }
@@ -240,8 +279,7 @@ bool pager_evict_page(Pager *pager, uint32_t page_num) {
     }
 
     if (pager->pages[page_num]->is_dirty == true) {
-        bool res = pager_flush_page(pager, page_num);
-        if (res == false) {
+        if (!pager_flush_page(pager, page_num)) {
             return false;
         }
     }
@@ -258,7 +296,7 @@ bool pager_evict_lru(Pager *pager) {
         return false;
     }
 
-    time_t lru = time(NULL);
+    uint64_t lru = pager->access_counter;
     uint32_t lru_page_num;
     bool found = false;
     for (uint32_t i = 0; i < MAX_PAGES; i++) {
@@ -291,6 +329,7 @@ bool pager_evict_all(Pager *pager) {
         return false;
     }
 
+    bool all_evicted = true;
     /* MAX_PAGES because there might be more pages in RAM than the disk. */
     for (uint32_t i = 0; i < MAX_PAGES; i++) {
         if (pager->pages[i] == NULL) {
@@ -299,10 +338,11 @@ bool pager_evict_all(Pager *pager) {
 
         if (!pager_evict_page(pager, i)) {
             fprintf(stderr, "Page eviction failed.\n");
+            all_evicted = false;
         }
     }
 
-    return true;
+    return all_evicted;
 }
 
 /* Flush all pages to the disk. */
@@ -329,7 +369,8 @@ bool pager_flush_all(Pager *pager) {
 /* Flush specific page to the disk. */
 bool pager_flush_page(Pager *pager, uint32_t page_num) {
 
-    if (!pager || page_num >= MAX_PAGES) {
+    if (!pager || page_num >= pager->num_pages 
+        || page_num >= MAX_PAGES) {
         return false;
     }
 
