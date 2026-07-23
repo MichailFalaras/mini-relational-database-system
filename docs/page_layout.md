@@ -28,9 +28,10 @@
 | 0 | 1 | `uint8_t` | Type (`0` for Table, `1` for Index) |
 | 1 | 64 | `char[64]` | Table/Index Name |
 | 65 | 4 | `uint32_t` | Root Table/Index Page Num
-| 69 | Dynamic | `char[]` | SQL Query for Schema
+| 69 | 4 | `uint32_t` | SQL Query Size
+| 73 | Dynamic | `char[]` | SQL Query for Schema
 
-**Total Size:** (69 + length of Schema) bytes
+**Total Size:** (73 + length of `SQL QUery for Schema`) bytes
 
 ---
 
