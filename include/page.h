@@ -2,7 +2,6 @@
 #define PAGE_H_
 
 #include <fcntl.h>
-#include <time.h>
 #include <string.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -11,6 +10,23 @@
 #define PAGE_SIZE 4096
 #define FREE_LIST_HEAD_OFFSET offsetof(PageZeroMetadata, free_list_head)
 #define SYSTEM_CATALOG_ROOT_PAGE_OFFSET offsetof(PageZeroMetadata, catalog_root)
+
+#define DB_MAGIC_STRING "rdbms-c-v"
+#define DB_MAGIC_STRING_LEN 10
+
+typedef struct pager Pager;
+
+typedef enum free_page_result {
+    FREE_PAGE_ERROR = -1,
+    FREE_PAGE_EMPTY,
+    FREE_PAGE_FOUND
+} FreePageResult;
+
+typedef enum page_free_status {
+    PAGE_FREE_ERROR = -1,
+    PAGE_NOT_FREE,
+    PAGE_IS_FREE
+} PageFreeStatus;
 
 /* Page Zero Metada struct to be stored in Page 0.
  * magic: magic string in order for page to be recognized
@@ -39,10 +55,10 @@ typedef struct page {
     pages connected before the page's payload (Actual data). */
     uint8_t page_data[PAGE_SIZE];
 
-    time_t last_interacted;
+    uint64_t last_interacted;
 } Page;
 
-extern Page *page_create(uint32_t page_num);
+extern Page *page_create(Pager *pager, uint32_t page_num);
 
 extern PageZeroMetadata *page_zero_create(void);
 
@@ -50,9 +66,9 @@ extern bool page_mark_dirty(Page *page);
 
 extern bool page_mark_clean(Page *page);
 
-extern bool page_touch(Page *page);
+extern bool page_touch(Pager *pager, Page *page);
 
-extern bool page_clear(Page *page);
+extern bool page_clear(Pager *pager, Page *page);
 
 extern void page_free(Page *page);
 

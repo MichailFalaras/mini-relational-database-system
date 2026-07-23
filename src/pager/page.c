@@ -1,11 +1,11 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <time.h>
 #include <string.h>
+#include "../../include/pager.h"
 #include "../../include/page.h"
 
 /* Create page. */
-Page *page_create(uint32_t page_num) {
+Page *page_create(Pager *pager, uint32_t page_num) {
     Page *page = (Page *) calloc(1, sizeof(Page));
     if (page == NULL) {
         perror("page_create");
@@ -14,7 +14,7 @@ Page *page_create(uint32_t page_num) {
 
     page->is_dirty = false;
     page->page_num = page_num;
-    page->last_interacted = time(NULL);
+    page->last_interacted = ++pager->access_counter;
 
     return page;
 }
@@ -27,7 +27,7 @@ PageZeroMetadata *page_zero_create(void) {
         return NULL;
     }
 
-    memcpy(page_zero->magic, "rdbms-c-v", 10);
+    memcpy(page_zero->magic, DB_MAGIC_STRING, DB_MAGIC_STRING_LEN);
     page_zero->version = 1;
     page_zero->page_size = PAGE_SIZE;
     page_zero->catalog_root = 1;
@@ -57,18 +57,18 @@ bool page_mark_clean(Page *page) {
 }
 
 /* Update time of last interaction with page. */
-bool page_touch(Page *page) {
+bool page_touch(Pager *pager, Page *page) {
     if (!page) {
         return false;
     }
 
-    page->last_interacted = time(NULL);
+    page->last_interacted = ++pager->access_counter;
     return true;
 }
 
 /* Clear page, mark it dirty and update time of
 last interaction. */
-bool page_clear(Page *page) {
+bool page_clear(Pager *pager, Page *page) {
     if (!page) {
         return false;
     }
@@ -76,7 +76,7 @@ bool page_clear(Page *page) {
     /* In order for page change's to be written back in disk. */
     page->is_dirty = true;
     memset(page->page_data, 0, PAGE_SIZE); 
-    if (!page_touch(page)) {
+    if (!page_touch(pager, page)) {
         return false;
     }
 
