@@ -26,7 +26,9 @@ typedef struct pager {
 
 extern Pager *pager_create(int fd, size_t file_length, uint32_t num_pages);
 
-extern Pager *pager_open(const char *filename);
+extern Pager *pager_open(const char *pathname);
+
+extern bool pager_allocate_page(Pager *pager, uint32_t *out_page_num);
 
 extern bool pager_initialize_new_database(Pager *pager);
 
