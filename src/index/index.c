@@ -63,7 +63,7 @@ Index *index_metadata_create(const char *index_name, IndexType type, const Index
         return NULL;
     }
 
-    if (root_page_num == 0) {
+    if (root_page_num <= SYSTEM_CATALOG_PAGE_NUM) {
         printf("index_metaadata_create: Invalid root page number.\n");
         return NULL;
     }
