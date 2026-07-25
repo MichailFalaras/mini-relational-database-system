@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include "../../include/index.h"
 #include "index_utils.h"
 

@@ -4,6 +4,9 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+// Used for creation of a temporary page placeholder for the newly created indexes
+#define INVALID_ROOT_PAGE UINT32_MAX
+
 #define SUPERBLOCK_PAGE_NUM 0
 #define SYSTEM_CATALOG_PAGE_NUM  1
 typedef struct pager Pager;

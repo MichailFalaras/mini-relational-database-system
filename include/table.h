@@ -39,7 +39,7 @@ extern void table_free(Table *table);
 
 extern bool table_alter_rename(Table *table, const char *new_name);
 
-extern bool table_alter_add_col(Table *table, const Column *new_col);
+extern bool table_alter_add_col(Table *table, Column *new_col);
 
 extern bool table_alter_drop_col(Table *table, Database *db, const char *col_name);
 
