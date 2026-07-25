@@ -9,8 +9,6 @@
 #include "../../include/index.h"
 #include"../index/index_utils.h"
 
-#define INVALID_ROOT_PAGE UINT32_MAX
-
 
 /* Creation of logical Table struct */
 Table *table_metadata_create(const char *table_name, const Schema *schema) {
@@ -276,6 +274,11 @@ Index *table_find_index(const Table *table, const char *index_name) {
         return table->primary_index;
     }
 
+    if (table->total_secondary_indexes > 0 && !table->secondary_indexes) {
+        printf("table_find_index: Invalid secondary indexes array.\n");
+        return NULL;
+    }
+
     // And then for any secondary index match
     for (uint32_t i = 0; i < table->total_secondary_indexes; i++) {
         if (!table->secondary_indexes[i]) {
@@ -315,7 +318,7 @@ bool table_alter_rename(Table *table, const char *new_name) {
 
 
 /* Add Column to the Table */
-bool table_alter_add_col(Table *table, const Column *new_col) {
+bool table_alter_add_col(Table *table, Column *new_col) {
     if (!table || !table->table_schema) {
         printf("table_alter_add_col: Invalid input Table.\n");
         return false;

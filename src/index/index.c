@@ -47,7 +47,7 @@ void index_key_free(IndexKey *key) {
 }
 
 /* Creation of logical Index struct */
-Index *index_metadata_create(const char *index_name, IndexType type, const IndexKey *key, uint32_t root_page_num) {
+Index *index_metadata_create(const char *index_name, IndexType type, IndexKey *key, uint32_t root_page_num) {
     if (!index_name || index_name[0] == '\0') {
         printf("index_metadata_create: Invalid Index name.\n");
         return NULL;
