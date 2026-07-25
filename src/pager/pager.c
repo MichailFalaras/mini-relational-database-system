@@ -31,12 +31,11 @@ bool pager_allocate_page(Pager *pager, uint32_t *out_page_num) {
         return false;
     }
 
-    Page *zero = pager_get_page(pager, 0);
-    if (!zero) {
-        return false;
+    FreePageResult res = FREE_PAGE_EMPTY;
+    if (pager->num_pages != 0) {
+        res = get_free_page(pager, out_page_num);
     }
 
-    FreePageResult res = get_free_page(pager, out_page_num);
     if (res == FREE_PAGE_ERROR) {
         return false;
 
@@ -58,14 +57,14 @@ bool pager_allocate_page(Pager *pager, uint32_t *out_page_num) {
 
 /* Open database file descriptor, initialize basic metrics and
 create pager. */
-Pager *pager_open(const char *filename) {
+Pager *pager_open(const char *pathname) {
 
-    if (!filename || !filename[0]) {
-        printf("pager_open: Empty filename\n");
+    if (!pathname || !pathname[0]) {
+        printf("pager_open: Empty pathname\n");
         return NULL;
     }
 
-    int fd = open(filename, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
+    int fd = open(pathname, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
     if (fd == -1) {
         perror("pager_open");
         return NULL;
@@ -84,15 +83,33 @@ Pager *pager_open(const char *filename) {
         close(fd);
         return NULL;
     } else if (len > 0 && len % PAGE_SIZE != 0) {
-        printf("pager_open: Database file length is not a multiple of PAGE_SIZE\n");
+        fprintf(stderr, "pager_open: Database file length is not a multiple of PAGE_SIZE\n");
         close(fd);
         return NULL;
     }
 
     Pager *pager = pager_create(fd, len, num_pages);
+    /* Initialize database with Page 0 and System Catalog. */
     if (len == 0) {
         if (!pager_initialize_new_database(pager)) {
             fprintf(stderr, "Failed to initialize new databse with Pages 0 and 1.\n");
+            pager_free(pager);
+            close(fd);
+            return NULL;
+        }
+
+    /* Retrieve Page 0 and System Catalog when loading up already
+     * existing database. */
+    } else {
+        Page *page = pager_get_page(pager, 0);
+        if (!page) {
+            pager_free(pager);
+            close(fd);
+            return NULL;
+        }
+
+        page = pager_get_page(pager, 1);
+        if (!page) {
             pager_free(pager);
             close(fd);
             return NULL;
@@ -105,7 +122,7 @@ Pager *pager_open(const char *filename) {
 to be flushed. */
 bool pager_initialize_new_database(Pager *pager) {
     if (pager == NULL || pager->file_length != 0
-        || pager->num_pages == 0) {
+        || pager->num_pages != 0) {
         return false;
     }
 
@@ -114,7 +131,12 @@ bool pager_initialize_new_database(Pager *pager) {
         return false;
     }
 
-    Page *page = pager_get_page(pager, 0);
+    uint32_t page_num;
+    if (!pager_allocate_page(pager, &page_num)) {
+        return false;
+    }
+    /* Should be: page_num == 0 */
+    Page *page = pager_get_page(pager, page_num);
     if (!page) {
         free(page_zero_metadata);
         return false;
@@ -129,7 +151,11 @@ bool pager_initialize_new_database(Pager *pager) {
         return false;
     }
 
-    page = pager_get_page(pager, 1);
+    if (!pager_allocate_page(pager, &page_num)) {
+        return false;
+    }
+    /* Should be: page_num == 1 */
+    page = pager_get_page(pager, page_num);
     if (!page) {
         page_free(page);
         page_free(pager->pages[0]);
@@ -158,7 +184,7 @@ bool pager_close(Pager *pager) {
         return false;
     }
 
-    bool flush_check;
+    bool flush_check = true;
     if (!(flush_check = pager_flush_all(pager))) {
         fprintf(stderr, "Flushing database pages failed.\n");
     }
@@ -200,6 +226,9 @@ Page *pager_get_page(Pager *pager, uint32_t page_num) {
      * when we flush pages. */
     if ((off_t) page_num * (off_t) PAGE_SIZE >= pager->file_length) {
         pager->pages[page_num] = page;
+        if (!page_mark_dirty(pager->pages[page_num])) {
+            return NULL;
+        }
         return page;
     }
 
@@ -299,7 +328,7 @@ bool pager_evict_lru(Pager *pager) {
     uint64_t lru = pager->access_counter;
     uint32_t lru_page_num;
     bool found = false;
-    for (uint32_t i = 0; i < MAX_PAGES; i++) {
+    for (uint32_t i = 2; i < MAX_PAGES; i++) {
         if (pager->pages[i] == NULL) {
             continue;
         }

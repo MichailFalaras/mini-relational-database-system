@@ -7,6 +7,8 @@
 // Used for creation of a temporary page placeholder for the newly created indexes
 #define INVALID_ROOT_PAGE UINT32_MAX
 
+#define SUPERBLOCK_PAGE_NUM 0
+#define SYSTEM_CATALOG_PAGE_NUM  1
 typedef struct pager Pager;
 
 /* Index type. */
@@ -37,7 +39,7 @@ typedef struct index {
 
 
 /* Index metadata operations */
-extern Index *index_metadata_create(const char *index_name, IndexType type, IndexKey *key, uint32_t root_page_num);
+extern Index *index_metadata_create(const char *index_name, IndexType type, const IndexKey *key, uint32_t root_page_num);
 
 extern void index_free(Index *index);
 
