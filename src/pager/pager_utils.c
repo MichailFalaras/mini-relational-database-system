@@ -8,17 +8,15 @@
 #include "../../include/page.h"
 #include "pager_utils.h"
 
-/* Write exactly PAGE_SIZE data using pwrite (without moving file offset). */
+/* Write exactly PAGE_SIZE data. */
 bool write_page_size(Pager *pager, Page *page) {
     size_t index = 0;
     size_t bytes_left_to_write = PAGE_SIZE;
     ssize_t bytes_written = 0;
 
-    off_t base_offset = (off_t) page->page_num * (off_t) PAGE_SIZE;
-
     while (bytes_left_to_write > 0){
-        bytes_written = pwrite(pager->fd, page->page_data + index,
-                        bytes_left_to_write, base_offset);
+        bytes_written = write(pager->fd, page->page_data + index,
+            bytes_left_to_write);
 
         if (bytes_written < 0) {
             if (errno == EINTR) {
@@ -39,16 +37,15 @@ bool write_page_size(Pager *pager, Page *page) {
     return true;
 }
 
-/* Read exacty PAGE_SIZE data using pread (without moving file offset). */
+/* Read exacty PAGE_SIZE data. */
 bool read_page_size(Pager *pager, Page *page) {
     size_t index = 0;
     size_t bytes_left_to_read = PAGE_SIZE;
     ssize_t bytes_read = 0;
 
-    off_t base_offset = (off_t) page->page_num * (off_t) PAGE_SIZE;
-
     while (bytes_left_to_read > 0){
-        bytes_read = pread(pager->fd, page->page_data + index, bytes_left_to_read, base_offset);
+        bytes_read = read(pager->fd, page->page_data + index,
+            bytes_left_to_read);
 
         if (bytes_read < 0) {
             if (errno == EINTR) {
@@ -98,21 +95,21 @@ FreePageResult get_free_page(Pager *pager, uint32_t *page_num) {
     if (!free_page) {
         return FREE_PAGE_ERROR;
     }
-    
+
+    /* Since we are returning the first free page no matter what,
+     * update free_list_head of page 0 to show to the free page after
+     * the page we are returning. */
+    memcpy(zero->page_data + FREE_LIST_HEAD_OFFSET,
+        free_page->page_data,
+        sizeof(uint32_t)
+    );
+
     *page_num = free_list_head;
     if (!page_clear(pager, pager->pages[*page_num])) {
         page_free(free_page);
         pager->pages[free_list_head] = NULL;
         return FREE_PAGE_ERROR;
     }
-    
-    /* Since we are returning the first free page no matter what,
-     * update free_list_head of page 0 to show to the free page after
-     * the page we are returning. */
-    memcpy(zero->page_data + FREE_LIST_HEAD_OFFSET,
-        free_page->page_data,
-        sizeof(uint32_t));
-
 
     if (!page_mark_dirty(zero)) {
         page_free(free_page);
