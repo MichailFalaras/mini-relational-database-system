@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <stdint.h>
 #include "data_types_utils.h"
 
 
@@ -488,4 +489,42 @@ bool convert_to_timestamp(Value *value) {
     value->type = TIMESTAMP;
     value->value.timestamp_val = converted;
     return true;
+}
+
+/* Get sizeof from DataType.*/
+/*❗This implementation makes sense if we actually
+serialize/deserialize onto the disk. */
+uint32_t get_data_type_size(DataType type) {
+
+    switch (type) {
+        case INTEGER:
+            return sizeof(int32_t);
+        case UNSIGNED_INTEGER:
+            return sizeof(uint32_t);
+        case NUMERIC:
+            return sizeof(numeric_t);
+        case FLOAT:
+            return sizeof(float);
+        case DOUBLE:
+            return sizeof(double);
+        case CHAR:
+            return sizeof(char_n_t);
+        case VARCHAR:
+            return sizeof(varchar_n_t);
+        case TEXT:
+            return sizeof(char *);
+        case DATE:
+        case TIMESTAMP:
+            return sizeof(uint64_t);
+        case BLOB:
+            return sizeof(blob_t);
+        case BOOL:
+            return sizeof(bool);
+        case JSONB:
+            return sizeof(jsonb_t);
+        // Don't know about `bool null_val`
+        default:
+            printf("get_data_type_size: Unsupported data type.\n");
+            return NULL;
+    }
 }
