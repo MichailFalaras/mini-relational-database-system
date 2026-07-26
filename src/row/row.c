@@ -59,6 +59,26 @@ Value *row_get_value(const Row *row, uint32_t column_pos) {
     return row->values[column_pos-1];
 }
 
+Value **row_get_values(const Row *row, uint32_t *column_index_array, uint32_t num_columns) {
+    Value **values = (Value **) malloc(num_columns*sizeof(Value *));
+    if (!values) {
+        return NULL;
+    }
+
+    for (uint32_t i = 0; i < num_columns; i++) {
+        values[i] = value_copy(row->values[column_index_array[i]]);
+        if (!values[i]) {
+            for (uint32_t j = 0; j < i; j++) {
+                value_free(values[j]);
+            }
+            free(values);
+            return NULL;
+        }
+    }
+
+    return values;
+}
+
 /* Change Row Value pointer to a copy of a different value. */
 bool row_set_value(Row *row, uint32_t column_pos, const Value *new_val) {
 
