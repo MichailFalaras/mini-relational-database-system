@@ -7,6 +7,8 @@
 #define BTREE_INTERNAL_NODE_SIZE 14
 #define BTREE_LEAF_NODE_SIZE 18
 
+typedef struct value Value;
+
 /* BTree Common Node Header.
  * node_type:
  *  0: leaf node
@@ -67,5 +69,11 @@ extern bool btree_init_internal(void *page_data, uint32_t rightmost_child_pointe
 extern uint16_t btree_get_available_capacity(void *page_data);
 
 extern bool btree_has_enough_space(void *page_data, uint16_t payload_size);
+
+extern bool btree_compare(Value **values, const void *key, void *context, int *result);
+
+extern Value **btree_extract_data(uint16_t node_type, const void *data_offset, void *context);
+
+extern uint16_t btree_lower_bound(void *page_data, const void *key, void *context);
 
 #endif
