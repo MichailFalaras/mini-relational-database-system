@@ -2,7 +2,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include "../../include/index.h"
+#include "../../include/pager.h"
+#include "../../include/page.h"
+#include "../../include/btree.h"
 
+/* Index metadata operations */
 
 /* Create Index key */
 IndexKey *index_key_create(const uint32_t *column_indexes, uint32_t num_columns) {
@@ -47,7 +51,7 @@ void index_key_free(IndexKey *key) {
 }
 
 /* Creation of logical Index struct */
-Index *index_metadata_create(const char *index_name, IndexType type, IndexKey *key, uint32_t root_page_num) {
+Index *index_metadata_create(const char *index_name, IndexType type, const IndexKey *key, uint32_t root_page_num) {
     if (!index_name || index_name[0] == '\0') {
         printf("index_metadata_create: Invalid Index name.\n");
         return NULL;
@@ -197,3 +201,86 @@ bool index_key_matches_prefix( const Index *index, const uint32_t *column_ids, u
     return true;
 }
 
+
+/* Index disk operations */
+
+/* Create physical index */
+Index *index_create(const char *index_name, IndexType type, const IndexKey *key, Pager *pager) {
+    // Input validation
+    if (!index_name || index_name[0] == '\0') {
+        printf("index_create: Invalid index name.\n");
+        return NULL;
+    }
+
+    if (type != PRIMARY_INDEX && type != SECONDARY_INDEX) {
+        printf("index_create: Invalid index type.\n");
+        return NULL;
+    }
+
+    if (!key || !key->column_index_array || key->num_columns == 0) {
+        printf("index_create: Invalid index key.\n");
+        return NULL;
+    }
+
+    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+        printf("index_create: Invalid or uninitialized pager.\n");
+        return NULL;
+    }
+
+    // Temporarily assigned to 0
+    uint32_t root_page_num = 0;
+    bool is_page_allocated = false;
+
+    // Determine page number for the index root
+    if (!pager_allocate_page(pager, &root_page_num)) {
+        printf("index_create: Page allocation failed.\n");
+        return NULL;
+    }
+
+    is_page_allocated = true;
+
+    // Get root page from cache or load it from the disk
+    Page *index_root = pager_get_page(pager, root_page_num);
+    if (!index_root) {
+        printf("index_create: Index root retrieval failed.\n");
+        goto rollback;
+    }
+
+    // Clear page's previous data
+    if (!page_clear(pager, index_root)) {
+        printf("index_create: Root clearing failed.\n");
+        goto rollback;
+    }
+
+    // Initialize the index root with the page's binary data
+    if (!btree_init_empty_leaf(index_root->page_data)) {
+        printf("index_create: Root initialization failed.\n");
+        goto rollback;
+    }
+
+    // Mark the page as dirty (modified)
+    if (!page_mark_dirty(index_root)) {
+        printf("index_create: Root page dirty marking failed.\n");
+        goto rollback;
+    }
+
+    // Create index metadata structure in memory
+    Index *index = index_metadata_create(index_name, type, key, root_page_num);
+    if (!index) {
+        printf("index_create: Index metadata creation failed.\n");
+        goto rollback;
+    }
+
+    return index;
+
+
+rollback:
+    // Rollback: Releasing the currently allocated page 
+    // if any processing step fails after its allocation
+    if (is_page_allocated && !pager_release_page(pager, root_page_num)) {
+        printf("index_create: Root page rollback failed.\n");
+    }
+
+    return NULL;
+
+}
