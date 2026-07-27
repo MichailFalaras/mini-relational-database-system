@@ -64,6 +64,17 @@ void value_free_internal(Value *value) {
     memset(&value->value, 0, sizeof(value->value));
 }
 
+// Deallocation helper
+void value_free_array(Value **values, uint32_t num_values) {
+    if (values) {
+        for (uint32_t i = 0; i < num_values; i++) {
+            value_free(values[i]);
+        }
+        free(values);
+        values = NULL;
+    }
+}
+
 // Comparison Utilities
 int compare_int32(const int32_t left, const int32_t right) {
     if (left < right) return -1;
@@ -528,3 +539,4 @@ uint32_t get_data_type_size(DataType type) {
             return NULL;
     }
 }
+
