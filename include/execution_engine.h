@@ -43,18 +43,6 @@ typedef struct execution_result {
     uint32_t rows_affected;
 } ExecutionResult;
 
-/* Temporary struct to store needed information for btree_lower_bound().
- * Needed to store important information for BTreeLeafNode page data extraction. */
-typedef struct key_extraction_context {
-    IndexKey *index_key;
-    DataType *data_types; // of specific columns
-    Schema *schema;
-    
-    /* Not amount of search keys the BTree is organized with, but the amount
-    of keys used to traverse the BTree.*/
-    uint32_t num_search_keys; 
-} KeyExtractionContext;
-
 extern ExecutionEngine *execution_engine_init(Database *db);
 
 extern ExecutionResult *execution_engine_query(const QueryPlan *query_plan);

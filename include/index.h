@@ -10,6 +10,7 @@
 #define SUPERBLOCK_PAGE_NUM 0
 #define SYSTEM_CATALOG_PAGE_NUM  1
 typedef struct pager Pager;
+typedef struct schema Schema;
 
 /* Index type. */
 typedef enum index_type {
@@ -37,6 +38,17 @@ typedef struct index {
     uint32_t root_page_num;
 } Index;
 
+/* Temporary struct to store needed information for btree_lower_bound().
+ * Needed to store important information for BTreeLeafNode page data extraction. */
+typedef struct key_extraction_context {
+    IndexKey *index_key;
+    DataType *data_types; // of specific columns
+    Schema *schema;
+    
+    /* Not amount of search keys the BTree is organized with, but the amount
+    of keys used to traverse the BTree.*/
+    uint32_t num_search_keys; 
+} KeyExtractionContext;
 
 /* Index metadata operations */
 extern Index *index_metadata_create(const char *index_name, IndexType type, const IndexKey *key, uint32_t root_page_num);
