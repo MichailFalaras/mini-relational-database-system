@@ -56,7 +56,7 @@
 | 10     | 4    | `uint32_t` | Previous Leaf Pointer. |
 | 14     | 4    | `uint32_t` | Next Leaf Pointer. |
 | 18 | `Cell Count * 2` | `uint16_t[]` |  Cell Pointer Array<br><small>(Find specific cell content immediately despite having dynamic size using offset pointers)</small>
-| `Free Space Offset` | Dynamic | Dynamic | Cell Content<br><small>**[Page Data]**<br>(Written bottom-up allowing dynamic sized data without conflicts with amount of cell pointers)</small>
+| `Free Space Offset` | Dynamic | Dynamic | Cell Content<br><small>**[Keys + Row]**<br>(Written bottom-up allowing dynamic sized data without conflicts with amount of cell pointers)</small>
 
 **Total Leaf Header Size:** 18 bytes
 
@@ -68,7 +68,7 @@
 | 0      | 10   | -          | **Common Header** |
 | 10     | 4    | `uint32_t` | Rightmost Child Pointer. |
 | 14 | `Cell Count * 2` | `uint16_t[]` |  Cell Pointer Array<br><small>(Find specific cell <i>IDs</i> immediately despite having dynamic size using offset pointers)</small>
-| `Free Space Offset` | Dynamic | Dynamic | Cell Content<br><small>**[Child Pointer + Key]**<br>(Written bottom-up allowing dynamic sized data without conflicts with amount of cell pointers)</small>
+| `Free Space Offset` | Dynamic | Dynamic | Cell Content<br><small>**[Child Pointer + Keys]**<br>(Written bottom-up allowing dynamic sized data without conflicts with amount of cell pointers)</small>
 
 **Total Internal Header Size:** 14 bytes
 
