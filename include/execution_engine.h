@@ -11,6 +11,7 @@ typedef struct query_plan QueryPlan;
 typedef struct plan_node PlanNode;
 typedef struct value Value;
 typedef struct transaction Transaction;
+typedef struct index_key IndexKey;
 #include "expressions.h"
 
 typedef enum execution_status {
