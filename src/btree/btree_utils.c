@@ -163,6 +163,10 @@ bool get_cell_pointer(void *page_data, uint16_t cell_index, uint16_t *cell_point
     uint32_t offset = node_type ? BTREE_INTERNAL_NODE_SIZE : BTREE_LEAF_NODE_SIZE;
     uint16_t *cell_pointer_offset = (uint16_t *) ((uint8_t *) page_data + offset);
     
+    if (offset + (cell_index * sizeof(uint16_t) + sizeof(uint16_t)) > PAGE_SIZE) {
+        return false;
+    }
+
     *cell_pointer = cell_pointer_offset[cell_index];
 
     return true;
@@ -190,6 +194,10 @@ bool set_cell_pointer(void *page_data, uint16_t cell_index, uint16_t cell_pointe
     uint32_t offset = node_type ? BTREE_INTERNAL_NODE_SIZE : BTREE_LEAF_NODE_SIZE;
     uint16_t *cell_pointer_offset = (uint16_t *) ((uint8_t *) page_data + offset);
     
+    if (offset + (cell_index * sizeof(uint16_t) + sizeof(uint16_t)) > PAGE_SIZE) {
+        return false;
+    }
+
     cell_pointer_offset[cell_index] = cell_pointer;
 
     return true;
@@ -322,6 +330,12 @@ bool set_cell_id(void *page_data, uint16_t cell_pointer, void *context, void *id
     uint32_t buf_size;
     for (uint32_t i = 0; i < ctx->index_key->num_columns; i++) {
         void *buf = value_serialize(values[i], &buf_size);
+
+        uint32_t current_offset = (uint32_t) (cell_content - (uint8_t *)page_data);
+        if (current_offset + buf_size > PAGE_SIZE) {
+            free(buf);
+            return false;
+        }
         memcpy(cell_content, buf, buf_size);
 
         cell_content += buf_size;
@@ -362,6 +376,12 @@ bool get_cell_payload(void *page_data, uint16_t cell_pointer, void *context, voi
         return false;
     }
 
+    uint32_t current_offset = (uint32_t) (cell_content - (uint8_t *)page_data);
+    if (current_offset + sizeof(Row) > PAGE_SIZE) {
+        free(row);
+        return false;
+    }
+
     memcpy(row, cell_content, sizeof(Row));
     *payload = (void *) row;
 
@@ -394,6 +414,12 @@ bool set_cell_payload(void *page_data, uint16_t cell_pointer, void *context, voi
     }    
 
     Row row = *((Row *) payload);
+
+    uint32_t current_offset = (uint32_t) (cell_content - (uint8_t *)page_data);
+    if (current_offset + sizeof(Row) > PAGE_SIZE) {
+        return false;
+    }
+
     memcpy(cell_content, &row, sizeof(Row));
 
     return true;
