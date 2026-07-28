@@ -6,6 +6,7 @@
 
 #define BTREE_INTERNAL_NODE_SIZE 14
 #define BTREE_LEAF_NODE_SIZE 18
+#define MAX_PAGES 100
 
 typedef struct value Value;
 
@@ -62,18 +63,35 @@ typedef struct __attribute__((packed)) system_catalog_leaf_node_metadata {
     /* SQL Query directly memcpy'd onto page's page_data. */
 } SystemCatalogLeafNodeMetadata;
 
+
+// Traversal-related structure that keeps track of the visited pages 
+// during the Index traversal
+typedef struct btree_page_collection {
+    uint32_t page_numbers[MAX_PAGES];
+    uint32_t count;
+} BTreePageCollection;
+
+
+// Create B+ Tree nodes
 extern bool btree_init_empty_leaf(void *page_data);
 
 extern bool btree_init_internal(void *page_data, uint32_t rightmost_child_pointer);
 
+// Validate B+ Tree node capacity
 extern uint16_t btree_get_available_capacity(void *page_data);
 
 extern bool btree_has_enough_space(void *page_data, uint16_t payload_size);
 
+// Compare B+ Tree index key
 extern bool btree_compare(Value **values, const void *key, void *context, int *result);
 
-extern Value **btree_extract_data(uint16_t node_type, const void *data_offset, void *context);
+// Extract key from Internal/Leaf node
+extern Value **btree_extract_data(void *page_data, uint16_t cell_pointer, void *context);
 
+// Perform Lower-bound Binary Search on the node's index key values
 extern uint16_t btree_lower_bound(void *page_data, const void *key, void *context);
+
+// Traverse B+ Tree
+extern bool btree_traverse_reachable_pages(const Index *index, Pager *pager, BTreePageCollection *visited_pages);
 
 #endif

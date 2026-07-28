@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include "../../include/btree.h"
 #include "../../include/page.h"
+#include "../../include/pager.h"
 #include "../../include/data_types.h"
 #include "../../include/row.h"
 #include "../../include/index.h"
@@ -233,4 +234,40 @@ uint16_t btree_lower_bound(void *page_data, const void *key, void *context) {
     }
     
     return result_index;
+}
+
+
+// Traverse B+ Tree and store the numbers of the visited pages
+bool btree_traverse_reachable_pages(const Index *index, Pager *pager, BTreePageCollection *visited_pages) {
+    if (!index || !index->key) {
+        printf("btree_traverse_reachable_pages: Invalid input index.\n");
+        return false;
+    }
+
+    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+        printf("btree_traverse_reachable_pages: Invalid Pager.\n");
+        return false;
+    }
+
+    if (!visited_pages) {
+        printf("btree_traverse_reachable_pages: Invalid visited-pages structure.\n");
+        return false;
+    }
+
+    if (index->root_page_num <= SYSTEM_CATALOG_PAGE_NUM ||
+        index->root_page_num >= pager->num_pages ||
+        index->root_page_num >= MAX_PAGES) {
+        printf("btree_traverse_reachable_pages: Invalid root page number.\n");
+        return false;
+    }
+
+    visited_pages->count = 0;
+
+    // Helper that recursively traverses internal nodes, and backtracking at leaf nodes
+    if (!btree_traverse_page_recursive(index->root_page_num, pager, visited_pages)) {
+        printf("btree_traverse_reachable_pages: Recursive Index B+ Tree traversal failed.\n");
+        return false;
+    }
+
+    return true;
 }
