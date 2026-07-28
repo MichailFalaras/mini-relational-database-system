@@ -172,7 +172,8 @@ uint16_t btree_lower_bound(void *page_data, const void *key, void *context) {
     }
 
     if (cell_count == 0) {
-        return UINT16_MAX;
+        fprintf(stderr, "btree_lower_bound: Empty node.\n");
+        return 0; // result_index = 0 because there are no cells yet
     }
 
     KeyExtractionContext *ctx = (KeyExtractionContext *) context;
@@ -189,8 +190,8 @@ uint16_t btree_lower_bound(void *page_data, const void *key, void *context) {
     int result;
 
     /* result_index to hold found key index position of page. */
-    uint16_t result_index = UINT16_MAX;
-    //uint8_t *data_offset; Active moving pointer throughout the loop.
+    // for the edge case of the target key being bigger than any other key
+    uint16_t result_index = cell_count; 
     Value **values = NULL;
 
     while (from <= to) {
@@ -217,8 +218,18 @@ uint16_t btree_lower_bound(void *page_data, const void *key, void *context) {
        
         /* Continue the loop just in case you find the LOWER BOUND. */
         if (result >= 0) {
-            result_index = mid;
+            /* Check if keys are supposed to be UNIQUE.
+             * If they are UNIQUE and result came back 0, which means
+             * key equal to the target key was found.
+             * No duplicates are allowed then. */
+            if (ctx->is_unique == true && result == 0) {
+                fprintf(stderr, "btree_lower_bound: Duplicate key found.\n");
+                result_index = UINT16_MAX; // to signify error
+                value_free_array(values, ctx->index_key->num_columns);
+                break;
+            }
 
+            result_index = mid;
             if (mid == 0) {
                 value_free_array(values, ctx->index_key->num_columns);
                 break;

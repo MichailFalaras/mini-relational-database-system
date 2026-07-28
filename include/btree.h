@@ -72,7 +72,7 @@ extern bool btree_has_enough_space(void *page_data, uint16_t payload_size);
 
 extern bool btree_compare(Value **values, const void *key, void *context, int *result);
 
-extern Value **btree_extract_data(uint16_t node_type, const void *data_offset, void *context);
+Value **btree_extract_data(void *page_data, uint16_t cell_pointer, void *context);
 
 extern uint16_t btree_lower_bound(void *page_data, const void *key, void *context);
 
