@@ -63,11 +63,13 @@ extern bool index_key_has_column(const Index *index, uint32_t index_key);
 
 extern bool index_key_matches_key(const Index *index, const uint32_t *column_ids, uint32_t num_columns);
 
-extern bool index_key_matches_prefix( const Index *index, const uint32_t *column_ids, uint32_t num_columns);
+extern bool index_key_matches_prefix(const Index *index, const uint32_t *column_ids, uint32_t num_columns);
 
 
 /* Index disk operations */
 extern Index *index_create(const char *index_name, IndexType type, const IndexKey *key, Pager *pager);
+
+extern bool index_truncate(Index *index, Pager *pager);
 
 extern bool index_drop(Index *index, Pager *pager);
 
