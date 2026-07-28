@@ -8,6 +8,8 @@
 #define BTREE_LEAF_NODE_SIZE 18
 
 typedef struct value Value;
+typedef struct pager Pager;
+typedef struct page Page;
 
 /* BTree Common Node Header.
  * node_type:
@@ -72,8 +74,10 @@ extern bool btree_has_enough_space(void *page_data, uint16_t payload_size);
 
 extern bool btree_compare(Value **values, const void *key, void *context, int *result);
 
-Value **btree_extract_data(void *page_data, uint16_t cell_pointer, void *context);
+extern Value **btree_extract_data(void *page_data, uint16_t cell_pointer, void *context);
 
 extern uint16_t btree_lower_bound(void *page_data, const void *key, void *context);
+
+extern Page *find_leaf_node(Pager *pager, uint32_t root_page_num, const void *key, void *context);
 
 #endif

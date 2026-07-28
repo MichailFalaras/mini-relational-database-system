@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include "../../include/btree.h"
+#include "../../include/pager.h"
 #include "../../include/page.h"
 #include "../../include/data_types.h"
 #include "../../include/row.h"
@@ -244,4 +245,98 @@ uint16_t btree_lower_bound(void *page_data, const void *key, void *context) {
     }
     
     return result_index;
+}
+
+Page *find_leaf_node(Pager *pager, uint32_t root_page_num, const void *key, void *context) {
+    if (!pager || !key || !context) {
+        return NULL;
+    }
+
+    // dont know if this is needed yet
+    if (root_page_num == 0 || root_page_num == 1) {
+        return NULL;
+    }
+
+    /* Hasn't been allocated yet. */
+    if (root_page_num >= pager->num_pages) {
+        return NULL;
+    }
+
+    Page *page = pager_get_page(pager, root_page_num);
+    if (!page) {
+        return NULL;
+    }
+
+    /* Page cannot be free. Should have been removed from the BTree
+     * if it was freed. */
+    if (is_page_free(pager, root_page_num) != PAGE_NOT_FREE) {
+        pager_evict_page(pager, page->page_num);
+        return NULL;
+    }
+
+    uint8_t node_type = 1;
+    uint16_t result_index = UINT16_MAX;
+    uint32_t child_pointer = 0;
+    uint16_t cell_count = 0;
+
+    /* While node is Internal. */
+    while (1) {
+        
+        if (!get_node_type(page->page_data, &node_type)) {
+            pager_evict_page(pager, page->page_num);
+            return NULL;
+        }
+
+        /* If its a leaf node, return page. */
+        if (!node_type) {
+            return page;
+        }
+
+        if (!get_cell_count(page->page_data, &cell_count)) {
+            pager_evict_page(pager, page->page_num);
+            return NULL;
+        }
+
+        result_index = btree_lower_bound(page->page_data, key, context);
+
+        if (result_index == cell_count) {
+            if (!get_rightmost_child_pointer(page->page_data, &child_pointer)) {
+                pager_evict_page(pager, page->page_num);
+                return NULL;
+            }
+        } else {
+            uint16_t cell_pointer;
+
+            if (!get_cell_pointer(page->page_data, result_index, &cell_pointer)) {
+                pager_evict_page(pager, page->page_num);
+                return NULL;
+            }
+
+            if (!get_cell_child_pointer(page->page_data, cell_pointer, &child_pointer)){
+                pager_evict_page(pager, page->page_num);
+                return NULL;
+            }
+        }
+
+        /* Page doesn't exist in cache/disk. */
+        if (child_pointer >= pager->num_pages) {
+            pager_evict_page(pager, page->page_num);
+            return NULL;
+        }
+        
+        if (!pager_evict_page(pager, page->page_num)) {
+            return NULL;
+        }
+
+        page = pager_get_page(pager, child_pointer);
+        if (!page) {
+            return NULL;
+        }
+
+        if (is_page_free(pager, page->page_num) != PAGE_NOT_FREE) {
+            pager_evict_page(pager, page->page_num);
+            return NULL;
+        }
+
+    }
 }
