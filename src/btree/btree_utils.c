@@ -8,8 +8,183 @@
 #include "btree_utils.h"
 #include "../../include/page.h"
 
-/* Temporary function prototype soon to be implemented. */
-void *value_serialize(Value *val, uint32_t *buf_size);
+/* Get key size. */
+uint16_t btree_get_key_size(const void *keys, void *context) {
+    if (!keys || !context) {
+        return 0;
+    }
+
+    KeyExtractionContext *ctx = (KeyExtractionContext *) context;
+    Value **key_vals = (Value **) keys;
+
+    uint16_t key_size = 0;
+    for (uint32_t i = 0; i < ctx->index_key->num_columns; i++) {
+        key_size += get_data_type_size(key_vals[i]->type);
+    }
+
+    return key_size;
+}
+
+/* Extract row's keys ACCORDING TO THE CONTEXT of the BTree. */
+Value **btree_extract_row_keys(void *payload, void *context) {
+    if (!payload || !context) {
+        return NULL;
+    }
+
+    KeyExtractionContext *ctx = (KeyExtractionContext *) context;
+    Row *row = (Row *) payload;
+
+    Value **row_keys = (Value **) malloc(ctx->index_key->num_columns*sizeof(Value *));
+    if (!row_keys) {
+        return NULL;
+    }
+
+    for (uint32_t i = 0; i < ctx->index_key->num_columns; i++) {
+        row_keys[i] = value_copy(row->values[ctx->index_key->column_index_array[i]]);
+        if (!row_keys[i]) {
+            value_free_array(row_keys, i);
+            free(row_keys);
+            return NULL;
+        }
+    }
+
+    return row_keys;
+}
+
+/* Extract keys from ALREADY EXISTING Internal/Leaf node.*/
+Value **btree_extract_data(void *page_data, uint16_t cell_pointer, void *context) {
+    if (!page_data || !context) {
+        return NULL;
+    }
+
+    uint8_t node_type;
+    if (!get_node_type(page_data, &node_type)) {
+        return NULL;
+    }
+
+    void *ids;
+    if (!get_cell_id(page_data, cell_pointer, context, &ids)) {
+        return NULL;
+    }
+
+    return (Value **) ids;
+}
+
+/* Return available capacity to store actual data or (for internal nodes) storing
+ * pointers to other pages. */
+uint16_t btree_get_available_capacity(void *page_data) {
+    if (!page_data) {
+        return UINT16_MAX;
+    }
+
+    uint16_t reserved_space = 0;
+    uint8_t node_type;
+    uint16_t cell_count;
+    uint16_t free_space_offset;
+    if (!get_node_type(page_data, &node_type)){
+        return UINT16_MAX;
+    }
+
+    if (!get_cell_count(page_data, &cell_count)) {
+        return UINT16_MAX;
+    }
+
+    if (!get_free_space_offset(page_data, &free_space_offset)) {
+        return UINT16_MAX;
+    }
+
+    if (node_type) {
+        reserved_space += BTREE_INTERNAL_NODE_SIZE;
+    } else {
+        reserved_space += BTREE_LEAF_NODE_SIZE;
+    }
+
+    reserved_space += cell_count * 2;
+
+    return free_space_offset - reserved_space;
+}
+
+/* Check if there's enough space to store the metadata [Keys + Payload]
+ * and the new cell pointer in the available space. */
+bool btree_has_enough_space(void *page_data, uint16_t metadata_size) {
+    uint16_t available_space = btree_get_available_capacity(page_data);
+    if (available_space == UINT16_MAX) {
+        return false;
+    }
+
+    // +2 for the cell pointer.
+    uint16_t needed_space = metadata_size + 2;
+
+    if (available_space >= needed_space) {
+        return true;
+    }
+
+    return false;
+}
+
+/* Comparing BTree Internal/Leaf Node Keys. */
+bool btree_compare(Value **values, const void *key, void *context, int *result) {
+    if (!values || !key || !context || !result) {
+        return false;
+    }
+
+    KeyExtractionContext *ctx = (KeyExtractionContext *) context;
+    const Value **key_val = (Value **) key;
+
+    /* Compare both same index columns. (With upper limit the search keys used, not
+    the amount of keys the BTree is organized with) */
+    for (uint32_t i = 0; i < ctx->num_search_keys; i++) {
+        if (!value_compare(values[i], key_val[i], result)) {
+            return false;
+        }
+
+        // result == -1 for values[i] < key_val
+        // result == 1 for values[i] > key_val
+
+        /* If it isn't equal, don't bother comparing other columns. */
+        if (*result != 0) {
+            break;
+        } 
+    }
+
+    return true;
+}
+
+bool shift_cell_pointers(void *page_data, uint16_t index) {
+
+    if (!page_data) {
+        return false;
+    }
+
+    uint8_t node_type = 0;
+    if (!get_node_type(page_data, &node_type)) {
+        return false;
+    }
+
+    uint16_t cell_count = 0;
+    if (!get_cell_count(page_data, &cell_count)) {
+        return false;
+    }
+
+    /* No shifting needed for it to be added in the end. */
+    if (index >= cell_count) {
+        return true;
+    }
+
+    /* Else needs shifting. */
+    uint16_t bytes_to_be_shifted = (cell_count - index)*sizeof(uint16_t);
+
+    uint16_t static_header_offset = node_type ? BTREE_INTERNAL_NODE_SIZE : BTREE_LEAF_NODE_SIZE;
+    uint8_t *cell_specific_offset = (uint8_t *)page_data + static_header_offset;
+    
+    memmove(
+        cell_specific_offset + (index+1)*sizeof(uint16_t),
+        cell_specific_offset + index*sizeof(uint16_t),
+        bytes_to_be_shifted
+    );
+
+    return true;
+}
 
 /* Read/write node type. */
 bool get_node_type(void *page_data, uint8_t *node_type) {
@@ -329,17 +504,18 @@ bool set_cell_id(void *page_data, uint16_t cell_pointer, void *context, void *id
 
     uint32_t buf_size;
     for (uint32_t i = 0; i < ctx->index_key->num_columns; i++) {
-        void *buf = value_serialize(values[i], &buf_size);
-
+        uint32_t buf_size = get_data_type_size(values[i]->type); 
+        
         uint32_t current_offset = (uint32_t) (cell_content - (uint8_t *)page_data);
         if (current_offset + buf_size > PAGE_SIZE) {
-            free(buf);
             return false;
         }
-        memcpy(cell_content, buf, buf_size);
+
+        if (!serialize_value_data(values[i], cell_content)) {
+            return false;
+        }
 
         cell_content += buf_size;
-        free(buf);
     }
     
     return true;
