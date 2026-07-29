@@ -68,16 +68,10 @@ extern bool btree_init_empty_leaf(void *page_data);
 
 extern bool btree_init_internal(void *page_data, uint32_t rightmost_child_pointer);
 
-extern uint16_t btree_get_available_capacity(void *page_data);
-
-extern bool btree_has_enough_space(void *page_data, uint16_t payload_size);
-
-extern bool btree_compare(Value **values, const void *key, void *context, int *result);
-
-extern Value **btree_extract_data(void *page_data, uint16_t cell_pointer, void *context);
-
 extern uint16_t btree_lower_bound(void *page_data, const void *key, void *context);
 
-extern Page *find_leaf_node(Pager *pager, uint32_t root_page_num, const void *key, void *context);
+extern Page *btree_find_leaf_node(Pager *pager, uint32_t root_page_num, const void *key, void *context);
+
+extern bool btree_leaf_node_insert(Page *page, void *payload, void *context);
 
 #endif

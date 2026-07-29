@@ -7,9 +7,9 @@
 #include "../../include/data_types.h"
 #include "../../include/row.h"
 #include "../../include/index.h"
-//#include "../../include/execution_engine.h" might need to move to index.h
 #include "../src/data_types/data_types_utils.h"
 #include "btree_utils.h"
+#include "../../include/serialize.h"
 
 /* After btree_init the pages should be marked dirty via Pager. */
 
@@ -51,104 +51,6 @@ bool btree_init_internal(void *page_data, uint32_t rightmost_child_pointer) {
     internal_specific->rightmost_child_pointer = rightmost_child_pointer;
 
     return true;
-}
-
-/* Return available capacity to store actual data or (for internal nodes) storing
- * pointers to other pages. */
-uint16_t btree_get_available_capacity(void *page_data) {
-    if (!page_data) {
-        return UINT16_MAX;
-    }
-
-    uint16_t reserved_space = 0;
-    uint8_t node_type;
-    uint16_t cell_count;
-    uint16_t free_space_offset;
-    if (!get_node_type(page_data, &node_type)){
-        return UINT16_MAX;
-    }
-
-    if (!get_cell_count(page_data, &cell_count)) {
-        return UINT16_MAX;
-    }
-
-    if (!get_free_space_offset(page_data, &free_space_offset)) {
-        return UINT16_MAX;
-    }
-
-    if (node_type) {
-        reserved_space += BTREE_INTERNAL_NODE_SIZE;
-    } else {
-        reserved_space += BTREE_LEAF_NODE_SIZE;
-    }
-
-    reserved_space += cell_count * 2;
-
-    return free_space_offset - reserved_space;
-}
-
-/* Check if there's enough space to store payload + its pointer/offset
- * in the available space. */
-bool btree_has_enough_space(void *page_data, uint16_t payload_size) {
-    uint16_t available_space = btree_get_available_capacity(page_data);
-    if (available_space == UINT16_MAX) {
-        return false;
-    }
-
-    uint16_t needed_space = payload_size + 2;
-
-    if (available_space >= needed_space) {
-        return true;
-    }
-
-    return false;
-}
-
-/* Comparing BTree Internal/Leaf Node Keys. */
-bool btree_compare(Value **values, const void *key, void *context, int *result) {
-    if (!values || !key || !context || !result) {
-        return false;
-    }
-
-    KeyExtractionContext *ctx = (KeyExtractionContext *) context;
-    const Value **key_val = (Value **) key;
-
-    /* Compare both same index columns. (With upper limit the search keys used, not
-    the amount of keys the BTree is organized with) */
-    for (uint32_t i = 0; i < ctx->num_search_keys; i++) {
-        if (!value_compare(values[i], key_val[i], result)) {
-            return false;
-        }
-
-        // result == -1 for values[i] < key_val
-        // result == 1 for values[i] > key_val
-
-        /* If it isn't equal, don't bother comparing other columns. */
-        if (*result != 0) {
-            break;
-        } 
-    }
-
-    return true;
-}
-
-/* Extract keys from either Internal/Leaf node.*/
-Value **btree_extract_data(void *page_data, uint16_t cell_pointer, void *context) {
-    if (!page_data || !context) {
-        return NULL;
-    }
-
-    uint8_t node_type;
-    if (!get_node_type(page_data, &node_type)) {
-        return NULL;
-    }
-
-    void *ids;
-    if (!get_cell_id(page_data, cell_pointer, context, &ids)) {
-        return NULL;
-    }
-
-    return (Value **) ids;
 }
 
 /* Lower Bound Binary Search.
@@ -247,7 +149,8 @@ uint16_t btree_lower_bound(void *page_data, const void *key, void *context) {
     return result_index;
 }
 
-Page *find_leaf_node(Pager *pager, uint32_t root_page_num, const void *key, void *context) {
+/* Find leaf node position according to your key. */
+Page *btree_find_leaf_node(Pager *pager, uint32_t root_page_num, const void *key, void *context) {
     if (!pager || !key || !context) {
         return NULL;
     }
@@ -279,9 +182,7 @@ Page *find_leaf_node(Pager *pager, uint32_t root_page_num, const void *key, void
     uint32_t child_pointer = 0;
     uint16_t cell_count = 0;
 
-    /* While node is Internal. */
     while (1) {
-        
         if (!get_node_type(page->page_data, &node_type)) {
             pager_evict_page(pager, page->page_num);
             return NULL;
@@ -298,6 +199,11 @@ Page *find_leaf_node(Pager *pager, uint32_t root_page_num, const void *key, void
         }
 
         result_index = btree_lower_bound(page->page_data, key, context);
+        if (result_index == UINT16_MAX) {
+            fprintf(stderr, "btree_find_leaf_node: Something went wrong.\n");
+            pager_evict_page(pager, page->page_num);
+            return NULL;
+        }
 
         if (result_index == cell_count) {
             if (!get_rightmost_child_pointer(page->page_data, &child_pointer)) {
@@ -337,6 +243,78 @@ Page *find_leaf_node(Pager *pager, uint32_t root_page_num, const void *key, void
             pager_evict_page(pager, page->page_num);
             return NULL;
         }
-
     }
+}
+
+/* Insert metadata into leaf node.
+ * Create new Cell Pointer, store [Keys + Row] into page_data,
+ * update cell_count, free_space_offset and mark page dirty. */
+bool btree_leaf_node_insert(Page *page, void *payload, void *context) {
+    if (!page || !payload || !context) {
+        return false;
+    }
+    bool success = false;
+
+    KeyExtractionContext *ctx = (KeyExtractionContext *) context;
+
+    Value **row_keys = btree_extract_row_keys(payload, context);
+    if (!row_keys) {
+        return false;
+    }
+    uint16_t key_size = btree_get_key_size((void *) row_keys, context);
+
+    if (!btree_has_enough_space((void *) page->page_data, sizeof(Row)+key_size)) {
+        goto cleanup;
+    }
+    
+    uint16_t free_space_offset = PAGE_SIZE;
+    if (!get_free_space_offset((void *) page->page_data, &free_space_offset)) {
+        goto cleanup;
+    }
+    uint16_t write_offset = free_space_offset - (sizeof(Row)+key_size);
+
+
+    uint16_t result_index = btree_lower_bound((void *) page->page_data, row_keys, context);
+    if (result_index == UINT16_MAX) {
+        fprintf(stderr, "btree_leaf_node_insert: Something went wrong.\n");
+        goto cleanup;
+    }
+    
+    /* Shifting all cell pointers from result_index and over. */
+    if (!shift_cell_pointers((void *) page->page_data, result_index)) {
+        goto cleanup;
+    }
+
+    /* Set result index as cell pointer in that free space we just created by
+     * shifting all cell pointers one position over. */
+    if (!set_cell_pointer((void *) page->page_data, result_index, write_offset)) {
+        goto cleanup;
+    }
+
+    /* Serialize and write payload onto page. */
+    if (!serialize_cell_data((void *) page->page_data, write_offset, payload, row_keys, context)) {
+        goto cleanup;
+    }
+
+    /* Increment cell count. */
+    uint16_t cell_count = 0;
+    if (!get_cell_count((void *) page->page_data, &cell_count)
+        || !set_cell_count((void *) page->page_data, cell_count+1)) {
+        goto cleanup;
+    }
+
+    /* Update free space offset. */
+    if (!set_free_space_offset((void *) page->page_data, write_offset)) {
+        goto cleanup;
+    }
+
+    if (!page_mark_dirty(page)) {
+        goto cleanup;
+    }
+
+    success = true;
+    cleanup:
+    value_free_array(row_keys, ctx->index_key->num_columns);
+
+    return success;
 }
