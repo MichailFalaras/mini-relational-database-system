@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "data_types.h"
 
 // Used for creation of a temporary page placeholder for the newly created indexes
 #define INVALID_ROOT_PAGE UINT32_MAX
