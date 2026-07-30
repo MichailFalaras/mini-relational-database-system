@@ -9,6 +9,8 @@
 #define MAX_PAGES 100
 
 typedef struct value Value;
+typedef struct pager Pager;
+typedef struct page Page;
 
 /* BTree Common Node Header.
  * node_type:
@@ -77,19 +79,11 @@ extern bool btree_init_empty_leaf(void *page_data);
 
 extern bool btree_init_internal(void *page_data, uint32_t rightmost_child_pointer);
 
-// Validate B+ Tree node capacity
-extern uint16_t btree_get_available_capacity(void *page_data);
-
-extern bool btree_has_enough_space(void *page_data, uint16_t payload_size);
-
-// Compare B+ Tree index key
-extern bool btree_compare(Value **values, const void *key, void *context, int *result);
-
-// Extract key from Internal/Leaf node
-extern Value **btree_extract_data(void *page_data, uint16_t cell_pointer, void *context);
-
-// Perform Lower-bound Binary Search on the node's index key values
 extern uint16_t btree_lower_bound(void *page_data, const void *key, void *context);
+
+extern Page *btree_find_leaf_node(Pager *pager, uint32_t root_page_num, const void *key, void *context);
+
+extern bool btree_leaf_node_insert(Pager *pager, Page *page, void *payload, void *context);
 
 // Traverse B+ Tree
 extern bool btree_traverse_reachable_pages(const Index *index, Pager *pager, BTreePageCollection *visited_pages);

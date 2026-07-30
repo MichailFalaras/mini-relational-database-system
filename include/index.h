@@ -12,6 +12,7 @@
 #define SYSTEM_CATALOG_PAGE_NUM  1
 typedef struct pager Pager;
 typedef struct schema Schema;
+typedef enum data_type DataType;
 
 /* Index type. */
 typedef enum index_type {
@@ -49,6 +50,7 @@ typedef struct key_extraction_context {
     /* Not amount of search keys the BTree is organized with, but the amount
     of keys used to traverse the BTree.*/
     uint32_t num_search_keys; 
+    bool is_unique; // PRIMARY KEY or UNIQUE
 } KeyExtractionContext;
 
 /* Index metadata operations */
