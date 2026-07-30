@@ -8,8 +8,6 @@ uint16_t btree_get_key_size(const void *keys, void *context);
 
 Value **btree_extract_row_keys(void *payload, void *context);
 
-Value **btree_extract_data(void *page_data, uint16_t cell_pointer, void *context);
-
 uint16_t btree_get_available_capacity(void *page_data);
 
 bool btree_has_enough_space(void *page_data, uint16_t payload_size);

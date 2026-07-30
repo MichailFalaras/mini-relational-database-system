@@ -51,25 +51,6 @@ Value **btree_extract_row_keys(void *payload, void *context) {
     return row_keys;
 }
 
-/* Extract keys from ALREADY EXISTING Internal/Leaf node.*/
-Value **btree_extract_data(void *page_data, uint16_t cell_pointer, void *context) {
-    if (!page_data || !context) {
-        return NULL;
-    }
-
-    uint8_t node_type;
-    if (!get_node_type(page_data, &node_type)) {
-        return NULL;
-    }
-
-    void *ids;
-    if (!get_cell_id(page_data, cell_pointer, context, &ids)) {
-        return NULL;
-    }
-
-    return (Value **) ids;
-}
-
 /* Return available capacity to store actual data or (for internal nodes) storing
  * pointers to other pages. */
 uint16_t btree_get_available_capacity(void *page_data) {
@@ -504,7 +485,7 @@ bool set_cell_id(void *page_data, uint16_t cell_pointer, void *context, void *id
 
     uint32_t buf_size;
     for (uint32_t i = 0; i < ctx->index_key->num_columns; i++) {
-        uint32_t buf_size = get_data_type_size(values[i]->type); 
+        buf_size = get_data_type_size(values[i]->type); 
         
         uint32_t current_offset = (uint32_t) (cell_content - (uint8_t *)page_data);
         if (current_offset + buf_size > PAGE_SIZE) {
