@@ -49,4 +49,10 @@ bool set_rightmost_child_pointer(void *page_data, uint32_t rightmost_child_point
 bool get_leaf_sibling_pointers(void *page_data, uint32_t *previous, uint32_t *next);
 bool set_leaf_sibling_pointers(void *page_data, uint32_t previous, uint32_t next);
 
+/* Helper that checks the page collection for pages that have already been visited */
+extern bool btree_collection_contains(const BTreePageCollection *visited_pages, uint32_t page_num);
+
+/* Helper that recursively traverses internal nodes, and backtracking at leaf nodes */
+extern bool btree_traverse_page_recursive(uint32_t page_num, Pager *pager, BTreePageCollection *visited_pages);
+
 #endif

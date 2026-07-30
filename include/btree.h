@@ -6,6 +6,7 @@
 
 #define BTREE_INTERNAL_NODE_SIZE 14
 #define BTREE_LEAF_NODE_SIZE 18
+#define MAX_PAGES 100
 
 typedef struct value Value;
 typedef struct pager Pager;
@@ -64,6 +65,16 @@ typedef struct __attribute__((packed)) system_catalog_leaf_node_metadata {
     /* SQL Query directly memcpy'd onto page's page_data. */
 } SystemCatalogLeafNodeMetadata;
 
+
+// Traversal-related structure that keeps track of the visited pages 
+// during the Index traversal
+typedef struct btree_page_collection {
+    uint32_t page_numbers[MAX_PAGES];
+    uint32_t count;
+} BTreePageCollection;
+
+
+// Create B+ Tree nodes
 extern bool btree_init_empty_leaf(void *page_data);
 
 extern bool btree_init_internal(void *page_data, uint32_t rightmost_child_pointer);
@@ -73,5 +84,8 @@ extern uint16_t btree_lower_bound(void *page_data, const void *key, void *contex
 extern Page *btree_find_leaf_node(Pager *pager, uint32_t root_page_num, const void *key, void *context);
 
 extern bool btree_leaf_node_insert(Pager *pager, Page *page, void *payload, void *context);
+
+// Traverse B+ Tree
+extern bool btree_traverse_reachable_pages(const Index *index, Pager *pager, BTreePageCollection *visited_pages);
 
 #endif

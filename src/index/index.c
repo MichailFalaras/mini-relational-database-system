@@ -167,7 +167,7 @@ bool index_key_matches_key(const Index *index, const uint32_t *column_ids, uint3
 }
 
 /* Check if Index key matches a prefix of columns */
-bool index_key_matches_prefix( const Index *index, const uint32_t *column_ids, uint32_t num_columns) {
+bool index_key_matches_prefix(const Index *index, const uint32_t *column_ids, uint32_t num_columns) {
     if (!index || 
         !index->key || 
         !index->key->column_index_array ||
@@ -283,4 +283,177 @@ rollback:
 
     return NULL;
 
+}
+
+/* Truncate physical Index 
+
+ * Failure behavior:
+ *
+ * Validation or traversal failure causes no modifications.
+ *
+ * The root is reinitialized before descendant pages are released,
+ * ensuring that the index remains a valid empty tree.
+ *
+ * If one or more descendant releases fail, the function attempts all
+ * remaining releases and returns false. Pages that could not be released
+ * remain allocated but unreachable. Rollback is not currently supported.
+ */
+bool index_truncate(Index *index, Pager *pager) {
+    if (!index || 
+        !index->key || 
+        !index->key->column_index_array ||
+        index->key->num_columns == 0) {
+        printf("index_truncate: Invalid input Index.\n");
+        return false;
+    }
+
+    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+        printf("index_truncate: Invalid or uninitialized pager.\n");
+        return false;
+    }
+
+    if (index->root_page_num <= SYSTEM_CATALOG_PAGE_NUM ||
+        index->root_page_num >= pager->num_pages ||
+        index->root_page_num >= MAX_PAGES) {
+        printf("index_truncate: Invalid root page number.\n");
+        return false;
+    }
+
+    BTreePageCollection *visited_pages = (BTreePageCollection *) calloc(1, sizeof(BTreePageCollection));
+    if (!visited_pages) {
+        printf("index_truncate: Couldn't allocate page collection.\n");
+        return false;
+    }
+
+    // Traverse Index B+ Tree
+    if (!btree_traverse_reachable_pages(index, pager, visited_pages)) {
+        printf("index_truncate: Couldn't traverse Index B+ Tree.\n");
+        free(visited_pages);
+        return false;
+    }
+
+    
+    Page *root_page = pager_get_page(pager, index->root_page_num);
+    if (!root_page) {
+        printf("index_truncate: Couldn't load root page.\n");
+        free(visited_pages);
+        return false;
+    }
+
+    // Clearing root page's data
+    if (!page_clear(pager, root_page)) {
+        printf("index_trucate: Index root page couldn't not be cleared.\n");
+        free(visited_pages);
+        return false;
+    }
+
+    // Re-initializing the index B+ Tree
+    if (!btree_init_empty_leaf(root_page->page_data)) {
+        printf("index_truncate: Could not clear root page.\n");
+        free(visited_pages);
+        return false;
+    }
+
+    if (!page_mark_dirty(root_page)) {
+        printf("index_truncate: Could not mark root dirty.\n");
+        free(visited_pages);
+        return false;
+    }
+
+    // Attempting to release all non-root pages
+    // ROLLBACK IS CURRENTLY UNAVAILABLE -> Returns false if any page release fails
+    bool all_released = true;
+    for (uint32_t i = 0; i < visited_pages->count; i++) {
+        uint32_t page_num = visited_pages->page_numbers[i];
+
+        if (page_num == index->root_page_num) {
+            continue;
+        }
+
+        if(!pager_release_page(pager, page_num)) {
+            printf("index_truncate: Could not release page %u\n", page_num);
+            all_released = false;
+        }
+        
+    }
+
+    free(visited_pages);
+    return all_released;
+}
+
+
+/*
+ * Drop physical index.
+ *
+ * Failure behavior:
+ *
+ * Validation or traversal failure causes no modifications.
+ *
+ * Pages are released in reverse traversal order, so descendants are
+ * released before parents and the root is released last.
+ *
+ * Once release begins, rollback is unavailable. If any release fails,
+ * all remaining releases are still attempted and the function returns
+ * false. The index metadata is retained, but the partially released
+ * physical index must not be used.
+ *
+ * Metadata is freed only after every index page is released successfully.
+ */
+bool index_drop(Index *index, Pager *pager) {
+    if (!index || 
+        !index->key || 
+        !index->key->column_index_array ||
+        index->key->num_columns == 0) {
+        printf("index_drop: Invalid input Index.\n");
+        return false;
+    }
+
+    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+        printf("index_drop: Invalid or uninitialized pager.\n");
+        return false;
+    }
+
+    if (index->root_page_num <= SYSTEM_CATALOG_PAGE_NUM ||
+        index->root_page_num >= pager->num_pages ||
+        index->root_page_num >= MAX_PAGES) {
+        printf("index_drop: Invalid root page number.\n");
+        return false;
+    }
+
+    BTreePageCollection *visited_pages = (BTreePageCollection *) calloc(1, sizeof(BTreePageCollection));
+    if (!visited_pages) {
+        printf("index_drop: Couldn't allocate page collection.\n");
+        return false;
+    }
+
+    // Traverse Index B+ Tree
+    if (!btree_traverse_reachable_pages(index, pager, visited_pages)) {
+        printf("index_drop: Couldn't traverse Index B+ Tree.\n");
+        free(visited_pages);
+        return false;
+    }
+
+    // Attempting to release all non-root pages
+    // ROLLBACK IS CURRENTLY UNAVAILABLE -> Returns false if any page release fails
+    // Releasing descendands nodes before root node
+    bool all_released = true;
+    
+    for (uint32_t i = visited_pages->count; i > 0; i--) {
+        uint32_t page_num = visited_pages->page_numbers[i - 1];
+
+        if (!pager_release_page(pager, page_num)) {
+            printf("index_drop: Could not release page %u.\n", page_num);
+            all_released = false;
+        }
+    }
+
+    free(visited_pages);
+
+    if (!all_released) {
+        return false;
+    }
+
+    // Free index metadata, only if the whole physical index B+ Tree was released successfully.
+    index_free(index);
+    return all_released;
 }

@@ -7,6 +7,7 @@
 #include "../data_types/data_types_utils.h"
 #include "btree_utils.h"
 #include "../../include/page.h"
+#include "../../include/pager.h"
 
 /* Get key size. */
 uint16_t btree_get_key_size(const void *keys, void *context) {
@@ -672,4 +673,117 @@ bool set_leaf_sibling_pointers(void *page_data, uint32_t previous, uint32_t next
     memcpy(leaf_node + sizeof(uint32_t), &next, sizeof(uint32_t));
     
     return true;
+}
+
+
+/* Helper that checks the page collection for pages that have already been visited */
+bool btree_collection_contains(const BTreePageCollection *visited_pages, uint32_t page_num) {
+    if (!visited_pages) {
+        return false;
+    }
+
+    for (uint32_t i = 0; i < visited_pages->count; i++) {
+        if (visited_pages->page_numbers[i] == page_num) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// Helper that recursively traverses internal nodes, and backtracking at leaf nodes
+bool btree_traverse_page_recursive(uint32_t page_num, Pager *pager, BTreePageCollection *visited_pages) {
+    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+        printf("btree_traverse_page_recursive: Invalid Pager.\n");
+        return false;
+    }
+
+    if (!visited_pages) {
+        printf("btree_traverse_page_recursive: Invalid page collection.\n");
+        return false;
+    }
+
+    if (page_num <= SYSTEM_CATALOG_PAGE_NUM ||
+        page_num >= pager->num_pages ||
+        page_num >= MAX_PAGES) {
+        printf("btree_traverse_page_recursive: Invalid root page number.\n");
+        return false;
+    }
+
+    // Checking for duplicate pages or cyclic page connections 
+    if (btree_collection_contains(visited_pages, page_num)) {
+        printf("btree_traverse_page_recursive: Cycle or duplicate page reference detected.\n");
+        return false;
+    }
+
+    if (visited_pages->count >= MAX_PAGES) {
+        printf("btree_traverse_page_recursive: Page collection is full.\n");
+        return false;
+    }
+
+    // Retrieve current page
+    Page *page = pager_get_page(pager, page_num);
+    if (!page) {
+        printf("btree_traverse_page_recursive: Invalid page.\n");
+        return false;
+    }
+
+    // Find node type
+    uint8_t node_type;
+    if (!get_node_type(page->page_data, &node_type)) {
+        printf("btree_traverse_page_recursive: Couldn't get node/page type (internal/leaf).\n");
+        return false;
+    }
+
+    if (node_type != 0 && node_type != 1) {
+        printf("btree_traverse_page_recursive: Invalid node type.\n");
+        return false;
+    }
+
+    // Record current page as visited
+    visited_pages->page_numbers[visited_pages->count] = page_num;
+    visited_pages->count++;
+
+    // Leaf node
+    if (node_type == 0) {
+        return true;
+    }
+
+    // Internal node
+    uint16_t cell_count;
+    if(!get_cell_count(page->page_data, &cell_count)) {
+        printf("btree_traverse_page_recursive: Couldn't get node's number of cells.\n");
+        return false;
+    }
+    
+    // Traverse all cells, and:
+    // Extract cell pointer toward the cell data (pointer/child-page-num + key)
+    // Visit cell data and call the recursive function for the corresponding child page
+    for (uint16_t i = 0; i < cell_count; i++) {
+        uint16_t cell_pointer;
+
+        if(!get_cell_pointer(page->page_data, i, &cell_pointer)) {
+            printf("btree_traverse_page_recursive: Couldn't get cell pointer for cell %u.\n", (unsigned) i);
+            return false;
+        }
+
+        uint32_t child_page_num;
+        if (!get_cell_child_pointer(page->page_data, cell_pointer, &child_page_num)) {
+            printf("btree_traverse_page_recursive: Couldn't get child pointer for cell %u.\n", (unsigned) i);
+            return false;
+        }
+
+        if (!btree_traverse_page_recursive(child_page_num, pager, visited_pages)) {
+            return false;
+        }
+    }
+
+    // Visit the rightmost child page (which is a standard internal node field)
+    uint32_t rightmost_child_page_num;
+    if (!get_rightmost_child_pointer(page->page_data, &rightmost_child_page_num)) {
+        printf("btree_traverse_page_recursive: Couldn't read rightmost child pointer.\n");
+        return false;
+    }
+
+    return btree_traverse_page_recursive(rightmost_child_page_num, pager, visited_pages);
 }
