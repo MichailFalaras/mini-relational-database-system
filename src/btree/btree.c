@@ -105,12 +105,13 @@ uint16_t btree_lower_bound(void *page_data, const void *key, void *context) {
             break;
         }
 
-        /* Extract data from either internal/leaf node. */
-        values = btree_extract_data(page_data, cell_pointer, context);
-        if (!values) {
+        /* Extract keys from either internal/leaf node. */
+        void *ids;
+        if (!get_cell_id(page_data, cell_pointer, context, &ids)) {
             result_index = UINT16_MAX;
             break;
         }
+        values = (Value **) ids;
 
         /* Compare columns lexicographically. */
         if (!btree_compare(values, key, context, &result)) {
@@ -121,17 +122,6 @@ uint16_t btree_lower_bound(void *page_data, const void *key, void *context) {
        
         /* Continue the loop just in case you find the LOWER BOUND. */
         if (result >= 0) {
-            /* Check if keys are supposed to be UNIQUE.
-             * If they are UNIQUE and result came back 0, which means
-             * key equal to the target key was found.
-             * No duplicates are allowed then. */
-            if (ctx->is_unique == true && result == 0) {
-                fprintf(stderr, "btree_lower_bound: Duplicate key found.\n");
-                result_index = UINT16_MAX; // to signify error
-                value_free_array(values, ctx->index_key->num_columns);
-                break;
-            }
-
             result_index = mid;
             if (mid == 0) {
                 value_free_array(values, ctx->index_key->num_columns);
@@ -182,6 +172,7 @@ Page *btree_find_leaf_node(Pager *pager, uint32_t root_page_num, const void *key
     uint32_t child_pointer = 0;
     uint16_t cell_count = 0;
 
+    /* Continue searching in BTree until you find a leaf node. */
     while (1) {
         if (!get_node_type(page->page_data, &node_type)) {
             pager_evict_page(pager, page->page_num);
@@ -249,7 +240,7 @@ Page *btree_find_leaf_node(Pager *pager, uint32_t root_page_num, const void *key
 /* Insert metadata into leaf node.
  * Create new Cell Pointer, store [Keys + Row] into page_data,
  * update cell_count, free_space_offset and mark page dirty. */
-bool btree_leaf_node_insert(Page *page, void *payload, void *context) {
+bool btree_leaf_node_insert(Pager *pager, Page *page, void *payload, void *context) {
     if (!page || !payload || !context) {
         return false;
     }
@@ -257,13 +248,18 @@ bool btree_leaf_node_insert(Page *page, void *payload, void *context) {
 
     KeyExtractionContext *ctx = (KeyExtractionContext *) context;
 
+    /* Extract Row's keys according to the IndexKey. */
     Value **row_keys = btree_extract_row_keys(payload, context);
     if (!row_keys) {
         return false;
     }
+    /* Get its size. */
     uint16_t key_size = btree_get_key_size((void *) row_keys, context);
 
+    /* Check if there's enough space to add [ Cell Pointer ] in the header,
+     * and [ Keys + Row ]. */
     if (!btree_has_enough_space((void *) page->page_data, sizeof(Row)+key_size)) {
+        // split if only if there's no other space in page
         goto cleanup;
     }
     
@@ -271,15 +267,55 @@ bool btree_leaf_node_insert(Page *page, void *payload, void *context) {
     if (!get_free_space_offset((void *) page->page_data, &free_space_offset)) {
         goto cleanup;
     }
+    /* Get write position. */
     uint16_t write_offset = free_space_offset - (sizeof(Row)+key_size);
 
+    /* Get cell count. */
+    uint16_t cell_count;
+    if (!get_cell_count(page->page_data, &cell_count)) {
+        goto cleanup;
+    }
 
+    /* Find correct Cell Pointer position by comparing Row's keys with already
+     * existing keys in the page. */
     uint16_t result_index = btree_lower_bound((void *) page->page_data, row_keys, context);
     if (result_index == UINT16_MAX) {
         fprintf(stderr, "btree_leaf_node_insert: Something went wrong.\n");
         goto cleanup;
     }
     
+    Value **values = NULL;
+    /* If at least one column is PRIMARY_KEY or UNIQUE (Composite Index)
+     * then the whole key is unique. Therefore, if the key of the
+     * row we want to add to the page has the same key as the row
+     * already in its position then we have a duplicate. */
+    if (ctx->is_unique == true && result_index < cell_count) {
+        /* Get already existing Cell Pointer's value in the position we want to
+        * add a new cell pointer..*/
+        uint16_t cell_pointer;
+        if (!get_cell_pointer(page->page_data, result_index, &cell_pointer)) {
+            goto cleanup;
+        }
+
+        /* Follow Cell Pointer to its Cell Contents and retrieve keys. */
+        void *ids;
+        if (!get_cell_id(page->page_data, cell_pointer, context, &ids)) {
+            goto cleanup;
+        }
+        values = (Value **) ids;
+    
+        /* Check if they are the same. */
+        int result;
+        if (!btree_compare(values, (void **) row_keys, context, &result)) {
+            goto cleanup;
+        }
+
+        if (result == 0) {
+            fprintf(stderr, "btree_leaf_node_insert: Duplicate key found.\n");
+            goto cleanup;
+        }
+    }
+
     /* Shifting all cell pointers from result_index and over. */
     if (!shift_cell_pointers((void *) page->page_data, result_index)) {
         goto cleanup;
@@ -297,9 +333,7 @@ bool btree_leaf_node_insert(Page *page, void *payload, void *context) {
     }
 
     /* Increment cell count. */
-    uint16_t cell_count = 0;
-    if (!get_cell_count((void *) page->page_data, &cell_count)
-        || !set_cell_count((void *) page->page_data, cell_count+1)) {
+    if (!set_cell_count((void *) page->page_data, cell_count+1)) {
         goto cleanup;
     }
 
@@ -308,13 +342,19 @@ bool btree_leaf_node_insert(Page *page, void *payload, void *context) {
         goto cleanup;
     }
 
-    if (!page_mark_dirty(page)) {
+    if (!page_mark_dirty(page) || !page_touch(pager, page)) {
         goto cleanup;
     }
 
     success = true;
     cleanup:
-    value_free_array(row_keys, ctx->index_key->num_columns);
+    if (values) {
+        value_free_array(values, ctx->index_key->num_columns);
+    }
+
+    if (row_keys) {
+        value_free_array(row_keys, ctx->index_key->num_columns);
+    }
 
     return success;
 }

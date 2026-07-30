@@ -72,6 +72,6 @@ extern uint16_t btree_lower_bound(void *page_data, const void *key, void *contex
 
 extern Page *btree_find_leaf_node(Pager *pager, uint32_t root_page_num, const void *key, void *context);
 
-extern bool btree_leaf_node_insert(Page *page, void *payload, void *context);
+extern bool btree_leaf_node_insert(Pager *pager, Page *page, void *payload, void *context);
 
 #endif
