@@ -536,7 +536,7 @@ uint32_t get_data_type_size(DataType type) {
         // Don't know about `bool null_val`
         default:
             printf("get_data_type_size: Unsupported data type.\n");
-            return NULL;
+            return 0;
     }
 }
 

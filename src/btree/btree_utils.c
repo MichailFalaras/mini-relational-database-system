@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include "../../include/index.h"
@@ -8,6 +9,7 @@
 #include "btree_utils.h"
 #include "../../include/page.h"
 #include "../../include/pager.h"
+#include "../../include/serialize.h"
 
 /* Get key size. */
 uint16_t btree_get_key_size(const void *keys, void *context) {
@@ -111,7 +113,7 @@ bool btree_compare(Value **values, const void *key, void *context, int *result) 
     }
 
     KeyExtractionContext *ctx = (KeyExtractionContext *) context;
-    const Value **key_val = (Value **) key;
+    Value **key_val = (Value **) key;
 
     /* Compare both same index columns. (With upper limit the search keys used, not
     the amount of keys the BTree is organized with) */

@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include "../../include/btree.h"
 #include "../../include/pager.h"
+#include "../src/pager/pager_utils.h"
 #include "../../include/page.h"
 #include "../../include/pager.h"
 #include "../../include/data_types.h"
