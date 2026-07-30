@@ -4,6 +4,18 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+uint16_t btree_get_key_size(const void *keys, void *context);
+
+Value **btree_extract_row_keys(void *payload, void *context);
+
+uint16_t btree_get_available_capacity(void *page_data);
+
+bool btree_has_enough_space(void *page_data, uint16_t payload_size);
+
+bool btree_compare(Value **values, const void *key, void *context, int *result);
+
+bool shift_cell_pointers(void *page_data, uint16_t index);
+
 bool get_node_type(void *page_data, uint8_t *node_type);
 bool set_node_type(void *page_data, uint8_t node_type);
 
