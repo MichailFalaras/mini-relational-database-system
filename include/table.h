@@ -65,7 +65,7 @@ extern bool table_drop(Table *table, Pager *pager);
 
 extern bool table_truncate(Table *table, Pager *pager);
 
-extern bool table_create_index(Table *table, const Index *new_index, Pager *page);
+extern bool table_create_index(Table *table, const char *index_name, IndexType type, const IndexKey *key, Pager *page);
 
 extern bool table_drop_index(Table *table, const char *index_name, Pager *page);
 

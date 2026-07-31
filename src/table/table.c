@@ -7,7 +7,8 @@
 #include "../schema/schema_utils.h"
 #include "../../include/constraints.h"
 #include "../../include/index.h"
-#include"../index/index_utils.h"
+#include "../index/index_utils.h"
+#include "../../include/pager.h"
 
 
 /* Creation of logical Table struct */
@@ -475,5 +476,264 @@ bool table_alter_modify_col(Table *table, const Database *db, const char *old_co
         return false;
     }
 
+    return true;
+}
+
+/* Create Index for a Table */
+bool table_create_index(Table *table, const char *index_name, IndexType type, const IndexKey *key, Pager *pager) {
+    // Validate inputs
+    if (!table || !table->table_schema) {
+        printf("table_create_index: Input table is NULL.\n");
+        return false;
+    }
+
+    if (!table->secondary_indexes) {
+        printf("table_create_index: Secondary index array is NULL.\n");
+        return false;
+    }
+
+    if (!index_name || index_name[0] == '\0') {
+        printf("table_create_index: Invalid input index name.\n");
+        return false;
+    }
+
+    if (type != PRIMARY_INDEX && type != SECONDARY_INDEX) {
+        printf("table_create_index: Invalid index type.\n");
+        return false;
+    }
+
+    if (!key || !key->column_index_array || key->num_columns == 0) {
+        printf("table_create_index: Invalid input index key.\n");
+        return false;
+    }
+
+    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+        printf("table_create_index: Invalid or uninitialized Pager.\n");
+        return false;
+    }
+
+    // Validate that the key contains valid and unique table column positions
+    for (uint32_t i = 0; i < key->num_columns; i++) {
+        uint32_t column_position = key->column_index_array[i];
+
+        if (column_position >= table->table_schema->num_columns) {
+            printf("table_create_index: Indexed column position %u is invalid.\n", column_position);
+            return false;
+        }
+
+        for (uint32_t j = i+1; j < key->num_columns; j++) {
+            if (column_position == key->column_index_array[j]) {
+                printf("table_create_index: Index key contains duplicate columns.\n");
+                return false;
+            }
+        }
+    }
+
+    if (table_find_index(table, index_name)) {
+        printf("table_create_index: Index name already exists.\n");
+        return false;
+    }
+
+    // Checking if the table already has a primary key
+    if (type == PRIMARY_INDEX && table->primary_index) {
+        printf("table_create_index: Table already has PRIMARY KEY index.\n");
+        return false;
+    }
+
+    // Checking if the table is at full capacity of secondary indexes
+    if (type == SECONDARY_INDEX && table->total_secondary_indexes >= MAX_INDEXES) {
+        printf("table_create_index: Full capacity of secondary Indexes.\n");
+        return false;
+    }
+
+    // Checking if any Secondary index matches the current index key
+    if (type == SECONDARY_INDEX) {
+        for (uint32_t i = 0; i < table->total_secondary_indexes; i++) {
+            Index *curr_index = table->secondary_indexes[i];
+            if (!curr_index) {
+                printf("table_create_index: Secondary index at position %u is NULL.\n", i);
+                return false;
+            }
+            
+            // Check if Secondary index key matches the new index key (duplicate)
+            if (index_key_matches_key(curr_index, key->column_index_array, key->num_columns)) {
+                printf("table_create_index: Secondaty index %u has key that matches the new index key.\n", i);
+                return false;
+            }
+        }
+    }
+
+    Index *index = index_create(index_name, type, key, pager);
+    if (!index) {
+        printf("table_create_index: The table's index could not be created.\n");
+        return false;
+    }
+
+    // Attach PRIMARY/SECONDARY index to Table after successful index creation
+    if (type == PRIMARY_INDEX) {
+        table->primary_index = index;
+    }
+
+    if (type == SECONDARY_INDEX) {
+        table->secondary_indexes[table->total_secondary_indexes] = index;
+        table->total_secondary_indexes++;
+    }
+
+    return true;
+}
+
+
+/*
+ * Drop one physical index from a table.
+ *
+ * Failure behavior:
+ *
+ * Validation or traversal failure causes no table metadata changes.
+ *
+ * If index_drop() fails after page release begins, rollback is
+ * unavailable. The index pointer remains attached to the table, but
+ * the physical index may be partially released and must not be used
+ * until repaired or rebuilt.
+ *
+ * The table pointer is removed only after index_drop() succeeds.
+ */
+bool table_drop_index(Table *table, const char *index_name, Pager *pager) {
+    // Validate inputs
+    if (!table || !table->table_schema) {
+        printf("table_drop_index: Input table is NULL.\n");
+        return false;
+    }
+
+    if (!table->secondary_indexes) {
+        printf("table_drop_index: Secondary index array is NULL.\n");
+        return false;
+    }
+
+    if (!index_name || index_name[0] == '\0') {
+        printf("table_drop_index: Invalid input index name.\n");
+        return false;
+    }
+
+    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+        printf("table_drop_index: Invalid or uninitialized Pager.\n");
+        return false;
+    }
+
+    // Find target index to be dropped
+    Index *index = table_find_index(table, index_name);
+    if (!index) {
+        printf("table_drop_index: Target index doesn't exist.\n");
+        return false;
+    }
+
+    // Handle a PRIMARY INDEX
+    if (index == table->primary_index) {
+        if(!index_drop(index, pager)) {
+            printf("table_drop_index: Primary index could not be dropped.\n");
+            return false;
+        }
+        
+        table->primary_index = NULL;
+        return true;
+    } 
+
+    // Handle a SECONDARY INDEX
+
+    // Firstly, find the index pointer's position in the secondary index array
+    uint32_t target_index_position = MAX_INDEXES;
+
+    for (uint32_t i = 0; i < table->total_secondary_indexes; i++) {
+        if (table->secondary_indexes[i] == index) {
+            target_index_position = i;
+            break;
+        }
+    }
+
+    if (target_index_position == MAX_INDEXES) {
+        printf("table_drop_index: Target Index is not attached to the table.\n");
+        return false;
+    }
+
+    if(!index_drop(index, pager)) {
+        printf("table_drop_index: Secondary index could not be dropped.\n");
+        return false;
+    }
+
+    // Shift secondary index pointers to cover the freed up index pointer
+    for (uint32_t i = target_index_position; i + 1 < table->total_secondary_indexes; i++) {
+        table->secondary_indexes[i] = table->secondary_indexes[i+1];
+    }    
+
+    table->secondary_indexes[table->total_secondary_indexes - 1] = NULL;
+    table->total_secondary_indexes--;
+
+    return true;
+}
+
+
+/*
+ * Truncate all physical indexes of a table.
+ *
+ * Failure behavior:
+ *
+ * Validation failure causes no modifications.
+ *
+ * Indexes are truncated sequentially. If one truncation fails after
+ * earlier indexes have succeeded, rollback is unavailable and the table
+ * may contain indexes in different states. row_count is left unchanged.
+ *
+ * Therefore, a false result after truncation has begun means the table
+ * must not be used until its indexes are repaired or rebuilt.
+ *
+ * row_count is reset to zero only after every index truncation succeeds.
+ */
+bool table_truncate(Table *table, Pager *pager) {
+    // Validate inputs
+    if (!table || !table->table_schema) {
+        printf("table_truncate: Input Table is NULL.\n");
+        return false;
+    }
+
+    if (!table->secondary_indexes) {
+        printf("table_truncate: Secondary Index array is NULL.\n");
+        return false;
+    }
+
+    if (table->total_secondary_indexes > MAX_INDEXES) {
+        printf("table_truncate: Invalid secondary-index count.\n");
+        return false;
+    }
+
+    for (uint32_t i = 0; i < table->total_secondary_indexes; i++) {
+        if (!table->secondary_indexes[i]) {
+            printf("table_truncate: Secondary Index at position %u is NULL.\n", i);
+            return false;
+        }
+    }
+
+    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+        printf("table_truncate: Invalid or uninitialized Pager.\n");
+        return false;
+    }
+
+    // Truncate PRIMARY INDEX
+    if (table->primary_index) {
+        if (!index_truncate(table->primary_index, pager)) {
+            printf("table_truncate: Primary Index could not be truncated.\n");
+            return false;
+        }
+    }
+
+    // Truncate all SECONDARY INDEXES
+    for (uint32_t i = 0; i < table->total_secondary_indexes; i++) {
+        if (!index_truncate(table->secondary_indexes[i], pager)) {
+            printf("table_truncate: Secondary index at position %u could not be "
+                    "truncated; earlier indexes may already be empty and rollback "
+                    "is unavailable.\n", i);
+            return false;
+        }
+    }
+
+    table->row_count = 0;
     return true;
 }
