@@ -4,6 +4,22 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+typedef struct value Value;
+typedef struct btree_page_collection BTreePageCollection;
+typedef struct pager Pager;
+typedef struct page Page;
+
+SplitResult *split_result_create(Page *new_page, void *context);
+
+bool btree_split_cells(Page *original_page, Page *new_page, void *context);
+
+bool btree_transfer_cell(Page *dest, uint16_t dest_cell_index, Page *src, uint16_t src_cell_index,
+                        uint8_t node_type, uint16_t *write_offset, void *context);
+
+Page *btree_compact_page(Pager *pager, Page *old_page, void *context);
+
+uint32_t btree_get_cell_content_size(void *page_data, uint16_t cell_pointer, void *context);
+
 uint16_t btree_get_key_size(const void *keys, void *context);
 
 Value **btree_extract_row_keys(void *payload, void *context);
@@ -13,6 +29,8 @@ uint16_t btree_get_available_capacity(void *page_data);
 bool btree_has_enough_space(void *page_data, uint16_t payload_size);
 
 bool btree_compare(Value **values, const void *key, void *context, int *result);
+
+bool shift_metadata(void *page_data, uint16_t cell_pointer, void *context);
 
 bool shift_cell_pointers(void *page_data, uint16_t index);
 

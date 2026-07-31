@@ -112,5 +112,6 @@ void row_free(Row *row) {
 
         free(row->values);
         free(row);
+        row = NULL;
     }
 }

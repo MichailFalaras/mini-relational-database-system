@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include "../../include/index.h"
@@ -8,6 +9,255 @@
 #include "btree_utils.h"
 #include "../../include/page.h"
 #include "../../include/pager.h"
+#include "../../include/serialize.h"
+
+/* Create SplitResult struct with keys and page number of new page.*/
+SplitResult *split_result_create(Page *new_page, void *context) {
+    if (!new_page || !context) {
+        return NULL;
+    }
+
+    uint16_t cell_pointer = 0;
+    if (!get_cell_pointer((void *) new_page->page_data, 0, &cell_pointer)) {
+        return NULL;
+    }
+
+    void *id;
+    if (!get_cell_id((void *) new_page->page_data, cell_pointer, context, &id)) {
+        return NULL;
+    }
+
+    SplitResult *split_result = (SplitResult *) calloc(1, sizeof(SplitResult));
+    if (!split_result) {
+        return NULL;
+    }
+    split_result->separator_key = id;
+    split_result->new_page_num = new_page->page_num;
+
+    return split_result;
+}
+
+/* BTree splitting cells in half and transfering them. */
+bool btree_split_cells(Page *original_page, Page *new_page, void *context) {
+    if (!original_page || !new_page || !context) {
+        return false;
+    }
+
+    /* Get cell count and split it. */
+    uint16_t cell_count = 0;
+    if (!get_cell_count((void *)original_page->page_data, &cell_count)) {
+        return false;
+    }
+    uint16_t cell_index = cell_count / 2;
+
+    /* Get free space offset of NEW PAGE. (Should be PAGE_SIZE) */
+    uint16_t free_space_offset = 0;
+    if (!get_free_space_offset((void *) new_page->page_data, &free_space_offset)) {
+        return false;
+    }
+    uint16_t write_offset = free_space_offset; 
+
+    /* Get node type of ORIGINAL PAGE. */
+    uint8_t node_type = 0;
+    if (!get_node_type((void *) original_page->page_data, &node_type)) {
+        return false;
+    }
+
+    /* Transfer cells. */
+    for (uint16_t i = cell_index; i < cell_count; i++) {
+        if (!btree_transfer_cell(
+            new_page, i - cell_index,
+            original_page, i,
+            node_type, 
+            &write_offset,
+             context
+            )) {
+            return false;
+        }
+    }
+
+    /* Update cell count on both pages. */
+    if (!set_cell_count((void *) original_page->page_data, cell_index)
+        || !set_cell_count((void *) new_page->page_data, cell_count - cell_index)) {
+        return false;
+    }
+
+    if (!set_free_space_offset((void *) new_page->page_data, write_offset)) {
+        return false;
+    }
+
+    return true;
+}
+
+/* Transfers cells from src to dest. */
+bool btree_transfer_cell(Page *dest, uint16_t dest_cell_index, Page *src, uint16_t src_cell_index,
+    uint8_t node_type, uint16_t *write_offset, void *context) {
+    if (!dest || !src || !write_offset || !context) {
+        return false;
+    }
+    bool success = false;
+    
+    KeyExtractionContext *ctx = (KeyExtractionContext *) context;
+    void *ids = NULL;
+    void *payload = NULL;
+
+    uint16_t cell_pointer;
+    /* Get src's cell pointer in order to get [ Keys + Row ].*/
+    if (!get_cell_pointer((void *) src->page_data, src_cell_index, &cell_pointer)
+        || !get_cell_id((void *) src->page_data, cell_pointer, context, &ids)) {
+        goto cleanup;
+    }
+
+    /* Calculate key size. */
+    uint16_t key_size = btree_get_key_size(ids, context);
+    if (!key_size) {
+        goto cleanup;
+    }
+
+    /* Depending on node type, move back the write offset as many bytes as needed
+     * and write [ Child Pointer + Keys] or [ Keys + Row ]. */
+    if (node_type) {
+        *write_offset -= 4 + key_size;
+
+        uint32_t child_pointer = 0;
+        if (!set_cell_id((void *) dest->page_data, *write_offset, context, ids) 
+            || !get_cell_child_pointer((void *) src->page_data, cell_pointer, &child_pointer)
+            || !set_cell_child_pointer((void *) dest->page_data, *write_offset, child_pointer)) {
+            goto cleanup;
+        }
+
+    } else {
+        *write_offset -= sizeof(Row) + key_size;
+
+        if (!set_cell_id((void *) dest->page_data, *write_offset, context, ids) 
+            || !get_cell_payload((void *) src->page_data, cell_pointer, context, &payload)
+            || !set_cell_payload((void *) dest->page_data, *write_offset, context, payload)) {
+            goto cleanup;
+        }   
+        
+    }
+
+    /* Update dest's cell pointer with the write offset (beg of cell content). */
+    if (!set_cell_pointer((void *) dest->page_data, dest_cell_index, *write_offset)) {
+        goto cleanup;
+    }
+
+    success = true;
+
+    cleanup:
+    /* Free temporary structs. */
+    Row *row = (Row *) payload;
+    row_free(payload);
+    Value **values = (Value **) ids;
+    value_free_array(values, ctx->index_key->num_columns);
+
+    return success;
+}
+
+/* Compact page that has been splitted and has garbage values
+ * spread within the page.*/
+Page *btree_compact_page(Pager *pager, Page *old_page, void *context) {
+    if (!pager || !old_page || !context) {
+        return NULL;
+    }
+
+    /* Create a page through page.h interface so that I can give it
+     * the same page number as the old page without interefering with the Pager.*/
+    Page *new_page = page_create(pager, old_page->page_num);
+    if (!new_page) {
+        return NULL;
+    }
+
+    /* Get node type of old page. */
+    uint8_t node_type = 0;
+    if (!get_node_type((void *) old_page->page_data, &node_type)) {
+        page_free(new_page);
+        return NULL;
+    }
+
+    /* Copy node specific header onto new page. */
+    uint16_t node_specific_offset = node_type ? BTREE_INTERNAL_NODE_SIZE : BTREE_LEAF_NODE_SIZE;
+    memcpy(new_page->page_data, old_page->page_data, node_specific_offset);
+
+    /* Get amount of cells from old page. */
+    uint16_t cell_count = 0;
+    if (!get_cell_count((void *) old_page->page_data, &cell_count)) {
+        page_free(new_page);
+        return NULL;
+    }
+    
+    /* Get free space offset of new page. (Should be PAGE_SIZE)*/
+    uint16_t free_space_offset = 0;
+    if (!get_free_space_offset((void *) new_page->page_data, &free_space_offset)) {
+        page_free(new_page);
+        return NULL;
+    }
+    uint16_t write_offset = free_space_offset;
+
+    /* Transfer all the cells. */
+    for (uint16_t i = 0; i < cell_count; i++) {
+        if (!btree_transfer_cell(
+            new_page, i,
+            old_page, i,
+            node_type, 
+            &write_offset,
+             context
+            )) {
+            page_free(new_page);
+            return NULL;
+        }
+    }
+
+    /* Update cell count and free space offset on new page. */
+    if (!set_cell_count((void *) new_page->page_data, cell_count)
+        || !set_free_space_offset((void *) new_page->page_data, write_offset)) {
+        page_free(new_page);
+        return NULL;
+    }
+
+    /* Cache new page in position of the old page. */
+    pager->pages[old_page->page_num] = new_page;
+    
+    /* Free old page and update pointer to NULL for safety. */
+    page_free(old_page);
+    old_page = NULL;
+
+    return new_page;
+}
+
+/* Get full cell content size. (btree_get_key_size wrapper) */
+uint32_t btree_get_cell_content_size(void *page_data, uint16_t cell_pointer, void *context) {
+    if (!page_data || !context) {
+        return 0;
+    }
+    uint32_t cell_content_size = 0;
+
+    void *id;
+    if (!get_cell_id(page_data, cell_pointer, context, &id)) {
+        return 0;
+    }
+
+    Value **keys = (Value **) id;
+
+    uint16_t key_size = btree_get_key_size(keys, context);
+    if (!key_size) {
+        return 0;
+    }
+    cell_content_size += key_size;
+
+    uint32_t node_type = 0;
+    if (!get_node_type(page_data, &node_type)) {
+        return 0;
+    }
+
+    if (node_type) {
+        cell_content_size += 4;
+    } else {
+        cell_content_size += sizeof(Row);
+    }
+
+    return cell_content_size;
+}
 
 /* Get key size. */
 uint16_t btree_get_key_size(const void *keys, void *context) {
@@ -111,7 +361,7 @@ bool btree_compare(Value **values, const void *key, void *context, int *result) 
     }
 
     KeyExtractionContext *ctx = (KeyExtractionContext *) context;
-    const Value **key_val = (Value **) key;
+    Value **key_val = (Value **) key;
 
     /* Compare both same index columns. (With upper limit the search keys used, not
     the amount of keys the BTree is organized with) */
@@ -127,6 +377,41 @@ bool btree_compare(Value **values, const void *key, void *context, int *result) 
         if (*result != 0) {
             break;
         } 
+    }
+
+    return true;
+}
+
+bool shift_metadata(void *page_data, uint16_t cell_pointer, void *context) {
+    if (!page_data) {
+        return false;
+    }
+
+    uint16_t free_space_offset = PAGE_SIZE;
+    if (!get_free_space_offset(page_data, &free_space_offset)) {
+        return false;
+    }
+
+    if (cell_pointer <= free_space_offset) {
+        return false;
+    }
+
+    uint32_t cell_content_size = btree_get_cell_content_size(page_data, cell_pointer, context);
+    if (!cell_content_size) {
+        return false;
+    }
+
+    uint16_t bytes_to_be_moved = cell_pointer - free_space_offset;
+    uint8_t *offset = (uint8_t *) page_data + free_space_offset; 
+    memmove(
+        offset + cell_content_size,
+        offset,
+        bytes_to_be_moved
+    );
+
+    free_space_offset += cell_content_size;
+    if (!set_free_space_offset(page_data, free_space_offset)) {
+        return false;
     }
 
     return true;
