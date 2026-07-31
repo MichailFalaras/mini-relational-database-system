@@ -581,3 +581,78 @@ bool table_create_index(Table *table, const char *index_name, IndexType type, co
 
     return true;
 }
+
+
+/* Drop Index for a Table */
+bool table_drop_index(Table *table, const char *index_name, Pager *pager) {
+    // Validate inputs
+    if (!table || !table->table_schema) {
+        printf("table_drop_index: Input table is NULL.\n");
+        return false;
+    }
+
+    if (!table->secondary_indexes) {
+        printf("table_drop_index: Secondary index array is NULL.\n");
+        return false;
+    }
+
+    if (!index_name || index_name[0] == '\0') {
+        printf("table_drop_index: Invalid input index name.\n");
+        return false;
+    }
+
+    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+        printf("table_drop_index: Invalid or uninitialized Pager.\n");
+        return false;
+    }
+
+    // Find target index to be dropped
+    Index *index = table_find_index(table, index_name);
+    if (!index) {
+        printf("table_drop_index: Target index doesn't exist.\n");
+        return false;
+    }
+
+    // Handle a PRIMARY INDEX
+    if (index == table->primary_index) {
+        if(!index_drop(index, pager)) {
+            printf("table_drop_index: Primary index could not be dropped.\n");
+            return false;
+        }
+        
+        table->primary_index = NULL;
+        return true;
+    } 
+
+    // Handle a SECONDARY INDEX
+
+    // Firstly, find the index pointer's position in the secondary index array
+    uint32_t target_index_position = MAX_INDEXES;
+
+    for (uint32_t i = 0; i < table->total_secondary_indexes; i++) {
+        if (table->secondary_indexes[i] == index) {
+            target_index_position = i;
+            break;
+        }
+    }
+
+    if (target_index_position == MAX_INDEXES) {
+        printf("table_drop_index: Target Index is not attached to the table.\n");
+        return false;
+    }
+
+    if(!index_drop(index, pager)) {
+        printf("table_drop_index: Secondary index could not be dropped.\n");
+        return false;
+    }
+
+    // Shift secondary index pointers to cover the freed up index pointer
+    for (uint32_t i = target_index_position; i + 1 < table->total_secondary_indexes; i++) {
+        table->secondary_indexes[i] = table->secondary_indexes[i+1];
+    }    
+
+    table->secondary_indexes[table->total_secondary_indexes - 1] = NULL;
+    table->total_secondary_indexes--;
+
+    return true;
+}
