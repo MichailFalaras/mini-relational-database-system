@@ -440,6 +440,31 @@ SplitResult *btree_leaf_node_split(Pager *pager, Page *original_page, void *cont
         || !page_mark_dirty(new_page)) {
         return NULL;
     }
+    
+    /* Get previous and next from the ORIGINAL PAGE.
+     * Connect previous of NEW PAGE with the ORIGINAL PAGE and keep ORIGINAL PAGE'S next.
+     * Keep ORIGINAL PAGE's previous and connect next with the new NEW PAGE. */
+    uint32_t previous = 0, next = 0;
+    if (!get_leaf_previous_pointer((void *) original_page->page_data, &previous)
+        || !get_leaf_next_pointer((void *) original_page->page_data, &next)
+        || !set_leaf_next_pointer((void *) original_page->page_data, new_page->page_num)
+        || !set_leaf_previous_pointer((void *) new_page->page_data, original_page->page_num)
+        || !set_leaf_next_pointer((void *) new_page->page_data, next)) {
+        return NULL;
+    }
+
+    if (next != UINT32_MAX) {
+        /* Load onto cache just in case its in the disk. */
+        Page *right_pointer = pager_get_page(pager, next);
+        if (!right_pointer) {
+            return NULL;
+        }
+
+        if (!set_leaf_previous_pointer((void *) right_pointer->page_data, new_page->page_num)
+            || !page_touch(pager, right_pointer) || !page_mark_dirty(right_pointer)) {
+            return NULL;
+        }
+    }
 
     return split_result_create(new_page, context);
 }

@@ -64,8 +64,11 @@ bool set_cell_payload(void *page_data, uint16_t cell_pointer, void *context, voi
 bool get_rightmost_child_pointer(void *page_data, uint32_t *rightmost_child_pointer);
 bool set_rightmost_child_pointer(void *page_data, uint32_t rightmost_child_pointer);
 
-bool get_leaf_sibling_pointers(void *page_data, uint32_t *previous, uint32_t *next);
-bool set_leaf_sibling_pointers(void *page_data, uint32_t previous, uint32_t next);
+bool get_leaf_previous_pointer(void *page_data, uint32_t *previous);
+bool set_leaf_previous_pointer(void *page_data, uint32_t previous);
+bool get_leaf_next_pointer(void *page_data, uint32_t *next);
+bool set_leaf_next_pointer(void *page_data, uint32_t next);
+
 
 /* Helper that checks the page collection for pages that have already been visited */
 extern bool btree_collection_contains(const BTreePageCollection *visited_pages, uint32_t page_num);

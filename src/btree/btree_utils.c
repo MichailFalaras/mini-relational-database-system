@@ -914,8 +914,50 @@ bool set_rightmost_child_pointer(void *page_data, uint32_t rightmost_child_point
 }
 
 /* Read/write sibling pointers. (LeafNode only) */
-bool get_leaf_sibling_pointers(void *page_data, uint32_t *previous, uint32_t *next) {
-    if (!page_data || !previous || !next) {
+bool get_leaf_previous_pointer(void *page_data, uint32_t *previous) {
+    if (!page_data || !previous) {
+        return false;
+    }
+
+    uint8_t node_type;
+    if (!get_node_type(page_data, &node_type)) {
+        return false;
+    }
+
+    /* No internal nodes. */
+    if (node_type) {
+        return false;
+    }
+    
+    uint8_t *leaf_node = (uint8_t *)page_data + sizeof(BTreeCommonHeader);
+    memcpy(previous, leaf_node, sizeof(uint32_t));
+
+    return true;
+}
+
+bool set_leaf_previous_pointer(void *page_data, uint32_t previous) {
+    if (!page_data) {
+        return false;
+    }
+
+    uint8_t node_type;
+    if (!get_node_type(page_data, &node_type)) {
+        return false;
+    }
+
+    /* No internal nodes. */
+    if (node_type) {
+        return false;
+    }
+    
+    uint8_t *leaf_node = (uint8_t *)page_data + sizeof(BTreeCommonHeader);
+    memcpy(leaf_node, previous, sizeof(uint32_t));
+
+    return true;
+}
+
+bool get_leaf_next_pointer(void *page_data, uint32_t *next) {
+    if (!page_data || !next) {
         return false;
     }
 
@@ -930,14 +972,12 @@ bool get_leaf_sibling_pointers(void *page_data, uint32_t *previous, uint32_t *ne
     }
 
     uint8_t *leaf_node = (uint8_t *)page_data + sizeof(BTreeCommonHeader);
-
-    memcpy(previous, leaf_node, sizeof(uint32_t));
     memcpy(next, leaf_node + sizeof(uint32_t), sizeof(uint32_t));
     
     return true;
 }
 
-bool set_leaf_sibling_pointers(void *page_data, uint32_t previous, uint32_t next) {
+bool set_leaf_next_pointer(void *page_data, uint32_t next) {
     if (!page_data) {
         return false;
     }
@@ -953,13 +993,10 @@ bool set_leaf_sibling_pointers(void *page_data, uint32_t previous, uint32_t next
     }
 
     uint8_t *leaf_node = (uint8_t *)page_data + sizeof(BTreeCommonHeader);
-
-    memcpy(leaf_node, &previous, sizeof(uint32_t));
-    memcpy(leaf_node + sizeof(uint32_t), &next, sizeof(uint32_t));
+    memcpy(leaf_node + sizeof(uint32_t), next, sizeof(uint32_t));
     
     return true;
 }
-
 
 /* Helper that checks the page collection for pages that have already been visited */
 bool btree_collection_contains(const BTreePageCollection *visited_pages, uint32_t page_num) {
