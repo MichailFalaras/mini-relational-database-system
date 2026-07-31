@@ -7,7 +7,8 @@
 #include "../schema/schema_utils.h"
 #include "../../include/constraints.h"
 #include "../../include/index.h"
-#include"../index/index_utils.h"
+#include "../index/index_utils.h"
+#include "../../include/pager.h"
 
 
 /* Creation of logical Table struct */
@@ -473,6 +474,109 @@ bool table_alter_modify_col(Table *table, const Database *db, const char *old_co
     if (!schema_modify_column(table->table_schema, db, old_col_name, new_column_def)) {
         printf("table_alter_modify_col: Target column could not be modified.\n");
         return false;
+    }
+
+    return true;
+}
+
+/* Create Index for the Table */
+bool table_create_index(Table *table, const char *index_name, IndexType type, const IndexKey *key, Pager *pager) {
+    // Validate inputs
+    if (!table || !table->table_schema) {
+        printf("table_create_index: Input table is NULL.\n");
+        return false;
+    }
+
+    if (!table->secondary_indexes) {
+        printf("table_create_index: Secondary index array is NULL.\n");
+        return false;
+    }
+
+    if (!index_name || index_name[0] == '\0') {
+        printf("table_create_index: Invalid input index name.\n");
+        return false;
+    }
+
+    if (type != PRIMARY_INDEX && type != SECONDARY_INDEX) {
+        printf("table_create_index: Invalid index type.\n");
+        return false;
+    }
+
+    if (!key || !key->column_index_array || key->num_columns == 0) {
+        printf("table_create_index: Invalid input index key.\n");
+        return false;
+    }
+
+    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+        printf("table_create_index: Invalid or uninitialized Pager.\n");
+        return false;
+    }
+
+    // Validate that the key contains valid and unique table column positions
+    for (uint32_t i = 0; i < key->num_columns; i++) {
+        uint32_t column_position = key->column_index_array[i];
+
+        if (column_position >= table->table_schema->num_columns) {
+            printf("table_create_index: Indexed column position %u is invalid.\n", column_position);
+            return false;
+        }
+
+        for (uint32_t j = i+1; j < key->num_columns; j++) {
+            if (column_position == key->column_index_array[j]) {
+                printf("table_create_index: Index key contains duplicate columns.\n");
+                return false;
+            }
+        }
+    }
+
+    if (table_find_index(table, index_name)) {
+        printf("table_create_index: Index name already exists.\n");
+        return false;
+    }
+
+    // Checking if the table already has a primary key
+    if (type == PRIMARY_INDEX && table->primary_index) {
+        printf("table_create_index: Table already has PRIMARY KEY index.\n");
+        return false;
+    }
+
+    // Checking if the table is at full capacity of secondary indexes
+    if (type == SECONDARY_INDEX && table->total_secondary_indexes >= MAX_INDEXES) {
+        printf("table_create_index: Full capacity of secondary Indexes.\n");
+        return false;
+    }
+
+    // Checking if any Secondary index matches the current index key
+    if (type == SECONDARY_INDEX) {
+        for (uint32_t i = 0; i < table->total_secondary_indexes; i++) {
+            Index *curr_index = table->secondary_indexes[i];
+            if (!curr_index) {
+                printf("table_create_index: Secondary index at position %u is NULL.\n", i);
+                return false;
+            }
+            
+            // Check if Secondary index key matches the new index key (duplicate)
+            if (index_key_matches_key(curr_index, key->column_index_array, key->num_columns)) {
+                printf("table_create_index: Secondaty index %u has key that matches the new index key.\n", i);
+                return false;
+            }
+        }
+    }
+
+    Index *index = index_create(index_name, type, key, pager);
+    if (!index) {
+        printf("table_create_index: The table's index could not be created.\n");
+        return false;
+    }
+
+    // Attach PRIMARY/SECONDARY index to Table after successful index creation
+    if (type == PRIMARY_INDEX) {
+        table->primary_index = index;
+    }
+
+    if (type == SECONDARY_INDEX) {
+        table->secondary_indexes[table->total_secondary_indexes] = index;
+        table->total_secondary_indexes++;
     }
 
     return true;
