@@ -140,7 +140,6 @@ uint16_t btree_lower_bound(void *page_data, const void *key, void *context) {
     return result_index;
 }
 
-
 // Traverse B+ Tree and store the numbers of the visited pages
 bool btree_traverse_reachable_pages(const Index *index, Pager *pager, BTreePageCollection *visited_pages) {
     if (!index || !index->key) {
@@ -175,6 +174,7 @@ bool btree_traverse_reachable_pages(const Index *index, Pager *pager, BTreePageC
 
     return true;
 }
+
 /* Find leaf node position according to your key. */
 Page *btree_find_leaf_node(Pager *pager, uint32_t root_page_num, const void *key, void *context) {
     if (!pager || !key || !context) {
@@ -393,4 +393,53 @@ bool btree_leaf_node_insert(Pager *pager, Page *page, void *payload, void *conte
     }
 
     return success;
+}
+
+/* Split leaf node.
+ * Split cell pointers in half and move corresponding cell contents
+ * to a new page.
+ * Return information regarding new page in order to be connected
+ * with the internal node above. */
+SplitResult *btree_leaf_node_split(Pager *pager, Page *original_page, void *context) {
+    if (!pager || !original_page) {
+        return NULL;
+    }
+
+    /* Logically allocate new page. */
+    uint32_t new_page_num = 0;
+    if (!pager_allocate_page(pager, &new_page_num)) {
+        return NULL;
+    }
+
+    /* Get it in cache. */
+    Page *new_page = pager_get_page(pager, new_page_num);
+    if (!new_page) {
+        return NULL;
+    }
+
+    /* Initialize new page's data with empty leaf format. */
+    if (!btree_init_empty_leaf((void *) new_page->page_data)) {
+        return NULL;
+    }
+
+    /* Split in exactly half the cell pointers contained in the original page.
+     * Move [ Keys + Row ] to the new page while also creating new cell pointers. */
+    if (!btree_split_cells(original_page, new_page, context)) {
+        return NULL;
+    }
+
+    /* Compact original page by removing garbage. */
+    original_page = btree_compact_page(pager, original_page, context);
+    if (!original_page) {
+        return NULL;
+    }
+
+    if (!page_touch(pager, original_page)
+        || !page_mark_dirty(original_page)
+        || !page_touch(pager, new_page)
+        || !page_mark_dirty(new_page)) {
+        return NULL;
+    }
+
+    return split_result_create(new_page, context);
 }

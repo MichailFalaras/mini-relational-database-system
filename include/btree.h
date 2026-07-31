@@ -11,6 +11,7 @@
 typedef struct value Value;
 typedef struct pager Pager;
 typedef struct page Page;
+typedef struct index Index;
 
 /* BTree Common Node Header.
  * node_type:
@@ -73,6 +74,15 @@ typedef struct btree_page_collection {
     uint32_t count;
 } BTreePageCollection;
 
+/* BTree leaf node split result. 
+ * Important information for Internal Node above in order to be
+ * connected with this new splitted page. */
+typedef struct split_result {
+    /* New page's first payload key used as separator key. */
+    void *separator_key;
+    uint32_t new_page_num; // New page number
+} SplitResult;
+
 
 // Create B+ Tree nodes
 extern bool btree_init_empty_leaf(void *page_data);
@@ -87,5 +97,7 @@ extern bool btree_leaf_node_insert(Pager *pager, Page *page, void *payload, void
 
 // Traverse B+ Tree
 extern bool btree_traverse_reachable_pages(const Index *index, Pager *pager, BTreePageCollection *visited_pages);
+
+SplitResult *btree_leaf_node_split(Pager *pager, Page *original_page, void *context);
 
 #endif
