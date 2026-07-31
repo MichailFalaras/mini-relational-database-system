@@ -479,7 +479,7 @@ bool table_alter_modify_col(Table *table, const Database *db, const char *old_co
     return true;
 }
 
-/* Create Index for the Table */
+/* Create Index for a Table */
 bool table_create_index(Table *table, const char *index_name, IndexType type, const IndexKey *key, Pager *pager) {
     // Validate inputs
     if (!table || !table->table_schema) {
@@ -583,7 +583,20 @@ bool table_create_index(Table *table, const char *index_name, IndexType type, co
 }
 
 
-/* Drop Index for a Table */
+/*
+ * Drop one physical index from a table.
+ *
+ * Failure behavior:
+ *
+ * Validation or traversal failure causes no table metadata changes.
+ *
+ * If index_drop() fails after page release begins, rollback is
+ * unavailable. The index pointer remains attached to the table, but
+ * the physical index may be partially released and must not be used
+ * until repaired or rebuilt.
+ *
+ * The table pointer is removed only after index_drop() succeeds.
+ */
 bool table_drop_index(Table *table, const char *index_name, Pager *pager) {
     // Validate inputs
     if (!table || !table->table_schema) {
@@ -654,5 +667,73 @@ bool table_drop_index(Table *table, const char *index_name, Pager *pager) {
     table->secondary_indexes[table->total_secondary_indexes - 1] = NULL;
     table->total_secondary_indexes--;
 
+    return true;
+}
+
+
+/*
+ * Truncate all physical indexes of a table.
+ *
+ * Failure behavior:
+ *
+ * Validation failure causes no modifications.
+ *
+ * Indexes are truncated sequentially. If one truncation fails after
+ * earlier indexes have succeeded, rollback is unavailable and the table
+ * may contain indexes in different states. row_count is left unchanged.
+ *
+ * Therefore, a false result after truncation has begun means the table
+ * must not be used until its indexes are repaired or rebuilt.
+ *
+ * row_count is reset to zero only after every index truncation succeeds.
+ */
+bool table_truncate(Table *table, Pager *pager) {
+    // Validate inputs
+    if (!table || !table->table_schema) {
+        printf("table_truncate: Input Table is NULL.\n");
+        return false;
+    }
+
+    if (!table->secondary_indexes) {
+        printf("table_truncate: Secondary Index array is NULL.\n");
+        return false;
+    }
+
+    if (table->total_secondary_indexes > MAX_INDEXES) {
+        printf("table_truncate: Invalid secondary-index count.\n");
+        return false;
+    }
+
+    for (uint32_t i = 0; i < table->total_secondary_indexes; i++) {
+        if (!table->secondary_indexes[i]) {
+            printf("table_truncate: Secondary Index at position %u is NULL.\n", i);
+            return false;
+        }
+    }
+
+    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+        printf("table_truncate: Invalid or uninitialized Pager.\n");
+        return false;
+    }
+
+    // Truncate PRIMARY INDEX
+    if (table->primary_index) {
+        if (!index_truncate(table->primary_index, pager)) {
+            printf("table_truncate: Primary Index could not be truncated.\n");
+            return false;
+        }
+    }
+
+    // Truncate all SECONDARY INDEXES
+    for (uint32_t i = 0; i < table->total_secondary_indexes; i++) {
+        if (!index_truncate(table->secondary_indexes[i], pager)) {
+            printf("table_truncate: Secondary index at position %u could not be "
+                    "truncated; earlier indexes may already be empty and rollback "
+                    "is unavailable.\n", i);
+            return false;
+        }
+    }
+
+    table->row_count = 0;
     return true;
 }
