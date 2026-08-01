@@ -5,6 +5,7 @@
 #include "../../include/pager.h"
 #include "../../include/page.h"
 #include "../../include/pager.h"
+#include "../pager//pager_utils.h"
 #include "../../include/data_types.h"
 #include "../../include/row.h"
 #include "../../include/index.h"

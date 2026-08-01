@@ -11,6 +11,7 @@
 typedef struct value Value;
 typedef struct pager Pager;
 typedef struct page Page;
+typedef struct index Index;
 
 /* BTree Common Node Header.
  * node_type:
