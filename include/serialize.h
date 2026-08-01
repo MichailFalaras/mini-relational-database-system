@@ -10,4 +10,6 @@ extern bool serialize_cell_data(void *page_data, uint16_t offset, void *payload,
 
 extern bool serialize_value_data(Value *value, void *serialized_output);
 
+extern Value *deserialize_value_data(DataType type, void *offset);
+
 #endif
