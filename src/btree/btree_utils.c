@@ -11,6 +11,8 @@
 #include "../../include/pager.h"
 #include "../../include/serialize.h"
 
+/* ---------- Node Split Helpers ---------- */
+
 /* Create SplitResult struct with keys and page number of new page.*/
 SplitResult *split_result_create(Page *new_page, void *context) {
     if (!new_page || !context) {
@@ -89,71 +91,6 @@ bool btree_split_cells(Page *original_page, Page *new_page, void *context) {
     return true;
 }
 
-/* Transfers cells from src to dest. */
-bool btree_transfer_cell(Page *dest, uint16_t dest_cell_index, Page *src, uint16_t src_cell_index,
-    uint8_t node_type, uint16_t *write_offset, void *context) {
-    if (!dest || !src || !write_offset || !context) {
-        return false;
-    }
-    bool success = false;
-    
-    KeyExtractionContext *ctx = (KeyExtractionContext *) context;
-    void *ids = NULL;
-    void *payload = NULL;
-
-    uint16_t cell_pointer;
-    /* Get src's cell pointer in order to get [ Keys + Row ].*/
-    if (!get_cell_pointer((void *) src->page_data, src_cell_index, &cell_pointer)
-        || !get_cell_id((void *) src->page_data, cell_pointer, context, &ids)) {
-        goto cleanup;
-    }
-
-    /* Calculate key size. */
-    uint16_t key_size = btree_get_key_size(ids, context);
-    if (!key_size) {
-        goto cleanup;
-    }
-
-    /* Depending on node type, move back the write offset as many bytes as needed
-     * and write [ Child Pointer + Keys] or [ Keys + Row ]. */
-    if (node_type) {
-        *write_offset -= 4 + key_size;
-
-        uint32_t child_pointer = 0;
-        if (!set_cell_id((void *) dest->page_data, *write_offset, context, ids) 
-            || !get_cell_child_pointer((void *) src->page_data, cell_pointer, &child_pointer)
-            || !set_cell_child_pointer((void *) dest->page_data, *write_offset, child_pointer)) {
-            goto cleanup;
-        }
-
-    } else {
-        *write_offset -= sizeof(Row) + key_size;
-
-        if (!set_cell_id((void *) dest->page_data, *write_offset, context, ids) 
-            || !get_cell_payload((void *) src->page_data, cell_pointer, context, &payload)
-            || !set_cell_payload((void *) dest->page_data, *write_offset, context, payload)) {
-            goto cleanup;
-        }   
-        
-    }
-
-    /* Update dest's cell pointer with the write offset (beg of cell content). */
-    if (!set_cell_pointer((void *) dest->page_data, dest_cell_index, *write_offset)) {
-        goto cleanup;
-    }
-
-    success = true;
-
-    cleanup:
-    /* Free temporary structs. */
-    Row *row = (Row *) payload;
-    row_free(payload);
-    Value **values = (Value **) ids;
-    value_free_array(values, ctx->index_key->num_columns);
-
-    return success;
-}
-
 /* Compact page that has been splitted and has garbage values
  * spread within the page.*/
 Page *btree_compact_page(Pager *pager, Page *old_page, void *context) {
@@ -225,82 +162,214 @@ Page *btree_compact_page(Pager *pager, Page *old_page, void *context) {
     return new_page;
 }
 
-/* Get full cell content size. (btree_get_key_size wrapper) */
-uint32_t btree_get_cell_content_size(void *page_data, uint16_t cell_pointer, void *context) {
-    if (!page_data || !context) {
-        return 0;
-    }
-    uint32_t cell_content_size = 0;
-
-    void *id;
-    if (!get_cell_id(page_data, cell_pointer, context, &id)) {
-        return 0;
+/* Connect sibling leaf nodes right after splitting. */
+bool connect_sibling_leaf_nodes(Pager *pager, Page *original_page, Page *new_page) {
+    if (!pager || !original_page || !new_page) {
+        return false;
     }
 
-    Value **keys = (Value **) id;
-
-    uint16_t key_size = btree_get_key_size(keys, context);
-    if (!key_size) {
-        return 0;
-    }
-    cell_content_size += key_size;
-
-    uint32_t node_type = 0;
-    if (!get_node_type(page_data, &node_type)) {
-        return 0;
+    uint32_t previous = 0, next = 0;
+    if (!get_leaf_previous_pointer((void *) original_page->page_data, &previous)
+        || !get_leaf_next_pointer((void *) original_page->page_data, &next)
+        || !set_leaf_next_pointer((void *) original_page->page_data, new_page->page_num)
+        || !set_leaf_previous_pointer((void *) new_page->page_data, original_page->page_num)
+        || !set_leaf_next_pointer((void *) new_page->page_data, next)) {
+        return false;
     }
 
-    if (node_type) {
-        cell_content_size += 4;
-    } else {
-        cell_content_size += sizeof(Row);
-    }
+    if (next != UINT32_MAX) {
+        /* Load onto cache just in case its in the disk. */
+        Page *right_pointer = pager_get_page(pager, next);
+        if (!right_pointer) {
+            return false;
+        }
 
-    return cell_content_size;
+        if (!set_leaf_previous_pointer((void *) right_pointer->page_data, new_page->page_num)
+            || !page_touch(pager, right_pointer) || !page_mark_dirty(right_pointer)) {
+            return false;
+        }
+    }
 }
 
-/* Get key size. */
-uint16_t btree_get_key_size(const void *keys, void *context) {
-    if (!keys || !context) {
-        return 0;
+/* ---------- Node Insert Helpers ---------- */
+
+/* Open cell pointer space, write new cell pointer in that empty space,
+ * serialze all cell contents and write them.
+ * Update cell count and free space while marking the pages dirty. */
+bool update_page_cell_and_payload(Pager *pager, Page *page, uint16_t result_index, uint16_t write_offset,
+                                uint16_t cell_count, void *payload, void *keys, void *context) {
+
+    if (!pager || !page || !payload || !keys || !context) {
+        return false;
+    }
+    
+    /* Shifting all cell pointers from result_index and over. */
+    if (!shift_cell_pointers((void *) page->page_data, result_index)) {
+        return false;
+    }
+
+    /* Set result index as cell pointer in that free space we just created by
+     * shifting all cell pointers one position over. */
+    if (!set_cell_pointer((void *) page->page_data, result_index, write_offset)) {
+        return false;
+    }
+
+    /* Serialize and write payload onto page. */
+    if (!serialize_cell_data((void *) page->page_data, write_offset, payload, keys, context)) {
+        return false;
+    }
+
+    /* Increment cell count. */
+    if (!set_cell_count((void *) page->page_data, cell_count+1)) {
+        return false;
+    }
+
+    /* Update free space offset. */
+    if (!set_free_space_offset((void *) page->page_data, write_offset)) {
+        return false;
+    }
+
+    if (!page_mark_dirty(page) || !page_touch(pager, page)) {
+        return false;
+    }
+
+    return true;
+}
+
+/* Inserting into an internal node and the binary search's returned
+ * index is the same as the page's cell count then:
+ * swap rightmost child pointer with the child pointer contained in
+ * the payload*/
+bool swap_internal_rightmost_child_pointer(Page *page, void *payload) {
+    if (!page || !payload) {
+        return false;
+    }
+
+    uint32_t rightmost_child_pointer = 0;
+    if (!get_rightmost_child_pointer((void *) page->page_data, &rightmost_child_pointer)) {
+        return false;
+    }
+
+    uint32_t new_rightmost_pointer = 0;
+    memcpy(&new_rightmost_pointer, payload, sizeof(uint32_t));
+
+    memcpy(payload, &rightmost_child_pointer, sizeof(uint32_t));
+
+    if (!set_rightmost_child_pointer((void *) page->page_data, new_rightmost_pointer)) {
+        return false;
+    }
+
+    return true;
+}
+
+/* Check if leaf is duplicate by comparing the keys. */
+bool check_leaf_duplicate(Page *page, void *keys, uint16_t result_index, void *context,
+                         bool *duplicate) {
+    if (!page || !keys || !context) {
+        return false;
+    }
+
+    /* Get already existing Cell Pointer's value in the position we want to
+    * add a new cell pointer..*/
+    uint16_t cell_pointer;
+    if (!get_cell_pointer(page->page_data, result_index, &cell_pointer)) {
+        return false;
+    }
+
+    /* Follow Cell Pointer to its Cell Contents and retrieve keys. */
+    void *ids;
+    if (!get_cell_id(page->page_data, cell_pointer, context, &ids)) {
+        return false;
+    }
+    Value **values = (Value **) ids;
+
+    /* Check if they are the same. */
+    int result;
+    if (!btree_compare(values, (void **) keys, context, &result)) {
+        return false;
+    }
+
+    if (result == 0) {
+        *duplicate = true;
+        fprintf(stderr, "btree_leaf_node_insert: Duplicate key found.\n");
+    }
+
+    *duplicate = false;
+    return true;
+}
+
+/* ---------- Page Data Comparison Helpers ---------- */
+
+/* Comparing BTree Internal/Leaf Node Keys. */
+bool btree_compare(Value **values, const void *key, void *context, int *result) {
+    if (!values || !key || !context || !result) {
+        return false;
     }
 
     KeyExtractionContext *ctx = (KeyExtractionContext *) context;
-    Value **key_vals = (Value **) keys;
+    Value **key_val = (Value **) key;
 
-    uint16_t key_size = 0;
-    for (uint32_t i = 0; i < ctx->index_key->num_columns; i++) {
-        key_size += get_data_type_size(key_vals[i]->type);
+    /* Compare both same index columns. (With upper limit the search keys used, not
+    the amount of keys the BTree is organized with) */
+    for (uint32_t i = 0; i < ctx->num_search_keys; i++) {
+        if (!value_compare(values[i], key_val[i], result)) {
+            return false;
+        }
+
+        // result == -1 for values[i] < key_val
+        // result == 1 for values[i] > key_val
+
+        /* If it isn't equal, don't bother comparing other columns. */
+        if (*result != 0) {
+            break;
+        } 
     }
 
-    return key_size;
+    return true;
 }
 
 /* Extract row's keys ACCORDING TO THE CONTEXT of the BTree. */
-Value **btree_extract_row_keys(void *payload, void *context) {
+Value **btree_extract_payload_keys(uint8_t node_type, void *payload, void *context) {
     if (!payload || !context) {
         return NULL;
     }
 
     KeyExtractionContext *ctx = (KeyExtractionContext *) context;
-    Row *row = (Row *) payload;
 
-    Value **row_keys = (Value **) malloc(ctx->index_key->num_columns*sizeof(Value *));
-    if (!row_keys) {
+    Value **keys = (Value **) malloc(ctx->index_key->num_columns*sizeof(Value *));
+    if (!keys) {
         return NULL;
     }
 
-    for (uint32_t i = 0; i < ctx->index_key->num_columns; i++) {
-        row_keys[i] = value_copy(row->values[ctx->index_key->column_index_array[i]]);
-        if (!row_keys[i]) {
-            value_free_array(row_keys, i);
-            free(row_keys);
-            return NULL;
+    if (node_type) {
+        payload += 4;
+
+        for (uint32_t i = 0; i < ctx->index_key->num_columns; i++) {
+            keys[i] = deserialize_value_data(ctx->data_types[i], payload);
+            if (!keys[i]) {
+                value_free_array(keys, i);
+                free(keys);
+                return NULL;
+            }
+
+            payload += get_data_type_size(ctx->data_types[i]);
         }
+    } else {
+        Row *row = (Row *) payload;
+        for (uint32_t i = 0; i < ctx->index_key->num_columns; i++) {
+            keys[i] = value_copy(row->values[ctx->index_key->column_index_array[i]]);
+            if (!keys[i]) {
+                value_free_array(keys, i);
+                free(keys);
+                return NULL;
+            }
+        }   
     }
 
-    return row_keys;
+    return keys;
 }
+
+/* ---------- Page Data Capacity Helpers ---------- */
 
 /* Return available capacity to store actual data or (for internal nodes) storing
  * pointers to other pages. */
@@ -354,34 +423,50 @@ bool btree_has_enough_space(void *page_data, uint16_t metadata_size) {
     return false;
 }
 
-/* Comparing BTree Internal/Leaf Node Keys. */
-bool btree_compare(Value **values, const void *key, void *context, int *result) {
-    if (!values || !key || !context || !result) {
-        return false;
+/* Get full cell content size. (btree_get_key_size wrapper) */
+uint32_t btree_get_cell_content_size(uint8_t node_type, void *keys, void *context) {
+    if (!keys|| !context) {
+        return 0;
+    }
+
+    uint32_t cell_content_size = 0;
+    Value **key_array = (Value **) keys;
+
+    uint16_t key_size = btree_get_key_size(keys, context);
+    if (!key_size) {
+        return 0;
+    }
+    cell_content_size += key_size;
+
+    if (node_type) {
+        cell_content_size += 4;
+    } else {
+        cell_content_size += sizeof(Row);
+    }
+
+    return cell_content_size;
+}
+
+/* Get key size. */
+uint16_t btree_get_key_size(const void *keys, void *context) {
+    if (!keys || !context) {
+        return 0;
     }
 
     KeyExtractionContext *ctx = (KeyExtractionContext *) context;
-    Value **key_val = (Value **) key;
+    Value **key_vals = (Value **) keys;
 
-    /* Compare both same index columns. (With upper limit the search keys used, not
-    the amount of keys the BTree is organized with) */
-    for (uint32_t i = 0; i < ctx->num_search_keys; i++) {
-        if (!value_compare(values[i], key_val[i], result)) {
-            return false;
-        }
-
-        // result == -1 for values[i] < key_val
-        // result == 1 for values[i] > key_val
-
-        /* If it isn't equal, don't bother comparing other columns. */
-        if (*result != 0) {
-            break;
-        } 
+    uint16_t key_size = 0;
+    for (uint32_t i = 0; i < ctx->index_key->num_columns; i++) {
+        key_size += get_data_type_size(key_vals[i]->type);
     }
 
-    return true;
+    return key_size;
 }
 
+/* ---------- Shifting Page Data Helpers ---------- */
+
+/* Close empty spot by shifting metadata downwards. */
 bool shift_metadata(void *page_data, uint16_t cell_pointer, void *context) {
     if (!page_data) {
         return false;
@@ -417,6 +502,7 @@ bool shift_metadata(void *page_data, uint16_t cell_pointer, void *context) {
     return true;
 }
 
+/* Shift cell pointers forward to create empty spot. */
 bool shift_cell_pointers(void *page_data, uint16_t index) {
 
     if (!page_data) {
@@ -452,6 +538,8 @@ bool shift_cell_pointers(void *page_data, uint16_t index) {
 
     return true;
 }
+
+/* ---------- Page Data Access Helpers ----------*/
 
 /* Read/write node type. */
 bool get_node_type(void *page_data, uint8_t *node_type) {
@@ -997,6 +1085,8 @@ bool set_leaf_next_pointer(void *page_data, uint32_t next) {
     
     return true;
 }
+
+/* ---------- BTree/Index Traverse Helpers ---------- */
 
 /* Helper that checks the page collection for pages that have already been visited */
 bool btree_collection_contains(const BTreePageCollection *visited_pages, uint32_t page_num) {
