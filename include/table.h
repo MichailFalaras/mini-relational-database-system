@@ -26,6 +26,7 @@ typedef struct database Database;
  * row_count: amount of rows. */
 typedef struct table {
     char name[64];
+    bool is_materialized;
     bool is_deleted;
     Schema* table_schema;
     Index *primary_index;
@@ -61,7 +62,9 @@ extern Column *table_find_column(const Table *table, const char *col_name);
 
 
 /* Table disk operations */
-extern bool table_create(Table *table, Pager *pager);
+extern bool table_create(const char *table_name, const Schema *schema, Pager *pager);
+
+extern bool table_materialize(Table *table, Pager *pager);
 
 extern bool table_drop(Table *table, Pager *pager);
 
