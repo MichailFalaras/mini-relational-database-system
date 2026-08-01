@@ -93,11 +93,12 @@ extern uint16_t btree_lower_bound(void *page_data, const void *key, void *contex
 
 extern Page *btree_find_leaf_node(Pager *pager, uint32_t root_page_num, const void *key, void *context);
 
-extern bool btree_leaf_node_insert(Pager *pager, Page *page, void *payload, void *context);
+extern bool btree_node_insert(Pager *pager, Page *page, void *payload, void *context, bool *split);
+
+extern SplitResult *btree_leaf_node_split(Pager *pager, Page *original_page, void *context);
 
 // Traverse B+ Tree
 extern bool btree_traverse_reachable_pages(const Index *index, Pager *pager, BTreePageCollection *visited_pages);
 
-SplitResult *btree_leaf_node_split(Pager *pager, Page *original_page, void *context);
 
 #endif

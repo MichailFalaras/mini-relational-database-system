@@ -140,41 +140,6 @@ uint16_t btree_lower_bound(void *page_data, const void *key, void *context) {
     return result_index;
 }
 
-// Traverse B+ Tree and store the numbers of the visited pages
-bool btree_traverse_reachable_pages(const Index *index, Pager *pager, BTreePageCollection *visited_pages) {
-    if (!index || !index->key) {
-        printf("btree_traverse_reachable_pages: Invalid input index.\n");
-        return false;
-    }
-
-    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
-        printf("btree_traverse_reachable_pages: Invalid Pager.\n");
-        return false;
-    }
-
-    if (!visited_pages) {
-        printf("btree_traverse_reachable_pages: Invalid visited-pages structure.\n");
-        return false;
-    }
-
-    if (index->root_page_num <= SYSTEM_CATALOG_PAGE_NUM ||
-        index->root_page_num >= pager->num_pages ||
-        index->root_page_num >= MAX_PAGES) {
-        printf("btree_traverse_reachable_pages: Invalid root page number.\n");
-        return false;
-    }
-
-    visited_pages->count = 0;
-
-    // Helper that recursively traverses internal nodes, and backtracking at leaf nodes
-    if (!btree_traverse_page_recursive(index->root_page_num, pager, visited_pages)) {
-        printf("btree_traverse_reachable_pages: Recursive Index B+ Tree traversal failed.\n");
-        return false;
-    }
-
-    return true;
-}
-
 /* Find leaf node position according to your key. */
 Page *btree_find_leaf_node(Pager *pager, uint32_t root_page_num, const void *key, void *context) {
     if (!pager || !key || !context) {
@@ -276,7 +241,7 @@ Page *btree_find_leaf_node(Pager *pager, uint32_t root_page_num, const void *key
 /* Insert metadata into leaf node.
  * Create new Cell Pointer, store [Keys + Row] into page_data,
  * update cell_count, free_space_offset and mark page dirty. */
-bool btree_leaf_node_insert(Pager *pager, Page *page, void *payload, void *context) {
+bool btree_node_insert(Pager *pager, Page *page, void *payload, void *context, bool *split) {
     if (!page || !payload || !context) {
         return false;
     }
@@ -284,18 +249,24 @@ bool btree_leaf_node_insert(Pager *pager, Page *page, void *payload, void *conte
 
     KeyExtractionContext *ctx = (KeyExtractionContext *) context;
 
-    /* Extract Row's keys according to the IndexKey. */
-    Value **row_keys = btree_extract_row_keys(payload, context);
-    if (!row_keys) {
+    uint8_t node_type = 0;
+    if (!get_node_type((void *) page->page_data, &node_type)) {
         return false;
     }
-    /* Get its size. */
-    uint16_t key_size = btree_get_key_size((void *) row_keys, context);
 
-    /* Check if there's enough space to add [ Cell Pointer ] in the header,
-     * and [ Keys + Row ]. */
-    if (!btree_has_enough_space((void *) page->page_data, sizeof(Row)+key_size)) {
-        // split if only if there's no other space in page
+    /* Extract payload's keys according to the IndexKey. */
+    Value **keys = btree_extract_payload_keys(node_type, payload, context);
+    if (!keys) {
+        return false;
+    }
+    
+    uint32_t cell_size = btree_get_cell_content_size(node_type, (void *) keys, context);
+    if (!cell_size) {
+        goto cleanup;
+    }
+
+    if (!btree_has_enough_space((void *) page->page_data, cell_size)) {
+        *split = true;
         goto cleanup;
     }
     
@@ -304,7 +275,7 @@ bool btree_leaf_node_insert(Pager *pager, Page *page, void *payload, void *conte
         goto cleanup;
     }
     /* Get write position. */
-    uint16_t write_offset = free_space_offset - (sizeof(Row)+key_size);
+    uint16_t write_offset = free_space_offset - cell_size;
 
     /* Get cell count. */
     uint16_t cell_count;
@@ -314,7 +285,7 @@ bool btree_leaf_node_insert(Pager *pager, Page *page, void *payload, void *conte
 
     /* Find correct Cell Pointer position by comparing Row's keys with already
      * existing keys in the page. */
-    uint16_t result_index = btree_lower_bound((void *) page->page_data, row_keys, context);
+    uint16_t result_index = btree_lower_bound((void *) page->page_data, keys, context);
     if (result_index == UINT16_MAX) {
         fprintf(stderr, "btree_leaf_node_insert: Something went wrong.\n");
         goto cleanup;
@@ -325,60 +296,30 @@ bool btree_leaf_node_insert(Pager *pager, Page *page, void *payload, void *conte
      * then the whole key is unique. Therefore, if the key of the
      * row we want to add to the page has the same key as the row
      * already in its position then we have a duplicate. */
-    if (ctx->is_unique == true && result_index < cell_count) {
-        /* Get already existing Cell Pointer's value in the position we want to
-        * add a new cell pointer..*/
-        uint16_t cell_pointer;
-        if (!get_cell_pointer(page->page_data, result_index, &cell_pointer)) {
+    if (!node_type && ctx->is_unique == true && result_index < cell_count) {
+        bool duplicate = false;
+
+        if (!check_leaf_duplicate(page, keys, result_index, context, &duplicate)) {
             goto cleanup;
         }
 
-        /* Follow Cell Pointer to its Cell Contents and retrieve keys. */
-        void *ids;
-        if (!get_cell_id(page->page_data, cell_pointer, context, &ids)) {
-            goto cleanup;
-        }
-        values = (Value **) ids;
-    
-        /* Check if they are the same. */
-        int result;
-        if (!btree_compare(values, (void **) row_keys, context, &result)) {
-            goto cleanup;
-        }
-
-        if (result == 0) {
-            fprintf(stderr, "btree_leaf_node_insert: Duplicate key found.\n");
+        if (duplicate == true) {
             goto cleanup;
         }
     }
 
-    /* Shifting all cell pointers from result_index and over. */
-    if (!shift_cell_pointers((void *) page->page_data, result_index)) {
-        goto cleanup;
+    /* If its an internal node and result index is equal to the cell count
+     * then it means its the rightmost child pointer.
+     * We swap the rightmost child pointer with the payload's child pointer. */
+    /* INTERNAL NODE + RIGHTMOST CHILD POSITION */
+    if (node_type && result_index == cell_count) {
+       if (!swap_internal_rightmost_child_pointer(page, payload)) {
+            goto cleanup;
+       }
     }
 
-    /* Set result index as cell pointer in that free space we just created by
-     * shifting all cell pointers one position over. */
-    if (!set_cell_pointer((void *) page->page_data, result_index, write_offset)) {
-        goto cleanup;
-    }
-
-    /* Serialize and write payload onto page. */
-    if (!serialize_cell_data((void *) page->page_data, write_offset, payload, row_keys, context)) {
-        goto cleanup;
-    }
-
-    /* Increment cell count. */
-    if (!set_cell_count((void *) page->page_data, cell_count+1)) {
-        goto cleanup;
-    }
-
-    /* Update free space offset. */
-    if (!set_free_space_offset((void *) page->page_data, write_offset)) {
-        goto cleanup;
-    }
-
-    if (!page_mark_dirty(page) || !page_touch(pager, page)) {
+    if (!update_page_cell_and_payload(pager, page, result_index, write_offset,
+        cell_count, payload, keys, context)) {
         goto cleanup;
     }
 
@@ -388,8 +329,8 @@ bool btree_leaf_node_insert(Pager *pager, Page *page, void *payload, void *conte
         value_free_array(values, ctx->index_key->num_columns);
     }
 
-    if (row_keys) {
-        value_free_array(row_keys, ctx->index_key->num_columns);
+    if (keys) {
+        value_free_array(keys, ctx->index_key->num_columns);
     }
 
     return success;
@@ -444,27 +385,44 @@ SplitResult *btree_leaf_node_split(Pager *pager, Page *original_page, void *cont
     /* Get previous and next from the ORIGINAL PAGE.
      * Connect previous of NEW PAGE with the ORIGINAL PAGE and keep ORIGINAL PAGE'S next.
      * Keep ORIGINAL PAGE's previous and connect next with the new NEW PAGE. */
-    uint32_t previous = 0, next = 0;
-    if (!get_leaf_previous_pointer((void *) original_page->page_data, &previous)
-        || !get_leaf_next_pointer((void *) original_page->page_data, &next)
-        || !set_leaf_next_pointer((void *) original_page->page_data, new_page->page_num)
-        || !set_leaf_previous_pointer((void *) new_page->page_data, original_page->page_num)
-        || !set_leaf_next_pointer((void *) new_page->page_data, next)) {
+    if (connect_sibling_leaf_nodes(pager, original_page, new_page)) {
         return NULL;
     }
 
-    if (next != UINT32_MAX) {
-        /* Load onto cache just in case its in the disk. */
-        Page *right_pointer = pager_get_page(pager, next);
-        if (!right_pointer) {
-            return NULL;
-        }
+    return split_result_create(new_page, context);
+}
 
-        if (!set_leaf_previous_pointer((void *) right_pointer->page_data, new_page->page_num)
-            || !page_touch(pager, right_pointer) || !page_mark_dirty(right_pointer)) {
-            return NULL;
-        }
+// Traverse B+ Tree and store the numbers of the visited pages
+bool btree_traverse_reachable_pages(const Index *index, Pager *pager, BTreePageCollection *visited_pages) {
+    if (!index || !index->key) {
+        printf("btree_traverse_reachable_pages: Invalid input index.\n");
+        return false;
     }
 
-    return split_result_create(new_page, context);
+    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+        printf("btree_traverse_reachable_pages: Invalid Pager.\n");
+        return false;
+    }
+
+    if (!visited_pages) {
+        printf("btree_traverse_reachable_pages: Invalid visited-pages structure.\n");
+        return false;
+    }
+
+    if (index->root_page_num <= SYSTEM_CATALOG_PAGE_NUM ||
+        index->root_page_num >= pager->num_pages ||
+        index->root_page_num >= MAX_PAGES) {
+        printf("btree_traverse_reachable_pages: Invalid root page number.\n");
+        return false;
+    }
+
+    visited_pages->count = 0;
+
+    // Helper that recursively traverses internal nodes, and backtracking at leaf nodes
+    if (!btree_traverse_page_recursive(index->root_page_num, pager, visited_pages)) {
+        printf("btree_traverse_reachable_pages: Recursive Index B+ Tree traversal failed.\n");
+        return false;
+    }
+
+    return true;
 }
