@@ -6,7 +6,7 @@
 #include <ctype.h>
 #include <stdbool.h>
 #include "../../include/tokenizer.h"
-#include "tokenizer_internal.h"
+#include "tokenizer_utils.h"
 
 /* Tokenizer Initialization. */
 Tokenizer *tokenizer_init(char *query) {

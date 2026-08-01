@@ -1,7 +1,7 @@
 # Variables
 CC := gcc
 # Automatically generate dependecy files (.d)
-CFLAGS := -Wall -fsanitize=address -MMD -MP
+CFLAGS := -Wall -MMD -MP
 CPPFLAGS := -I./include
 
 # Directories

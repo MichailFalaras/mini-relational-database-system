@@ -12,7 +12,7 @@
 #define SYSTEM_CATALOG_PAGE_NUM  1
 typedef struct pager Pager;
 typedef struct schema Schema;
-typedef enum data_type DataType;
+typedef enum data_types DataType;
 
 /* Index type. */
 typedef enum index_type {
