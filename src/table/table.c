@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdint.h>
 #include "../../include/table.h"
+#include "./table_utils.h"
 #include "../../include/schema.h"
 #include "../schema/schema_utils.h"
 #include "../../include/constraints.h"
@@ -71,6 +72,7 @@ Table *table_metadata_create(const char *table_name, const Schema *schema) {
         new_table->secondary_indexes[i] = NULL;
     }
 
+    new_table->is_materialized = false;
     new_table->is_deleted = false;
     new_table->row_count = 0;
     new_table->total_secondary_indexes = 0;
@@ -735,5 +737,290 @@ bool table_truncate(Table *table, Pager *pager) {
     }
 
     table->row_count = 0;
+    return true;
+}
+
+
+/* Create Table */
+Table *table_create(const char *table_name, const Schema *schema, Pager *pager) {
+    // Validate inputs
+    if (!table_name || table_name[0] == '\0') {
+        printf("table_create: Invalid input name.\n");
+        return NULL;
+    }
+
+    if (!schema) {
+        printf("table_create: Input schema is NULL.\n");
+        return NULL;
+    }
+
+    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+        printf("table_create: Invalid or uninitialized Pager.\n");
+        return NULL;
+    }
+
+    // Create table logical metadata
+    Table *table = table_metadata_create(table_name, schema);
+    if (!table) {
+        printf("table_create: Logical table metadata could not be created.\n");
+        return NULL;
+    }
+
+    // Create physical table
+    if (!table_materialize(table, pager)) {
+        printf("table_create: Physical table materialization failed.\n");
+        table_free(table);
+        return NULL;
+    }
+    
+    return table;
+}
+
+
+/*
+ * Physically materialize all predefined indexes of a logical table.
+ *
+ * Failure behavior:
+ *
+ * Validation failure causes no modifications.
+ *
+ * Physical indexes are first created as temporary Index objects.
+ * Root page numbers are copied into the table's existing logical
+ * index metadata only after every required creation succeeds.
+ *
+ * If creation fails, previously created temporary indexes are dropped
+ * as best-effort rollback. If rollback itself fails, pages may remain
+ * allocated and database recovery may be required.
+ */
+bool table_materialize(Table *table, Pager *pager) {
+    // Validate inputs
+    if (!table || !table->table_schema || !table->secondary_indexes) {
+        printf("table_materialize: Invalid input Table.\n");
+        return false;
+    }
+
+    if (table->total_secondary_indexes > MAX_INDEXES) {
+        printf("table_materialize: Secondary Index count exceeds limit.\n");
+        return false;
+    }
+
+    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+        printf("table_materialize: Invalid or uninitialized Pager.\n");
+        return false;
+    }
+
+    // Checking if table is already materialized
+    if (table->is_materialized) {
+        printf("table_materialize: Table is already materialized.\n");
+        return false;
+    }
+
+    // Veryfying Primary Index metadata
+    if (table->primary_index && 
+        !table_validate_logical_index(table, table->primary_index, PRIMARY_INDEX)) {
+        printf("table_materialize: Invalid Primary Index metadata.\n");
+        return false;
+    }
+
+    // Verifying all existing secondary indexes
+    for (uint32_t i = 0; i < table->total_secondary_indexes; i++) {
+       
+        if (!table_validate_logical_index(table, table->secondary_indexes[i], SECONDARY_INDEX)) {
+            printf("table_materialize: Invalid Secondary Index metadata at position %u.\n", i);
+            return false;
+        }
+    }
+    
+    // Verifying that the secondary index pointer array is compact,
+    // meaning it doesn't have any indexes outside of the recorded occupied range in the array
+    for (uint32_t i = table->total_secondary_indexes; i < MAX_INDEXES; i++) {
+        
+        if (table->secondary_indexes[i]) {
+            printf("table_materialize: Unexpected secondary index outside the occupied range.\n");
+            return false;
+        }
+    }
+
+
+    Index *created_primary_index = NULL;
+    Index *created_secondary_indexes[MAX_INDEXES] = {0};
+
+    // Attempting to create the physical Primary Index
+    if (table->primary_index) {
+        created_primary_index = index_create(
+            table->primary_index->name, 
+            table->primary_index->type, 
+            table->primary_index->key, 
+            pager
+        );
+
+        if (!created_primary_index) {
+            printf("table_materialize: Physical Primary Index could not be created.\n");
+            goto rollback;
+        }
+    }
+
+    // Attempting to create any physical Secondary Indexes
+    for (uint32_t i = 0; i < table->total_secondary_indexes; i++) {
+        Index *index_metadata = table->secondary_indexes[i];
+
+        created_secondary_indexes[i] = index_create(
+            index_metadata->name,
+            index_metadata->type,
+            index_metadata->key,
+            pager
+        );
+
+        if (!created_secondary_indexes[i]) {
+            printf("table_materialize: Physical Secondary Index at position %u could not be created.\n", i);
+            goto rollback;
+        }
+    }
+
+    // Assign physical root page numbers once all indexes have been successfully created
+    if (table->primary_index) {
+        table->primary_index->root_page_num = created_primary_index->root_page_num;
+    }
+
+    for (uint32_t i = 0; i < table->total_secondary_indexes; i++) {
+        table->secondary_indexes[i]->root_page_num = created_secondary_indexes[i]->root_page_num;
+    }
+
+    // Deallocating temporary metadata, 
+    // as index_create() deep copies metadata, and returns duplicates of metadata structures 
+    if (created_primary_index) {
+        index_free(created_primary_index);
+        created_primary_index = NULL;
+    }
+
+    for (uint32_t i = 0; i < table->total_secondary_indexes; i++) {
+        index_free(created_secondary_indexes[i]);
+        created_secondary_indexes[i] = NULL;
+    }
+
+    table->is_materialized = true;
+    return true;
+
+rollback:
+    bool rollback_failed = false;
+
+    for (uint32_t i = 0; i < table->total_secondary_indexes; i++) {
+        if (!created_secondary_indexes[i]) {
+            continue;
+        }
+
+        if (!index_drop(created_secondary_indexes[i], pager)) {
+            printf("table_materialize: Rollback failed for secondary index at position %u; its metadata is retained for recovery.\n", i);
+
+            rollback_failed = true;
+            continue;
+        }
+
+        created_secondary_indexes[i] = NULL;
+    }
+
+    if (created_primary_index) {
+        if (!index_drop(created_primary_index, pager)) {
+            printf("table_materialize: Rollback failed for the primary index. its metadata is retained for recovery.\n");
+
+            rollback_failed = true;
+        } else {
+            created_primary_index = NULL;
+        }
+    }
+
+    table->is_materialized = false;
+
+    if (rollback_failed) {
+        printf("table_materialize: Rollback was incomplete. Database recovery is required.\n");
+    }
+
+    return false;
+}
+
+
+/*
+ * Drop a table and all physical storage owned by its indexes.
+ *
+ * Failure behavior:
+ *
+ * Validation failure causes no modifications.
+ *
+ * Secondary indexes are dropped from the end of the occupied array.
+ * Successfully dropped index pointers are immediately cleared, preventing
+ * dangling pointers and double-free.
+ *
+ * If an index drop fails, the operation stops. Earlier successful drops
+ * cannot be rolled back. The table remains allocated and may be partially
+ * dropped. Its schema is preserved so recovery or another deletion attempt
+ * remains possible.
+ *
+ * Table metadata is freed only after all index drops succeed.
+ */
+bool table_drop(Table *table, Pager *pager) {
+    // Validate inputs
+    if (!table || !table->table_schema) {
+        printf("table_drop: Invalid input Table.\n");
+        return false;
+    }
+
+    if (!table->secondary_indexes) {
+        printf("table_drop: Secondary-index array is NULL.\n");
+        return false;
+    }
+
+    if (table->total_secondary_indexes > MAX_INDEXES) {
+        printf("table_drop: Invalid secondary-index count.\n");
+        return false;
+    }
+    
+    if (!table->is_materialized) {
+        printf("table_drop: Table is not physically materialized.\n");
+        return false;
+    }
+
+    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+        printf("table_drop: Invalid or uninitialized Pager.\n");
+        return false;
+    }
+
+    for (uint32_t i = 0; i < table->total_secondary_indexes; i++) {
+        if (!table->secondary_indexes[i]) {
+            printf("table_drop: Secondary Index at position %u is NULL.\n");
+            return false;
+        }
+    }
+
+    // Attempting to release the secondary indexes in reverse order in the pointer array
+    // to keep the array compact at any time
+    while (table->total_secondary_indexes > 0) {
+        uint32_t index_position = table->total_secondary_indexes - 1;
+
+        if (!index_drop(table->secondary_indexes[index_position], pager)) {
+            printf("table_drop: Secondary Index at position %u could not be dropped. \
+                    The table may be partially deleted and recovery may be required.\n", index_position);
+
+            return false;
+        }
+
+        table->secondary_indexes[index_position] = NULL;
+        table->total_secondary_indexes--;
+    }
+    
+    // Attempting to release the primary index after
+    if (table->primary_index) {
+        if (!index_drop(table->primary_index, pager)) {
+            printf("table_drop: Primary Index could not be freed.\
+                    Secondary Indexes have already been removed and rollback is currently unavailable.\n");
+
+            return false;
+        }
+
+        table->primary_index = NULL;
+    }
+
+    // If all index deletions were successful, only then do we free the table metadata structures
+    table_free(table);
+
     return true;
 }
