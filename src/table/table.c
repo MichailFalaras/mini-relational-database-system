@@ -937,3 +937,90 @@ rollback:
 
     return false;
 }
+
+
+/*
+ * Drop a table and all physical storage owned by its indexes.
+ *
+ * Failure behavior:
+ *
+ * Validation failure causes no modifications.
+ *
+ * Secondary indexes are dropped from the end of the occupied array.
+ * Successfully dropped index pointers are immediately cleared, preventing
+ * dangling pointers and double-free.
+ *
+ * If an index drop fails, the operation stops. Earlier successful drops
+ * cannot be rolled back. The table remains allocated and may be partially
+ * dropped. Its schema is preserved so recovery or another deletion attempt
+ * remains possible.
+ *
+ * Table metadata is freed only after all index drops succeed.
+ */
+bool table_drop(Table *table, Pager *pager) {
+    // Validate inputs
+    if (!table || !table->table_schema) {
+        printf("table_drop: Invalid input Table.\n");
+        return false;
+    }
+
+    if (!table->secondary_indexes) {
+        printf("table_drop: Secondary-index array is NULL.\n");
+        return false;
+    }
+
+    if (table->total_secondary_indexes > MAX_INDEXES) {
+        printf("table_drop: Invalid secondary-index count.\n");
+        return false;
+    }
+    
+    if (!table->is_materialized) {
+        printf("table_drop: Table is not physically materialized.\n");
+        return false;
+    }
+
+    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+        printf("table_drop: Invalid or uninitialized Pager.\n");
+        return false;
+    }
+
+    for (uint32_t i = 0; i < table->total_secondary_indexes; i++) {
+        if (!table->secondary_indexes[i]) {
+            printf("table_drop: Secondary Index at position %u is NULL.\n");
+            return false;
+        }
+    }
+
+    // Attempting to release the secondary indexes in reverse order in the pointer array
+    // to keep the array compact at any time
+    while (table->total_secondary_indexes > 0) {
+        uint32_t index_position = table->total_secondary_indexes - 1;
+
+        if (!index_drop(table->secondary_indexes[index_position], pager)) {
+            printf("table_drop: Secondary Index at position %u could not be dropped. \
+                    The table may be partially deleted and recovery may be required.\n", index_position);
+
+            return false;
+        }
+
+        table->secondary_indexes[index_position] = NULL;
+        table->total_secondary_indexes--;
+    }
+    
+    // Attempting to release the primary index after
+    if (table->primary_index) {
+        if (!index_drop(table->primary_index, pager)) {
+            printf("table_drop: Primary Index could not be freed.\
+                    Secondary Indexes have already been removed and rollback is currently unavailable.\n");
+
+            return false;
+        }
+
+        table->primary_index = NULL;
+    }
+
+    // If all index deletions were successful, only then do we free the table metadata structures
+    table_free(table);
+
+    return true;
+}
