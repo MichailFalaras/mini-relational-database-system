@@ -1,7 +1,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include "../../include/database.h"
 #include "../../include/pager.h"
 #include "../../include/table.h"
@@ -136,3 +138,125 @@ void database_free(Database *db) {
     free(db);
 }
 
+
+/* Add table metadata to database */
+bool database_add_table(Database *db, Table *table) {
+    // Validate inputs
+    if (!db || !db->tables) {
+        printf("database_add_table: Invalid or uninitialized database.\n");
+        return false;
+    }
+    
+    if (!table || 
+        table->name[0] == '\0' || 
+        !table->table_schema ||
+        !table->secondary_indexes) {
+        printf("database_add_table: Invalid or uninitialized new table.\n");
+        return false;
+    }
+
+    if (db->table_count >= MAX_TABLES) {
+        printf("database_add_table: Database is at full Table capacity.\n");
+        return false;
+    }
+
+    // Traverse the table pointers array and check if table already exists
+    for (uint32_t i = 0; i < db->table_count; i++) {
+        if (!db->tables[i]) {
+            printf("database_add_table: Table array has invalid empty pointer.\n");
+            return false;
+        }
+
+        // Check for existing table with the same name
+        if (strcasecmp(db->tables[i]->name, table->name) == 0) {
+            printf("database_add_table: A table with the same name already exists in the database.\n");
+            return false;
+        }
+    }
+
+    // Add new table to the next
+    db->tables[db->table_count] = table;
+    db->table_count++; 
+
+    return true;
+}
+
+
+/* Check if database contains a Table */
+bool database_has_table(Database *db, const char *table_name) {
+    return database_find_table_index(db, table_name) != UINT32_MAX;
+}
+
+
+/* Check if database contains a Table, and return it */
+Table *database_find_table(Database *db, const char *table_name) {
+    uint32_t index_pos = database_find_table_index(db, table_name);
+    
+    if (index_pos == UINT32_MAX) {
+        return NULL;
+    }
+
+    return db->tables[index_pos];
+}
+
+
+/* Return a Table's registry index, or UINT32_MAX if not found. */
+uint32_t database_find_table_index(Database *db, const char *table_name) {
+    // Validate inputs
+    if (!db || !db->tables) {
+        printf("database_find_table_index: Invalid or uninitialized database.\n");
+        return UINT32_MAX;
+    }
+
+    if (!table_name || table_name[0] == '\0') {
+        printf("database_find_table_index: Invalid input table name.\n");
+        return UINT32_MAX;
+    }
+
+    if (db->table_count > MAX_TABLES) {
+        printf("database_find_table_index: Invalid table count.\n");
+        return UINT32_MAX;
+    }
+
+    // Traverse the table pointers array and return the target Table metadata
+    for (uint32_t i = 0; i < db->table_count; i++) {
+        if (!db->tables[i]) {
+            printf("database_find_table_index: Table array has invalid empty pointer.\n");
+            return UINT32_MAX;
+        }
+
+        // Check for existing table with the same name
+        if (strcasecmp(db->tables[i]->name, table_name) == 0) {
+            return i;
+        }
+    }
+
+    return UINT32_MAX;    
+}
+
+
+/*
+ * Remove and free a table owned by the Database.
+ *
+ * On success, the table metadata is destroyed and any previous pointer
+ * to that Table becomes invalid.
+ */
+bool database_remove_table(Database *db, const char *table_name) {
+    uint32_t index = database_find_table_index(db, table_name);
+
+    if (index == UINT32_MAX) {
+        return false;
+    }
+
+    table_free(db->tables[index]);
+
+    // Shifting the subsequent pointers to cover up the empty pointer slot in the array
+    for (uint32_t i = index; i + 1 < db->table_count; i++) {
+        db->tables[i] = db->tables[i + 1];
+    }
+
+    db->tables[db->table_count - 1] = NULL;
+    db->table_count--;
+
+    return true;
+}
