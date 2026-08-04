@@ -3,69 +3,114 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "pager.h"
 
-#define BTREE_INTERNAL_NODE_SIZE 14
-#define BTREE_LEAF_NODE_SIZE 18
-#define MAX_PAGES 100
+typedef struct index_key IndexKey;
+typedef struct row Row;
+typedef enum data_types DataType;
 
-typedef struct value Value;
-typedef struct pager Pager;
-typedef struct page Page;
-typedef struct index Index;
+typedef enum btree_node_type {
+    BTREE_LEAF_NODE,
+    BTREE_INTERNAL_NODE
+} BTreeNodeType;
 
-/* BTree Common Node Header.
- * node_type:
- *  0: leaf node
- *  1: internal node
- * is_root:
- *  0: false
- *  1: true
- * parent_pointer: parent's page number
- * cell_count: amount of internal node IDs
- * or page data.
- * free_space_offset: last write position. */
-typedef struct  __attribute__((packed)) BTree_common_node_header {
-    uint8_t node_type;
+typedef enum btree_shift_direction {
+    BTREE_SHIFT_INSERT,
+    BTREE_SHIFT_DELETE
+} BTreeShiftDirection;
+
+/* Enum for all types of needed offsets. */
+typedef enum btree_offsets {
+    BTREE_NODE_TYPE_OFFSET = 0,
+    BTREE_ROOT_FLAG_OFFSET = 1,
+    BTREE_PARENT_OFFSET = 2,
+    BTREE_CELL_COUNT_OFFSET = 6,
+    BTREE_FREE_SPACE_OFFSET = 8,
+
+    BTREE_COMMON_HEADER_SIZE = 10,
+
+    BTREE_INTERNAL_RIGHTMOST_OFFSET = 10,
+    BTREE_INTERNAL_HEADER_SIZE = 14,
+
+    BTREE_LEAF_PREVIOUS_OFFSET = 10,
+    BTREE_LEAF_NEXT_OFFSET = 14,
+    BTREE_LEAF_HEADER_SIZE = 18
+} BTreeOffsets;
+
+/* BTree return status enum. */
+typedef enum btree_status {
+    BTREE_ERROR,
+    BTREE_INVALID_ARGUMENTS,
+    BTREE_CORRUPT_PAGE,
+    BTREE_INVALID_PAGE,
+    BTREE_FREE_PAGE,
+    BTREE_NEEDS_SPLIT,
+    BTREE_DUPLICATE_KEY,
+    BTREE_SUCCESS
+} BTreeStatus;
+
+/* BTree Component with pager for traversal. */
+typedef struct btree {
+    Pager *pager;
+    uint32_t root_page;
+} BTree;
+
+/* Lower Bound Binary Search Result. */
+typedef struct btree_search_result {
+    // If at least the position the key should have been in was found
+    bool found; 
+    // If exact same key was found
+    bool exact_match;
+
+    Page *page; // Refers to root-to-leaf traversal
+    uint16_t result_index;
+} BTreeSearchResult;
+
+/* BTree Split Result after failed insertion. */
+typedef struct btree_split_result {
+    bool split;
+    uint32_t right_page;
+    uint16_t separator_size;
+    void *separator_key;
+} BTreeSplitResult;
+
+/* Direct access to cell with pointers and offset. */
+typedef struct btree_cell_view {
+    uint16_t offset;
+    BTreeKeyView key;
+    const uint8_t *payload;
+    uint16_t payload_size;
+} BTreeCellView;
+
+/* Insert Struct. */
+typedef struct btree_cell_contents {
+    BTreeNodeType type;
+    Value **keys;
+    uint16_t num_keys;
+    uint16_t key_size;
+    union {
+        Row *row;
+        uint32_t child_pointer;
+    } BTreePayload;
+    uint16_t cell_size;
+} BTreeCellContents;
+
+/* BTree RAM struct with all needed already extracted
+ * metadata, ready for immediate use. */
+typedef struct btree_page {
+    Page *page;
+    BTreeNodeType type;
     uint8_t is_root;
     uint32_t parent_pointer;
     uint16_t cell_count;
-    uint16_t free_space_offset;
-} BTreeCommonHeader;
-
-/* BTree Internal Node Layout.
- * rightmost_child_pointer: N+1 pointer for values
- * bigger than rightmost cell ID. */
-typedef struct  __attribute__((packed)) BTree_internal_node_layout {
-    uint32_t rightmost_child_pointer;
-    /* Arrays/Dynamic data stored onto page's page_data
-     * via helper functions. */
-} BTreeInternalNode;
-
-/* BTree Leaf Node Layout.
- * previous_leaf_pointer: page number of previous page leaf node
- * next_leaf_pointer: page number of next page leaf node. */
-typedef struct  __attribute__((packed)) BTree_leaf_node_layout {
-    uint32_t previous_leaf_pointer;
-    uint32_t next_leaf_pointer;
-    /* Arrays/Dynamic data stored onto page's page_data
-     * via helper functions. */
-} BTreeLeafNode;
-
-/* System Catalog Leaf Node Metadata.
- * type:
- *  0: table
- *  1: index
- * name: table/index name
- * root_page_num: root table/index page number
- * sql_query_size: sql query size*/
-typedef struct __attribute__((packed)) system_catalog_leaf_node_metadata {
-    uint8_t type;
-    char name[64];
-    uint32_t root_page_num;
-    uint32_t sql_query_size;
-    /* SQL Query directly memcpy'd onto page's page_data. */
-} SystemCatalogLeafNodeMetadata;
-
+    uint16_t free_space_offset; 
+    uint8_t *data;
+    union {
+        uint32_t rightmost_child_pointer;
+        uint32_t previous_leaf_pointer;
+        uint32_t next_leaf_pointer;
+    } type_specific_data;
+} BTreePage;
 
 // Traversal-related structure that keeps track of the visited pages 
 // during the Index traversal
@@ -74,31 +119,70 @@ typedef struct btree_page_collection {
     uint32_t count;
 } BTreePageCollection;
 
-/* BTree leaf node split result. 
- * Important information for Internal Node above in order to be
- * connected with this new splitted page. */
-typedef struct split_result {
-    /* New page's first payload key used as separator key. */
-    void *separator_key;
-    uint32_t new_page_num; // New page number
-} SplitResult;
+/* Structs replacing: KeyExtractionContext */
+typedef struct btree_index_spec {
+    IndexKey *index_key; // Containts columns that comprise the index key
+    DataType *column_types; // Containts their data type
+    bool is_unique; // If Index is unique, for duplicate key checks
+    uint16_t key_size; // Key size for specific BTree
+} BTreeIndexSpec;
 
+/* Active Search Key containing index specifications and information
+ * about the target key itself. */
+typedef struct btree_search_key {
+    BTreeIndexSpec *index;
+    const void *target_key;
 
-// Create B+ Tree nodes
-extern bool btree_init_empty_leaf(void *page_data);
+    /* Amount of keys used to traverse BTree.
+     * Can be less than keys organizing the BTree. */
+    uint16_t num_target_keys; 
+} BTreeSearchKey;
 
-extern bool btree_init_internal(void *page_data, uint32_t rightmost_child_pointer);
+typedef struct btree_key_view {
+    const void *key;
+    uint16_t offset;
+    uint16_t key_size;
+} BTreeKeyView;
 
-extern uint16_t btree_lower_bound(void *page_data, const void *key, void *context);
+#include <stdio.h>
+#include <stdlib.h>
+#include "../../include/btree.h"
+#include "btree_utils.h"
+#include "../../include/page.h"
+#include "../../include/data_types.h"
+#include "../../include/serialize.h"
+#include "../src/data_types/data_types_utils.h"
+#include "../../include/index.h"
 
-extern Page *btree_find_leaf_node(Pager *pager, uint32_t root_page_num, const void *key, void *context);
+/* Initialize btree_page as an Empty Leaf Node. */
+extern BTreeStatus btree_page_init_empty_leaf(BTree *btree, BTreePage *btree_page);
 
-extern bool btree_node_insert(Pager *pager, Page *page, void *payload, void *context, bool *split);
+/* Lower Bound Binary Search with a target key.
+ * Used to traverse through the B+Tree and find correct cell position in a page.
+ * Return important information in BTreeSearchResult. */
+extern BTreeStatus btree_lower_bound_search(BTreePage *btree_page, BTreeSearchKey *search_key,
+    BTreeSearchResult *search_result);
 
-extern SplitResult *btree_leaf_node_split(Pager *pager, Page *original_page, void *context);
+/* Root to leaf traversal using a specific key to ultimately reach
+ * a cell position to store data.
+ * Also returns important information in BTreeSearchResult. */
+extern BTreeStatus btree_root_to_leaf(BTree *btree, BTreeSearchKey *search_key, BTreeSearchResult *search_result);
 
-// Traverse B+ Tree
-extern bool btree_traverse_reachable_pages(const Index *index, Pager *pager, BTreePageCollection *visited_pages);
+/* BTree Node insert type agnostic function.
+ * Content being inserted is stored in BTreeCellContents.
+ * Returns BTREE_SUCCESS or BTREE_NEEDS_SPLIT/BTreeSplitResult with split boolean value equal to true. */
+extern BTreeStatus btree_node_insert(BTree *btree, BTreePage *btree_page, BTreeCellContents *cell_contents,
+                            BTreeSplitResult *split_result, BTreeIndexSpec *index);
 
+/* BTree Leaf Node Split.
+ * Returns important split information in BTreeSplitResult. */
+extern BTreeStatus btree_leaf_node_split(BTree *btree, BTreePage *original_page, BTreeIndexSpec *index,
+                                BTreeSplitResult *split_result);
+
+/* BTree Root Node Split.
+ * Split has already happened, this just creates new root, moves separator key
+ * and updates pages' metadata.
+ * Returns split information in BTreeSplitResult. */
+extern BTreeStatus btree_root_split(BTree *btree, BTreePage *btree_old_root, BTreeSplitResult *split_result, BTreeIndexSpec *index);
 
 #endif
