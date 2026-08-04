@@ -1,92 +1,230 @@
 #ifndef BTREE_UTILS_H_
 #define BTREE_UTILS_H_
 
-#include <stdint.h>
-#include <stdbool.h>
+#include "../../include/btree.h"
+#include "../../include/page.h"
 
 typedef struct value Value;
-typedef struct btree_page_collection BTreePageCollection;
-typedef struct pager Pager;
 typedef struct page Page;
+typedef struct pager Pager;
+typedef enum btree_shift_direction BTreeShiftDirection;
+typedef struct btree BTree;
+typedef struct btree_page BTreePage;
+typedef struct btree_key_view BTreeKeyView;
+typedef struct btree_index_spec BTreeIndexSpec;
+typedef struct btree_search_key BTreeSearchKey;
+typedef struct btree_cell_contents BTreeCellContents;
+typedef struct btree_search_result BTreeSearchResult;
 
-/* ---------- Node Split Helpers ---------- */
+#define MIN_CELL_SIZE 5 // lets suppose key is a bool (uint8_t) and a child pointer (uint32_t)
 
-SplitResult *split_result_create(Page *new_page, void *context);
+/* ---------- BTreePage Component Interface ---------- */
 
-bool btree_split_cells(Page *original_page, Page *new_page, void *context);
+/* Attach specific page to a BTreePage component. */
+void btree_page_attach(BTreePage *btree_page, Page *page);
 
-Page *btree_compact_page(Pager *pager, Page *old_page, void *context);
+/* Validate BtreePage's header metadata. */
+BTreeStatus btree_page_validate(Pager *pager, BTreePage *btree_page, BTreeIndexSpec *index);
 
-bool connect_sibling_leaf_nodes(Pager *pager, Page *original_page, Page *new_page);
+/* Load already existing header metadata from page_data onto BTreePage.*/
+void btree_page_load(BTreePage *btree_page);
 
-/* ---------- Node Insert Helpers ---------- */
+/* Sync BTreePage header metadata with page's page_data in order to be
+ * written in the disk later. */
+void btree_page_sync(Pager *pager, BTreePage *btree_page);
 
-bool update_page_cell_and_payload(Pager *pager, Page *page, uint16_t result_index,
-     uint16_t write_offset, uint16_t cell_count, void *payload, void *keys, void *context);
+/* Wrapper function that initializes and validates BTreePage fully. */
+BTreeStatus btree_page_attach_load_validate(Pager *pager, BTreePage *btree_page, Page *page, BTreeIndexSpec *index);
 
-bool swap_internal_rightmost_child_pointer(Page *page, void *payload);
 
-bool check_leaf_duplicate(Page *page, void *keys, uint16_t result_index, void *context, bool *duplicate);
+/* ---------- Miscellaneous  ---------- */
 
-/* ---------- Page Data Comparison Helpers ---------- */
+/* Get exact offset and size of key and store it in BTreeKeyView. */
+BTreeStatus get_key(BTreePage *btree_page, uint16_t cell_index, BTreeKeyView *key, BTreeIndexSpec *index);
 
-bool btree_compare(Value **values, const void *key, void *context, int *result);
+/* Comparing BTree Internal/Leaf Node Keys. */
+BTreeStatus btree_compare(Value **values, BTreeKeyView *btree_key, BTreeSearchKey *search_key, int *result);
 
-Value **btree_extract_payload_keys(uint8_t node_type, void *payload, void *context);
+/* Check if there's enough space to store a Cell and its Cell Pointer. */
+BTreeStatus btree_page_has_enough_space(BTreePage *btree_page, BTreeCellContents *cell_contents);
 
-/* ---------- Page Data Capacity Helpers ---------- */
+/* Check if leaf is duplicate by comparing the keys. */
+BTreeStatus check_leaf_duplicate(BTreePage *btree_page, BTreeSearchKey *search_key,
+    BTreeSearchResult *search_result, bool *duplicate);
 
-uint16_t btree_get_available_capacity(void *page_data);
+/* Inserting into an internal node and the binary search's returned
+ * index is equal to the page's cell count then:
+ * swap rightmost child pointer with the child pointer contained in
+ * the payload*/
+BTreeStatus swap_internal_rightmost_child_pointer(BTreePage *btree_page, BTreeCellContents *cell_contents);
 
-bool btree_has_enough_space(void *page_data, uint16_t metadata_size);
+/* Remove garbage cell pointers and contents by creating a new page and transfering
+ * ONLY the valid metadata there. */
+BTreeStatus btree_compact_page(BTree *btree, BTreePage *btree_page, BTreeIndexSpec *index);
 
-uint32_t btree_get_cell_content_size(uint8_t node_type, void *keys, void *context);
+/* Connect sibling leaf nodes right after splitting. */
+BTreeStatus connect_sibling_leaf_nodes(BTree *btree, BTreePage *btree_page1, BTreePage *btree_page2);
 
-uint16_t btree_get_key_size(const void *keys, void *context);
 
-/* ---------- Shifting Page Data Helpers ---------- */
+/* ---------- Cell Operations/Interface ---------- */
 
-bool shift_metadata(void *page_data, uint16_t cell_pointer, void *context);
+/* BTreeCellView RAM Component Interface for easy cell access with offset and its length.
+ * DOESNT update the Page Data, just for cell viewing and accesibility. */
+BTreeStatus get_cell(BTreePage *btree_page, uint16_t cell_index, BTreeCellView *cell, BTreeIndexSpec *index);
 
-bool shift_cell_pointers(void *page_data, uint16_t index);
+// Updates Cell Pointer with new [ offset + size ]
+BTreeStatus set_cell(BTree *btree, BTreePage *btree_page, BTreeIndexSpec *index, BTreeSearchResult *search_result,
+                    BTreeCellContents *cell_contents);
 
-/* ---------- Page Data Access Helpers ----------*/
+/* Insert new cell's Cell Pointer and its contents onto a BTreePage AFTER BINARY SEARCH. */
+BTreeStatus insert_cell(BTree *btree, BTreePage *btree_page, BTreeIndexSpec *index, BTreeSearchResult *search_result,
+    BTreeCellContents *cell_contents);
 
-bool get_node_type(void *page_data, uint8_t *node_type);
-bool set_node_type(void *page_data, uint8_t node_type);
+/* Transfer half of src's cells to dest and update cell count. */
+BTreeStatus btree_split_cells(BTreePage *src, BTreePage *dest, BTreeIndexSpec *index);
 
-bool get_root_status(void *page_data, uint8_t *root_status);
-bool set_root_status(void *page_data, uint8_t root_status);
+/* Function that actually does that transferring of cell pointers and contents. */
+BTreeStatus btree_transfer_cells(BTreePage *src, uint16_t src_idx, BTreePage *dest, uint16_t dest_idx, BTreeIndexSpec *index);
 
-bool get_parent_pointer(void *page_data, uint32_t *parent_pointer);
-bool set_parent_pointer(void *page_data, uint32_t parent_pointer);
+/* Remove cell by SHIFTING DOWN cell pointers and contents. */
+BTreeStatus btree_remove_cell(BTreePage *btree_page, uint32_t cell_pointer_index, BTreeIndexSpec *index);
 
-bool get_cell_count(void *page_data, uint16_t *cell_count);
-bool set_cell_count(void *page_data, uint16_t cell_count);
 
-bool get_free_space_offset(void *page_data, uint16_t *free_space_offset);
-bool set_free_space_offset(void *page_data, uint16_t free_space_offset);
+/* ---------- Shift Cell Pointers & Cell Contents ---------- */
 
-bool get_cell_pointer(void *page_data, uint16_t cell_index, uint16_t *cell_pointer);
-bool set_cell_pointer(void *page_data, uint16_t cell_index, uint16_t cell_pointer);
+/* Shift cell pointers forward/backwards to insert/delete specific cell pointer. */
+BTreeStatus shift_cell_pointers(BTreePage *btree_page, uint16_t index, BTreeShiftDirection shift_direction);
 
-bool get_cell_child_pointer(void *page_data, uint16_t cell_pointer, uint32_t *child_pointer);
-bool set_cell_child_pointer(void *page_data, uint16_t cell_pointer, uint32_t child_pointer);
+/* Shift cells forward/backwards to insert/delete specific cell and its contents. */
+BTreeStatus shift_cells(BTreePage *btree_page, uint32_t cell_pointer, BTreeShiftDirection shift_direction);
 
-bool get_cell_id(void *page_data, uint16_t cell_pointer, void *context, void **id);
-bool set_cell_id(void *page_data, uint16_t cell_pointer, void *context, void *id);
 
-bool get_cell_payload(void *page_data, uint16_t cell_pointer, void *context, void **payload);
-bool set_cell_payload(void *page_data, uint16_t cell_pointer, void *context, void *payload);
+/* ---------- Inline Helpers for immediate Page Metadata Access ---------- */
 
-bool get_rightmost_child_pointer(void *page_data, uint32_t *rightmost_child_pointer);
-bool set_rightmost_child_pointer(void *page_data, uint32_t rightmost_child_pointer);
+/* Cell Pointer now containts both the cell's offset and its length. */
+static inline uint32_t make_cell_pointer(uint16_t offset, uint16_t size) {
+    return ((uint32_t)offset << 16) | (uint32_t) size;
+}
 
-bool get_leaf_previous_pointer(void *page_data, uint32_t *previous);
-bool set_leaf_previous_pointer(void *page_data, uint32_t previous);
+static inline uint16_t get_cell_offset(uint32_t cell_pointer) {
+    return (uint16_t)(cell_pointer >> 16);
+}
 
-bool get_leaf_next_pointer(void *page_data, uint32_t *next);
-bool set_leaf_next_pointer(void *page_data, uint32_t next);
+static inline uint16_t get_cell_size(uint32_t cell_pointer) {
+    return (uint16_t)(cell_pointer & 0xFFFF);
+}
+
+static inline uint16_t get_header_size(BTreeNodeType node_type) {
+    return (node_type == BTREE_INTERNAL_NODE) ? BTREE_INTERNAL_HEADER_SIZE : BTREE_LEAF_HEADER_SIZE;
+}
+
+// Solving Endianness/Portability and Unaligned Access
+static inline uint16_t load_u16_le(const uint8_t *src) {
+    return (uint16_t)src[0] | ((uint16_t)src[1] << 8);
+}
+
+static inline void store_u16_le(uint8_t *dst, uint16_t value) {
+    dst[0] = (uint8_t)value;
+    dst[1] = (uint8_t)(value >> 8);
+}
+
+static inline uint32_t load_u32_le(const uint8_t *src) {
+    return (uint32_t)src[0] | ((uint32_t)src[1] << 8) | 
+           ((uint32_t)src[2] << 16) | ((uint32_t)src[3] << 24);
+}
+
+static inline void store_u32_le(uint8_t *dst, uint32_t value) {
+    dst[0] = (uint8_t)value;
+    dst[1] = (uint8_t)(value >> 8);
+    dst[2] = (uint8_t)(value >> 16);
+    dst[3] = (uint8_t)(value >> 24);
+}
+
+static inline BTreeNodeType get_node_type(const uint8_t *page_data) {
+    return (BTreeNodeType)(page_data)[BTREE_NODE_TYPE_OFFSET];
+}
+
+static inline void set_node_type(uint8_t *page_data, BTreeNodeType type) {
+    page_data[BTREE_NODE_TYPE_OFFSET] = (uint8_t )type;
+}
+
+static inline uint8_t get_root_status(const uint8_t *page_data) {
+    return page_data[BTREE_ROOT_FLAG_OFFSET];
+}
+
+static inline void set_root_status(uint8_t *page_data, uint8_t is_root) {
+    page_data[BTREE_ROOT_FLAG_OFFSET] = is_root ? 1 : 0;
+}
+
+static inline uint32_t get_parent_pointer(const uint8_t *page_data) {
+    return load_u32_le(page_data + BTREE_PARENT_OFFSET);
+}
+
+static inline void set_parent_pointer(uint8_t *page_data, uint32_t parent) {
+    store_u32_le(page_data + BTREE_PARENT_OFFSET, parent);
+}
+
+static inline uint16_t get_cell_count(const uint8_t *page_data) {
+    return load_u16_le(page_data + BTREE_CELL_COUNT_OFFSET);
+}
+
+static inline void set_cell_count(uint8_t *page_data, uint16_t count) {
+    store_u16_le(page_data + BTREE_CELL_COUNT_OFFSET, count);
+}
+
+static inline uint16_t get_free_space_offset(const uint8_t *page_data) {
+    return load_u16_le(page_data + BTREE_FREE_SPACE_OFFSET);
+}
+
+static inline void set_free_space_offset(uint8_t *page_data, uint16_t offset) {
+    store_u16_le(page_data + BTREE_FREE_SPACE_OFFSET, offset);
+}
+
+static inline uint32_t get_cell_pointer(const uint8_t *page_data, uint16_t cell_index) {
+    BTreeNodeType node_type = get_node_type(page_data);
+    uint16_t header_size = btree_header_size(node_type);
+
+    return load_u32_le(page_data + header_size + (cell_index * 4));
+}
+
+static inline void set_cell_pointer(uint8_t *page_data, uint16_t cell_index, uint32_t cell_pointer) {
+    BTreeNodeType node_type = get_node_type(page_data);
+    uint16_t header_size = btree_header_size(node_type);
+
+    store_u32_le(page_data + header_size + (cell_index * 4), cell_pointer);
+}
+
+static inline uint32_t get_cell_child_pointer(const uint8_t *page_data, uint16_t cell_offset) {
+    return load_u32_le(page_data + cell_offset);
+}
+
+static inline void set_cell_child_pointer(uint8_t *page_data, uint16_t cell_offset, uint32_t child_page) {
+    store_u32_le(page_data + cell_offset, child_page);
+}
+
+static inline uint32_t get_rightmost_child(const uint8_t *page_data) {
+    return load_u32_le(page_data + BTREE_INTERNAL_RIGHTMOST_OFFSET);
+}
+
+static inline void set_rightmost_child(uint8_t *page_data, uint32_t child) {
+    store_u32_le(page_data + BTREE_INTERNAL_RIGHTMOST_OFFSET, child);
+}
+
+static inline uint32_t get_leaf_previous(const uint8_t *page_data) {
+    return load_u32_le(page_data + BTREE_LEAF_PREVIOUS_OFFSET);
+}
+
+static inline void set_leaf_previous(uint8_t *page_data, uint32_t previous) {
+    store_u32_le(page_data + BTREE_LEAF_PREVIOUS_OFFSET, previous);
+}
+
+static inline uint32_t get_leaf_next(const uint8_t *page_data) {
+    return load_u32_le(page_data + BTREE_LEAF_NEXT_OFFSET);
+}
+
+static inline void set_leaf_next(uint8_t *page_data, uint32_t next) {
+    store_u32_le(page_data + BTREE_LEAF_NEXT_OFFSET, next);
+}
 
 /* ---------- BTree/Index Traverse Helpers ---------- */
 
