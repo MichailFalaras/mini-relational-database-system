@@ -106,10 +106,14 @@ bool row_set_value(Row *row, uint32_t column_pos, const Value *new_val) {
 /* Free Row, Values and Values' internals. */
 void row_free(Row *row) {
     if (row != NULL) {
-        for (uint32_t i = 0; i < row->n_columns; i++) {
-            value_free(row->values[i]);
+        if (row->values != NULL) {
+            for (uint32_t i = 0; i < row->n_columns; i++) {
+                if (row->values[i] != NULL) {
+                    value_free(row->values[i]);
+                }
+            }
         }
-
+        
         free(row->values);
         free(row);
         row = NULL;

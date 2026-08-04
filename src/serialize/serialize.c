@@ -5,48 +5,246 @@
 #include "../../include/data_types.h"
 #include "../src/data_types/data_types_utils.h"
 #include "../src/btree/btree_utils.h"
+#include "../../include/schema.h"
 
-/* BTreeLeafNode specific cell data serialization. */
-bool serialize_cell_data(void *page_data, uint16_t offset, void *payload, Value **keys, void *context) {
-    if (!page_data || !payload || !keys || !context) {
+/* Serialize/Deserialize cell contents type agnostic functions. */
+bool serialize_cell_contents(uint8_t *write_offset, BTreePage *btree_page, BTreeCellContents *cell) {
+    if (!write_offset || !btree_page || !btree_page->page
+        || !btree_page->data || !cell) {
         return false;
     }
 
-    KeyExtractionContext *ctx = (KeyExtractionContext *) context;
-    /* Get node type. */
-    uint8_t node_type = 0;
-    if (!get_node_type(page_data, &node_type)) {
-        return false;
-    }
-    
-    /* Get key size to skip ahead for leaf nodes. */
-    uint16_t key_size = btree_get_key_size(keys, context);
-    if (!key_size) {
-        return false;
-    }
+    switch (btree_page->type) {
+        case BTREE_INTERNAL_NODE:
+            if (!serialize_internal_node(write_offset, cell)) {
+                return false;
+            }
 
-    /* Write either Child Pointer or Row. */
-    uint8_t *current_offset = (uint8_t*) page_data + offset;
-    if (node_type) {
-        memcpy(current_offset, (uint32_t *) payload, sizeof(uint32_t));
-        current_offset += 4;
-    } else {
-        memcpy(current_offset + key_size, (Row *) payload, sizeof(Row));       
-    }
+            break;
+        case BTREE_LEAF_NODE:
+            if (!serialize_leaf_node(write_offset, cell)) {
+                return false;
+            }
 
-    /* Write keys. */
-    for (uint32_t i = 0; i < ctx->index_key->num_columns; i++) {
-        if (!serialize_value_data(keys[i], current_offset)) {
+            break;
+        default:
+            fprintf(stderr, "serialize_cell_contents: BTreePage type is not valid.\n");
             return false;
-        }
-
-        current_offset += get_data_type_size(ctx->data_types[i]);
     }
 
     return true;
 }
 
-/* Serialize DataType specific Value data. */
+bool deserialize_cell_contents(const Schema *schema, uint8_t *read_offset, BTreePage *btree_page,
+    BTreeCell *cell_view, BTreeCellContents *cell, BTreeIndexSpec *index) {
+    if (!schema || !read_offset || !btree_page || !btree_page->page
+        || !btree_page->data || !cell_view || !cell || !index) {
+        return false;
+    }
+
+    switch (btree_page->type) {
+        case BTREE_INTERNAL_NODE:
+            if (!deserialize_internal_node(read_offset, cell_view, cell, index)) {
+                return false;
+            }
+
+            break;
+        case BTREE_LEAF_NODE:
+            if (!deserialize_leaf_node(schema, read_offset, cell_view, cell, index)) {
+                return false;
+            }
+
+            break;
+        default:
+            fprintf(stderr, "serialize_cell_contents: BTreePage type is not valid.\n");
+            return false;
+    }
+
+    return true;
+}
+
+/* Serialize/Deserialize leaf node cell metadata. */
+bool serialize_leaf_node(uint8_t *write_offset, BTreeCellContents *cell) {
+    if (!write_offset || !cell) {
+        return false;
+    }
+
+    if (!serialize_keys(&write_offset, cell)) {
+        return false;
+    }
+    
+    if (!serialize_row(&write_offset, cell->BTreePayload.row)) {
+        return false;
+    }
+
+    return true;
+}
+
+bool deserialize_leaf_node(const Schema *schema, uint8_t *read_offset, BTreeCellView *cell_view, BTreeCellContents *cell, BTreeIndexSpec *index) {
+    if (!read_offset || !cell || !cell_view || !index) {
+        return false;
+    }
+    cell->key_size = cell_view->key.key_size;
+    cell->num_keys = index->index_key->num_columns;
+    cell->cell_size = cell_view->payload_size + cell->key_size;
+
+    cell->keys = (Value **) calloc(index->index_key->num_columns, sizeof(Value *));
+    if (!cell->keys) {
+        return false;
+    }
+    
+    if (!deserialize_keys(&read_offset, cell, index)) {
+        return false;
+    }
+
+    if (!deserialize_row(schema, &read_offset, cell)) {
+        value_free_array(cell->keys, cell->num_keys);
+        return false;
+    }
+
+    return true;
+}
+
+/* Serialize/Deserialize internal node cell metadata. */
+bool serialize_internal_node(uint8_t *write_offset, BTreeCellContents *cell) {
+    if (!write_offset || !cell) {
+        return false;
+    }
+
+    memcpy(write_offset, &cell->BTreePayload.child_pointer, sizeof(uint32_t));
+    write_offset += sizeof(uint32_t);
+    
+    if (!serialize_keys(&write_offset, cell)) {
+        return false;
+    }
+
+    return true;
+}
+
+bool deserialize_internal_node(uint8_t *read_offset, BTreeCellView *cell_view, BTreeCellContents *cell, BTreeIndexSpec *index) {
+    if (!read_offset || !cell_view || !cell || !index) {
+        return false;
+    }
+
+    cell->num_keys = index->index_key->num_columns;
+    cell->key_size = cell_view->key.key_size;
+    cell->cell_size = cell->key_size + sizeof(uint32_t);
+
+    memcpy(&cell->BTreePayload.child_pointer, read_offset, sizeof(uint32_t));
+    read_offset += sizeof(uint32_t);
+
+    cell->keys = (Value **) calloc(index->index_key->num_columns, sizeof(Value *));
+    if (!cell->keys) {
+        return false;
+    }
+
+    if (!deserialize_keys(&read_offset, cell, index)) {
+        return false;
+    }
+
+    return true;
+}
+
+/* Serialize/Deserialize keys. */
+bool serialize_keys(uint8_t **write_offset, BTreeCellContents *cell) {
+    if (!write_offset || !cell) {
+        return false;
+    }
+
+    for (uint32_t i = 0; i < cell->num_keys; i++) {
+        if (!serialize_value_data(cell->keys[i], *write_offset)) {
+            return false;
+        }
+
+        *write_offset += get_data_type_size(cell->keys[i]->type);
+    }
+
+    return true;
+}
+
+bool deserialize_keys(uint8_t **read_offset, BTreeCellContents *cell, BTreeIndexSpec *index) {
+    if (!read_offset || !cell || !index) {
+        return false;
+    }
+
+    for (uint32_t i = 0; i < index->index_key->num_columns; i++) {
+        cell->keys[i] = deserialize_value_data(index->column_types[i], *read_offset);
+        if (!cell->keys[i]) {
+            value_free_array(cell->keys, cell->num_keys);
+            return false;
+        }
+
+        *read_offset += get_data_type_size(index->column_types[i]);
+    }
+
+    return true;
+}
+
+/* Serialize/Deserialize Row metadata. */
+bool serialize_row(uint8_t **write_offset, const Row *row) {
+    if (!write_offset || !row) {
+        return false;
+    }
+
+    memcpy(*write_offset, &row->is_deleted, sizeof(uint8_t));
+    *write_offset += sizeof(uint8_t);
+
+    memcpy(*write_offset, &row->n_columns, sizeof(uint32_t));
+    *write_offset += sizeof(uint32_t);
+
+    for (uint32_t i = 0; i < row->n_columns; i++) {
+        if (!serialize_value_data(row->values[i], *write_offset)) {
+            return false;
+        }
+
+        *write_offset += get_data_type_size(row->values[i]->type);
+    }
+
+    return true;
+}
+
+bool deserialize_row(const Schema *schema, uint8_t **read_offset, BTreeCellContents *cell) {
+    if (!schema || !read_offset || !cell) {
+        return false;
+    }
+
+    cell->BTreePayload.row = (Row *) calloc(1, sizeof(Row));
+    if (!cell->BTreePayload.row) {
+        return false;
+    }
+
+    memcpy(&cell->BTreePayload.row->is_deleted, *read_offset, sizeof(uint8_t));
+    *read_offset += sizeof(uint8_t);
+
+    memcpy(&cell->BTreePayload.row->n_columns, *read_offset, sizeof(uint32_t));
+    *read_offset += sizeof(uint32_t);
+
+    if (cell->BTreePayload.row->n_columns != schema->num_columns) {
+        row_free(cell->BTreePayload.row);
+        return false;
+    }
+
+    cell->BTreePayload.row->values = (Value **) calloc(cell->BTreePayload.row->n_columns, sizeof(Value *));
+    if (!cell->BTreePayload.row->values) {
+        row_free(cell->BTreePayload.row);
+        return false;
+    }
+
+    for (uint32_t i = 0; i < cell->BTreePayload.row->n_columns; i++) {
+        cell->BTreePayload.row->values[i] = deserialize_value_data(schema->columns[i]->type, *read_offset);
+        if (!cell->BTreePayload.row->values[i]) {
+            value_free_array(cell->BTreePayload.row->values, cell->BTreePayload.row->n_columns);
+            row_free(cell->BTreePayload.row);
+            return false;
+        }
+
+        *read_offset += get_data_type_size(schema->columns[i]->type);
+    }
+
+    return true;
+}
+
+/* Serialize/Deserialize value data. */
 bool serialize_value_data(Value *value, void *serialized_output) {
     if (!value || !serialized_output) {
         return false;
@@ -103,7 +301,6 @@ bool serialize_value_data(Value *value, void *serialized_output) {
     return true;
 }
 
-/* Deserialize value data. */
 Value *deserialize_value_data(DataType type, void *offset) {
     if (!offset) {
         return NULL;
