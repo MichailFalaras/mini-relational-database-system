@@ -502,9 +502,7 @@ bool convert_to_timestamp(Value *value) {
     return true;
 }
 
-/* Get sizeof from DataType.*/
-/*❗This implementation makes sense if we actually
-serialize/deserialize onto the disk. */
+/* Get sizeof from DataType. */
 uint32_t get_data_type_size(DataType type) {
 
     switch (type) {
