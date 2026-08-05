@@ -5,7 +5,7 @@
 #include <fcntl.h>
 #include <ctype.h>
 #include <stdbool.h>
-#include "tokenizer_internal.h"
+#include "tokenizer_utils.h"
 #include "../../include/tokenizer.h"
 
 /* Read query. Supports one-line & multi-line queries. */

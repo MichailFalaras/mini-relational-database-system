@@ -7,6 +7,8 @@
 /* Forward Declarations. */
 typedef struct schema Schema;
 typedef struct index Index;
+typedef enum index_type IndexType;
+typedef struct index_key IndexKey;
 typedef struct column Column;
 typedef struct constraint Constraint;
 typedef struct pager Pager;
@@ -24,6 +26,7 @@ typedef struct database Database;
  * row_count: amount of rows. */
 typedef struct table {
     char name[64];
+    bool is_materialized;
     bool is_deleted;
     Schema* table_schema;
     Index *primary_index;
@@ -59,13 +62,15 @@ extern Column *table_find_column(const Table *table, const char *col_name);
 
 
 /* Table disk operations */
-extern bool table_create(Table *table, Pager *pager);
+extern bool table_create(const char *table_name, const Schema *schema, Pager *pager);
+
+extern bool table_materialize(Table *table, Pager *pager);
 
 extern bool table_drop(Table *table, Pager *pager);
 
 extern bool table_truncate(Table *table, Pager *pager);
 
-extern bool table_create_index(Table *table, const Index *new_index, Pager *page);
+extern bool table_create_index(Table *table, const char *index_name, IndexType type, const IndexKey *key, Pager *page);
 
 extern bool table_drop_index(Table *table, const char *index_name, Pager *page);
 
