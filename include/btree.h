@@ -95,6 +95,12 @@ typedef struct btree_cell_contents {
     uint16_t cell_size;
 } BTreeCellContents;
 
+/* Helper struct for BTreePage Union type_specific data. */
+typedef struct btree_sibling_pointers {
+    uint32_t previous_leaf_pointer;
+    uint32_t next_leaf_pointer;
+} BTreeSiblingPointers;
+
 /* BTree RAM struct with all needed already extracted
  * metadata, ready for immediate use. */
 typedef struct btree_page {
@@ -107,8 +113,7 @@ typedef struct btree_page {
     uint8_t *data;
     union {
         uint32_t rightmost_child_pointer;
-        uint32_t previous_leaf_pointer;
-        uint32_t next_leaf_pointer;
+        BTreeSiblingPointers siblings;
     } type_specific_data;
 } BTreePage;
 
@@ -143,16 +148,6 @@ typedef struct btree_key_view {
     uint16_t offset;
     uint16_t key_size;
 } BTreeKeyView;
-
-#include <stdio.h>
-#include <stdlib.h>
-#include "../../include/btree.h"
-#include "btree_utils.h"
-#include "../../include/page.h"
-#include "../../include/data_types.h"
-#include "../../include/serialize.h"
-#include "../src/data_types/data_types_utils.h"
-#include "../../include/index.h"
 
 /* Initialize btree_page as an Empty Leaf Node. */
 extern BTreeStatus btree_page_init_empty_leaf(BTree *btree, BTreePage *btree_page);

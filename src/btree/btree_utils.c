@@ -93,19 +93,19 @@ BTreeStatus btree_page_validate(Pager *pager, BTreePage *btree_page, BTreeIndexS
 
     /* Previous and next pointer checks. */
     if (btree_page->type == BTREE_LEAF_NODE
-        && ((btree_page->type_specific_data.previous_leaf_pointer != UINT32_MAX
-            && btree_page->type_specific_data.previous_leaf_pointer >= pager->num_pages)
-        || (btree_page->type_specific_data.next_leaf_pointer != UINT32_MAX
-            && btree_page->type_specific_data.next_leaf_pointer >= pager->num_pages)
+        && ((btree_page->type_specific_data.siblings.previous_leaf_pointer != UINT32_MAX
+            && btree_page->type_specific_data.siblings.previous_leaf_pointer >= pager->num_pages)
+        || (btree_page->type_specific_data.siblings.next_leaf_pointer != UINT32_MAX
+            && btree_page->type_specific_data.siblings.next_leaf_pointer >= pager->num_pages)
             )) {
         return BTREE_CORRUPT_PAGE;
     }
 
     if (btree_page->type == BTREE_LEAF_NODE
-        && (btree_page->type_specific_data.previous_leaf_pointer == 0
-        || btree_page->type_specific_data.previous_leaf_pointer == 1
-        || btree_page->type_specific_data.next_leaf_pointer == 0
-        || btree_page->type_specific_data.next_leaf_pointer == 1)) {
+        && (btree_page->type_specific_data.siblings.previous_leaf_pointer == 0
+        || btree_page->type_specific_data.siblings.previous_leaf_pointer == 1
+        || btree_page->type_specific_data.siblings.next_leaf_pointer == 0
+        || btree_page->type_specific_data.siblings.next_leaf_pointer == 1)) {
         return BTREE_CORRUPT_PAGE;
     }
 
@@ -164,8 +164,8 @@ void btree_page_load(BTreePage *btree_page) {
     if (btree_page->type == BTREE_INTERNAL_NODE) {
         btree_page->type_specific_data.rightmost_child_pointer = get_rightmost_child(btree_page->data);
     } else {
-        btree_page->type_specific_data.previous_leaf_pointer = get_leaf_previous(btree_page->data);
-        btree_page->type_specific_data.next_leaf_pointer = get_leaf_next(btree_page->data);
+        btree_page->type_specific_data.siblings.previous_leaf_pointer = get_leaf_previous(btree_page->data);
+        btree_page->type_specific_data.siblings.next_leaf_pointer = get_leaf_next(btree_page->data);
     }
 }
 
@@ -185,8 +185,8 @@ void btree_page_sync(Pager *pager, BTreePage *btree_page) {
     if (btree_page->type == BTREE_INTERNAL_NODE) {
         set_rightmost_child(btree_page->data, btree_page->type_specific_data.rightmost_child_pointer);
     } else {
-        set_leaf_previous(btree_page->data, btree_page->type_specific_data.previous_leaf_pointer);
-        set_leaf_next(btree_page->data, btree_page->type_specific_data.next_leaf_pointer);
+        set_leaf_previous(btree_page->data, btree_page->type_specific_data.siblings.previous_leaf_pointer);
+        set_leaf_next(btree_page->data, btree_page->type_specific_data.siblings.next_leaf_pointer);
     }
 
     if (!page_mark_dirty(btree_page->page) || !page_touch(pager, btree_page->page)) {
@@ -280,7 +280,7 @@ BTreeStatus btree_page_has_enough_space(BTreePage *btree_page, BTreeCellContents
     return false;
 }
 
-/* Check if leaf is duplicate by comparing the keys. */
+/* (NOT USED ANYWHERE, just extra helper func) Check if leaf is duplicate by comparing the keys. */
 BTreeStatus check_leaf_duplicate(BTreePage *btree_page, BTreeSearchKey *search_key,
      BTreeSearchResult *search_result, bool *duplicate) {
     if (!btree_page || !btree_page->page || !btree_page->data
@@ -385,8 +385,8 @@ BTreeStatus connect_sibling_leaf_nodes(BTree *btree, BTreePage *btree_page1, BTr
     }
 
     /* If page1 was already connected with previous and next, update them too. */
-    if (btree_page1->type_specific_data.previous_leaf_pointer != UINT32_MAX) {
-        Page *left_page = pager_get_page(btree->pager, btree_page1->type_specific_data.previous_leaf_pointer);
+    if (btree_page1->type_specific_data.siblings.previous_leaf_pointer != UINT32_MAX) {
+        Page *left_page = pager_get_page(btree->pager, btree_page1->type_specific_data.siblings.previous_leaf_pointer);
         if (!left_page) {
             return BTREE_ERROR;
         }
@@ -394,8 +394,8 @@ BTreeStatus connect_sibling_leaf_nodes(BTree *btree, BTreePage *btree_page1, BTr
         set_leaf_next(left_page->page_data, btree_page2->page->page_num);
     }
 
-    if (btree_page1->type_specific_data.next_leaf_pointer != UINT32_MAX) {
-        Page *right_page = pager_get_page(btree->pager, btree_page1->type_specific_data.next_leaf_pointer);
+    if (btree_page1->type_specific_data.siblings.next_leaf_pointer != UINT32_MAX) {
+        Page *right_page = pager_get_page(btree->pager, btree_page1->type_specific_data.siblings.next_leaf_pointer);
         if (!right_page) {
             return BTREE_ERROR;
         }
@@ -404,9 +404,9 @@ BTreeStatus connect_sibling_leaf_nodes(BTree *btree, BTreePage *btree_page1, BTr
     }
 
     /* Page1 and Page2 connection. */
-    btree_page2->type_specific_data.next_leaf_pointer = btree_page1->type_specific_data.next_leaf_pointer;
-    btree_page1->type_specific_data.next_leaf_pointer = btree_page2->page->page_num;
-    btree_page2->type_specific_data.previous_leaf_pointer = btree_page1->page->page_num;
+    btree_page2->type_specific_data.siblings.next_leaf_pointer = btree_page1->type_specific_data.siblings.next_leaf_pointer;
+    btree_page1->type_specific_data.siblings.next_leaf_pointer = btree_page2->page->page_num;
+    btree_page2->type_specific_data.siblings.previous_leaf_pointer = btree_page1->page->page_num;
 
     return BTREE_SUCCESS;
 }
@@ -452,7 +452,7 @@ BTreeStatus insert_cell(BTree *btree, BTreePage *btree_page, BTreeIndexSpec *ind
     }
 
     /* Shift cell pointers downwards to create empty space. */
-    BTreeStatus status = shift_cell_pointers(btree_page, search_result->result_index, BTREE_SHIFT_INSERT);
+    BTreeStatus status = shift_cell_pointer(btree_page, search_result->result_index, BTREE_SHIFT_INSERT);
     if (status != BTREE_SUCCESS) {
         return status;
     }
@@ -526,7 +526,7 @@ BTreeStatus btree_transfer_cells(BTreePage *src, uint16_t src_idx, BTreePage *de
         return false;
     }
 
-    status = shift_cell_pointers(src, src_idx, BTREE_SHIFT_DELETE);
+    status = shift_cell_pointer(src, src_idx, BTREE_SHIFT_DELETE);
     if (status != BTREE_SUCCESS) {
         return status;
     }
@@ -541,12 +541,12 @@ BTreeStatus btree_remove_cell(BTreePage *btree_page, uint32_t cell_pointer_index
     uint32_t cell_pointer = get_cell_pointer(btree_page->data, 0);
 
     // Close separator key gap without needing to compact whole page
-    BTreeStatus status = shift_cell_pointers(btree_page, 0, BTREE_SHIFT_DELETE);
+    BTreeStatus status = shift_cell_pointer(btree_page, 0, BTREE_SHIFT_DELETE);
     if (status != BTREE_SUCCESS) {
         return status;
     }
 
-    status = shift_cells(btree_page, cell_pointer, BTREE_SHIFT_DELETE);
+    status = shift_cell(btree_page, cell_pointer, BTREE_SHIFT_DELETE);
     if (status != BTREE_SUCCESS) {
         return status;
     }
@@ -554,8 +554,8 @@ BTreeStatus btree_remove_cell(BTreePage *btree_page, uint32_t cell_pointer_index
     return BTREE_SUCCESS;
 }
 
-/* Shift cell pointers forward/backwards to insert/delete specific cell pointer. */
-BTreeStatus shift_cell_pointers(BTreePage *btree_page, uint16_t index, BTreeShiftDirection shift_direction) {
+/* Shift cell pointer forward/backwards to insert/delete specific cell pointer. */
+BTreeStatus shift_cell_pointer(BTreePage *btree_page, uint16_t index, BTreeShiftDirection shift_direction) {
     if (!btree_page) {
         return BTREE_INVALID_ARGUMENTS;
     }
@@ -593,8 +593,8 @@ BTreeStatus shift_cell_pointers(BTreePage *btree_page, uint16_t index, BTreeShif
     return BTREE_SUCCESS;
 }
 
-/* Shift cells forward/backwards to insert/delete specific cell and its contents. */
-BTreeStatus shift_cells(BTreePage *btree_page, uint32_t cell_pointer, BTreeShiftDirection shift_direction) {
+/* Shift cell forward/backwards to insert/delete specific cell and its contents. */
+BTreeStatus shift_cell(BTreePage *btree_page, uint32_t cell_pointer, BTreeShiftDirection shift_direction) {
     if (!btree_page || !btree_page->type || !btree_page->data) {
         return BTREE_INVALID_ARGUMENTS;
     }
@@ -607,12 +607,12 @@ BTreeStatus shift_cells(BTreePage *btree_page, uint32_t cell_pointer, BTreeShift
 
     uint8_t *src, *dest;
     if (shift_direction == BTREE_SHIFT_DELETE) {
-        dest = cell_offset;
-        src = cell_offset + cell_size;
-        btree_page->free_space_offset += cell_size;
-    } else {
         dest = cell_offset + cell_size;
         src = cell_offset;
+        btree_page->free_space_offset += cell_size;
+    } else {
+        dest = cell_offset;
+        src = cell_offset + cell_size;
         btree_page->free_space_offset -= cell_size;
     }
 
@@ -622,27 +622,45 @@ BTreeStatus shift_cells(BTreePage *btree_page, uint32_t cell_pointer, BTreeShift
         bytes_to_be_moved
     );
 
-    /* Don't forget to update the offset of cell pointers that 
-     * their contents were moved due to the shifting above. */
-    uint32_t temp = 0;
+    BTreeStatus status = update_cell_pointers_offset(btree_page, cell_pointer, cell_size, shift_direction);
+    if (status != BTREE_SUCCESS) {
+        return status;
+    }
+
+    return BTREE_SUCCESS;
+}
+
+/* Update cell pointers offset that was affected because of shift_cell. */
+BTreeStatus update_cell_pointers_offset(BTreePage *btree_page, uint32_t boundary_cell_pointer, uint16_t cell_size,
+    BTreeShiftDirection shift_direction) {
+    if (!btree_page || !btree_page->page || !btree_page->data) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    uint16_t boundary_offset = get_cell_offset(boundary_cell_pointer);
+
+    uint32_t cell_pointer = 0;
     uint16_t offset = 0, size = 0;
     for (uint32_t i = 0; i < btree_page->cell_count; i++) {
-        temp = get_cell_pointer(btree_page->data, i);
-        offset = get_cell_offset(temp);
-        size = get_cell_size(temp);
+        /* Retrieve cell pointer. */
+        cell_pointer = get_cell_pointer(btree_page->data, i);
+        offset = get_cell_offset(cell_pointer);
+        size = get_cell_size(cell_pointer);
 
-        if (get_cell_offset(cell_pointer) < offset) {
+        /* Check if its actually affected by the shift. */
+        if (boundary_offset < offset) {
             continue;
         }
         
+        /* Update its offset according to shift direction. */
         if (shift_direction == BTREE_SHIFT_DELETE) {
             offset += cell_size;
-            temp = make_cell_pointer(offset, size);
-            set_cell_pointer(btree_page->data, i, temp);
+            cell_pointer = make_cell_pointer(offset, size);
+            set_cell_pointer(btree_page->data, i, cell_pointer);
         } else {
             offset -= cell_size;
-            temp = make_cell_pointer(offset, size);
-            set_cell_pointer(btree_page->data, i, temp);
+            cell_pointer = make_cell_pointer(offset, size);
+            set_cell_pointer(btree_page->data, i, cell_pointer);
         }
     }
 

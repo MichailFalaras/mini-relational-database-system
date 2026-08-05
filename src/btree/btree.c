@@ -16,12 +16,13 @@ BTreeStatus btree_page_init_empty_leaf(BTree *btree, BTreePage *btree_page) {
 
     /* Update in memory data. */
     btree_page->type = BTREE_LEAF_NODE;
+    /* New leaf node temporarily initialized as a root node, and if it isn't its updated later */
     btree_page->is_root = 1;
     btree_page->parent_pointer = UINT32_MAX;
     btree_page->cell_count = 0;
     btree_page->free_space_offset = PAGE_SIZE;
-    btree_page->type_specific_data.previous_leaf_pointer = UINT32_MAX;
-    btree_page->type_specific_data.next_leaf_pointer = UINT32_MAX;
+    btree_page->type_specific_data.siblings.previous_leaf_pointer = UINT32_MAX;
+    btree_page->type_specific_data.siblings.next_leaf_pointer = UINT32_MAX;
 
     /* Update page's page_data too. */
     btree_page_sync(btree->pager, btree_page);
@@ -36,7 +37,8 @@ BTreeStatus btree_page_init_internal(BTree *btree, BTreePage *btree_page, uint32
     }
 
     btree_page->type = BTREE_INTERNAL_NODE;
-    btree_page->is_root = 1;
+    /* New internal node temporarily initialized as a root node, and if it isn't its updated later */
+    btree_page->is_root = 1; 
     btree_page->parent_pointer = UINT32_MAX;
     btree_page->cell_count = 0;
     btree_page->free_space_offset = PAGE_SIZE;
@@ -55,6 +57,12 @@ BTreeStatus btree_lower_bound_search(BTreePage *btree_page, BTreeSearchKey *sear
         return BTREE_INVALID_ARGUMENTS;
     }
     BTreeStatus status = BTREE_ERROR;
+
+    /* Initialize BTreeSearchResult. */
+    search_result->found = true; // Only errors change this to false
+    search_result->exact_match = false; // Only if exact match was found
+    search_result->page = NULL; // This should be updated in root-to-leaf search
+    search_result->result_index = btree_page->cell_count; // Initialize to cell count
 
     /* If there are no cells in the page, return index 0 as insertion position. */
     if (btree_page->cell_count == 0) {
@@ -198,7 +206,6 @@ BTreeStatus btree_root_to_leaf(BTree *btree, BTreeSearchKey *search_key, BTreeSe
         
         // Evict parent page here
         if (!pager_evict_page(btree->pager, parent_page_num)) {
-            pager_evict_page(btree->pager, page->page_num);
             return BTREE_ERROR;
         }
     }
@@ -217,7 +224,9 @@ BTreeStatus btree_root_to_leaf(BTree *btree, BTreeSearchKey *search_key, BTreeSe
 
 /* BTree Node insert type agnostic function.
  * Content being inserted is stored in BTreeCellContents.
- * Returns BTREE_SUCCESS or BTREE_NEEDS_SPLIT/BTreeSplitResult with split boolean value equal to true. */
+ * Returns BTREE_SUCCESS or BTREE_NEEDS_SPLIT/BTreeSplitResult with split boolean value equal to true.
+ * 
+ * Also used to insert the separator key onto the parent page. */
 BTreeStatus btree_node_insert(BTree *btree, BTreePage *btree_page, BTreeCellContents *cell_contents,
                             BTreeSplitResult *split_result, BTreeIndexSpec *index) {
     if (!btree || !btree_page || !btree_page->page || !btree_page->data
@@ -253,14 +262,8 @@ BTreeStatus btree_node_insert(BTree *btree, BTreePage *btree_page, BTreeCellCont
      * already in its position then we have a duplicate. */
     if (btree_page->type == BTREE_LEAF_NODE && index->is_unique == true
          && search_result.result_index < btree_page->cell_count) {
-        bool duplicate = false;
-
-        status = check_leaf_duplicate(btree_page, &search_key, &search_result, &duplicate);
-        if (status != BTREE_SUCCESS) {
-            return status;
-        }
-
-        if (duplicate == true) {
+    
+        if (search_result.exact_match == true) {
             return BTREE_DUPLICATE_KEY;
         }
     

@@ -92,12 +92,15 @@ BTreeStatus btree_remove_cell(BTreePage *btree_page, uint32_t cell_pointer_index
 
 /* ---------- Shift Cell Pointers & Cell Contents ---------- */
 
-/* Shift cell pointers forward/backwards to insert/delete specific cell pointer. */
-BTreeStatus shift_cell_pointers(BTreePage *btree_page, uint16_t index, BTreeShiftDirection shift_direction);
+/* Shift cell pointer forward/backwards to insert/delete specific cell pointer. */
+BTreeStatus shift_cell_pointer(BTreePage *btree_page, uint16_t index, BTreeShiftDirection shift_direction);
 
-/* Shift cells forward/backwards to insert/delete specific cell and its contents. */
-BTreeStatus shift_cells(BTreePage *btree_page, uint32_t cell_pointer, BTreeShiftDirection shift_direction);
+/* Shift cell forward/backwards to insert/delete specific cell and its contents. */
+BTreeStatus shift_cell(BTreePage *btree_page, uint32_t cell_pointer, BTreeShiftDirection shift_direction);
 
+/* Update cell pointers offset that was affected because of shift_cell. */
+BTreeStatus update_cell_pointers_offset(BTreePage *btree_page, uint32_t boundary_cell_pointer, uint16_t cell_size, 
+    BTreeShiftDirection shift_direction);
 
 /* ---------- Inline Helpers for immediate Page Metadata Access ---------- */
 
