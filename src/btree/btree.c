@@ -440,19 +440,19 @@ BTreeStatus btree_root_split(BTree *btree, BTreePage *btree_old_root, BTreeSplit
 BTreeStatus btree_traverse_reachable_pages(BTree *btree, BTreePageCollection *visited_pages) {
     if (!btree->pager || btree->pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
         printf("btree_traverse_reachable_pages: Invalid Pager.\n");
-        return false;
+        return BTREE_INVALID_ARGUMENTS;
     }
 
     if (!visited_pages) {
         printf("btree_traverse_reachable_pages: Invalid visited-pages structure.\n");
-        return false;
+        return BTREE_INVALID_ARGUMENTS;
     }
 
     if (btree->root_page_num <= SYSTEM_CATALOG_PAGE_NUM ||
         btree->root_page_num >= btree->pager->num_pages ||
         btree->root_page_num >= MAX_PAGES) {
         printf("btree_traverse_reachable_pages: Invalid root page number.\n");
-        return false;
+        return BTREE_CORRUPT_PAGE;
     }
     visited_pages->count = 0;
    
@@ -463,5 +463,5 @@ BTreeStatus btree_traverse_reachable_pages(BTree *btree, BTreePageCollection *vi
         return status;
     }
     
-    return true;
+    return BTREE_SUCCESS;
 }
