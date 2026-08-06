@@ -137,38 +137,57 @@ static bool build_test_btree(Index *index, Pager *pager, TestBTree *test_btree) 
         return false;
     }
 
+    BTreePage root_node = {0};
+    BTreePage left_child_node = {0};
+    BTreePage right_child_node = {0};
+
+    btree_page_attach(&root_node, root);
+    btree_page_attach(&left_child_node, left_child);
+    btree_page_attach(&right_child_node, right_child);
+
     // Initialize leaf nodes
-    if (!btree_init_empty_leaf(left_child->page_data) || !btree_init_empty_leaf(right_child->page_data)) {
+    if (btree_page_init_empty_leaf(&left_child_node) != BTREE_SUCCESS || 
+        btree_page_init_empty_leaf(&right_child_node) != BTREE_SUCCESS) {
         return false;
     }
 
-    if (!set_root_status(left_child->page_data, 0) ||
-        !set_parent_pointer(left_child->page_data, test_btree->root_page_num) ||
-        !set_root_status(right_child->page_data, 0) ||
-        !set_parent_pointer(right_child->page_data, test_btree->root_page_num)) {
+    // Setting leaf node connections
+    left_child_node.is_root = 0;
+    left_child_node.parent_pointer = test_btree->root_page_num;
+    left_child_node.type_specific_data.siblings.previous_leaf_pointer = UINT32_MAX;
+    left_child_node.type_specific_data.siblings.next_leaf_pointer = test_btree->child_page_nums[1];
+
+    right_child_node.is_root = 0;
+    right_child_node.parent_pointer = test_btree->root_page_num;
+    right_child_node.type_specific_data.siblings.previous_leaf_pointer = test_btree->child_page_nums[0];
+    right_child_node.type_specific_data.siblings.next_leaf_pointer = UINT32_MAX;
+
+    // Synchronize leaf headers and sibling metadata
+    btree_page_sync(pager, &left_child_node);
+    btree_page_sync(pager, &right_child_node);
+
+    /* Initialize root metadata. */
+    if (btree_page_init_internal(&root_node, test_btree->child_page_nums[1]) != BTREE_SUCCESS) {
         return false;
     }
 
-    if (!set_leaf_sibling_pointers(left_child->page_data, UINT32_MAX, test_btree->child_page_nums[1]) ||
-        !set_leaf_sibling_pointers(right_child->page_data, test_btree->child_page_nums[0], UINT32_MAX)) {
-        return false;
-    }
+    uint16_t cell_size = sizeof(uint32_t);
+    uint16_t cell_offset = (uint16_t)(PAGE_SIZE - cell_size);
 
-    // Initialize root node
-    if (!btree_init_internal(root->page_data, test_btree->child_page_nums[1])) {
-        return false;
-    }
+    root_node.cell_count = 1;
+    root_node.free_space_offset = cell_offset;
 
-    uint16_t internal_cell_offset = PAGE_SIZE - sizeof(uint32_t);
-    
-    if (!set_cell_count(root->page_data, 1) ||
-        !set_free_space_offset(root->page_data, internal_cell_offset) ||
-        !set_cell_pointer(root->page_data, 0, internal_cell_offset) ||
-        !set_cell_child_pointer(root->page_data, internal_cell_offset, test_btree->child_page_nums[0])) {
-        return false;
-    }
+    /*
+    * Must happen before set_cell_pointer(), because that setter reads
+    * node_type from page_data to determine the header size.
+    */
+    btree_page_sync(pager, &root_node);
 
-    if (!page_mark_dirty(root) || !page_mark_dirty(left_child) || !page_mark_dirty(right_child)) {
+    set_cell_pointer(root_node.data, 0, make_cell_pointer(cell_offset, cell_size));
+
+    set_cell_child_pointer(root_node.data, cell_offset, test_btree->child_page_nums[0]);
+
+    if (!page_mark_dirty(root) || !page_touch(pager, root)) {
         return false;
     }
 
@@ -176,24 +195,17 @@ static bool build_test_btree(Index *index, Pager *pager, TestBTree *test_btree) 
 }
 
 static bool is_empty_btree_root(Page *page) {
-    uint8_t node_type;
-    uint8_t root_status;
-    uint32_t parent_pointer;
-    uint16_t cell_count;
-    uint16_t free_space_offset;
-    uint32_t previous_leaf;
-    uint32_t next_leaf;
-    
-    if (!get_node_type(page->page_data, &node_type)) { return false; }
-    if (!get_root_status(page->page_data, &root_status)) { return false; }
-    if (!get_parent_pointer(page->page_data, &parent_pointer)) { return false; }
-    if (!get_cell_count(page->page_data, &cell_count)) { return false; }
-    if (!get_free_space_offset(page->page_data, &free_space_offset)) { return false; }
-    if (!get_leaf_sibling_pointers(page->page_data, &previous_leaf, &next_leaf)) { return false; }
+    if (!page) {
+        return false;
+    }
 
-    return node_type == 0 && root_status == 1 && parent_pointer == UINT32_MAX &&
-           cell_count == 0 && free_space_offset == PAGE_SIZE && 
-           previous_leaf == UINT32_MAX && next_leaf == UINT32_MAX;
+    return get_node_type(page->page_data) == BTREE_LEAF_NODE &&
+           get_root_status(page->page_data) == 1 &&
+           get_parent_pointer(page->page_data) == UINT32_MAX &&
+           get_cell_count(page->page_data) == 0 &&
+           get_free_space_offset(page->page_data) == PAGE_SIZE &&
+           get_leaf_previous(page->page_data) == UINT32_MAX &&
+           get_leaf_next(page->page_data) == UINT32_MAX;
 }
 
 static bool contains_page_num(const uint32_t *page_nums, uint32_t count, uint32_t target) { 
