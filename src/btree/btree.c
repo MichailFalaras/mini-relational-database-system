@@ -7,9 +7,10 @@
 #include "../../include/serialize.h"
 #include "../src/data_types/data_types_utils.h"
 #include "../../include/index.h"
+#include "../../include/schema.h"
 
 /* Initialize btree_page as an Empty Leaf Node. */
-BTreeStatus btree_page_init_empty_leaf(BTree *btree, BTreePage *btree_page) {
+BTreeStatus btree_page_init_empty_leaf(BTreePage *btree_page) {
     if (!btree_page || !btree_page->page || !btree_page->data) {
         return BTREE_INVALID_ARGUMENTS;
     }
@@ -24,13 +25,11 @@ BTreeStatus btree_page_init_empty_leaf(BTree *btree, BTreePage *btree_page) {
     btree_page->type_specific_data.siblings.previous_leaf_pointer = UINT32_MAX;
     btree_page->type_specific_data.siblings.next_leaf_pointer = UINT32_MAX;
 
-    /* Update page's page_data too. */
-    btree_page_sync(btree->pager, btree_page);
     return BTREE_SUCCESS;
 }
 
 /* Initialize btree_page as an Internal Node and set its rightmost child pointer. */
-BTreeStatus btree_page_init_internal(BTree *btree, BTreePage *btree_page, uint32_t rightmost_child_pointer) {
+BTreeStatus btree_page_init_internal(BTreePage *btree_page, uint32_t rightmost_child_pointer) {
     if (!btree_page || !btree_page->page || !btree_page->data
         || rightmost_child_pointer == 0 || rightmost_child_pointer == 1) {
         return BTREE_INVALID_ARGUMENTS;
@@ -44,7 +43,6 @@ BTreeStatus btree_page_init_internal(BTree *btree, BTreePage *btree_page, uint32
     btree_page->free_space_offset = PAGE_SIZE;
     btree_page->type_specific_data.rightmost_child_pointer = rightmost_child_pointer;
 
-    btree_page_sync(btree->pager, btree_page);
     return BTREE_SUCCESS;
 }
 
@@ -148,14 +146,14 @@ BTreeStatus btree_lower_bound_search(BTreePage *btree_page, BTreeSearchKey *sear
  * Also returns important information in BTreeSearchResult. */
 BTreeStatus btree_root_to_leaf(BTree *btree, BTreeSearchKey *search_key, BTreeSearchResult *search_result) {
     if (!btree || !btree->pager
-        || btree->root_page >= btree->pager->num_pages
-        || btree->root_page == 0 || btree->root_page == 1
+        || btree->root_page_num >= btree->pager->num_pages
+        || btree->root_page_num == 0 || btree->root_page_num == 1
         || !search_key || !search_result) {
         return BTREE_INVALID_ARGUMENTS;
     }
 
     /* Get root page in cache. */
-    Page *page = pager_get_page(btree->pager, btree->root_page);
+    Page *page = pager_get_page(btree->pager, btree->root_page_num);
     if (!page) {
         return BTREE_ERROR;
     }
@@ -227,15 +225,15 @@ BTreeStatus btree_root_to_leaf(BTree *btree, BTreeSearchKey *search_key, BTreeSe
  * Returns BTREE_SUCCESS or BTREE_NEEDS_SPLIT/BTreeSplitResult with split boolean value equal to true.
  * 
  * Also used to insert the separator key onto the parent page. */
-BTreeStatus btree_node_insert(BTree *btree, BTreePage *btree_page, BTreeCellContents *cell_contents,
+BTreeStatus btree_node_insert(Pager *pager, BTreePage *btree_page, BTreeCellContents *cell_contents,
                             BTreeSplitResult *split_result, BTreeIndexSpec *index) {
-    if (!btree || !btree_page || !btree_page->page || !btree_page->data
+    if (!pager || !btree_page || !btree_page->page || !btree_page->data
         || !cell_contents || !split_result || !index) {
         return BTREE_INVALID_ARGUMENTS;
     }
 
     /* Check if there's enough space, then update flag and return BTREE_NEEDS_SPLIT. */
-    if (!btree_has_enough_space(btree_page, cell_contents)) {
+    if (!btree_page_has_enough_space(btree_page, cell_contents)) {
         split_result->split = true;
         return BTREE_NEEDS_SPLIT;
     }
@@ -249,7 +247,7 @@ BTreeStatus btree_node_insert(BTree *btree, BTreePage *btree_page, BTreeCellCont
     BTreeSearchResult search_result = {0};
 
     /* Find correct position to insert cell by searching with cell's keys.*/
-    BTreeStatus status = btree_lower_bound(btree_page, &search_key, &search_result);
+    BTreeStatus status = btree_lower_bound_search(btree_page, &search_key, &search_result);
     if (status != BTREE_SUCCESS) {
         fprintf(stderr, "btree_leaf_node_insert: Something went wrong.\n");
         return status;
@@ -280,33 +278,33 @@ BTreeStatus btree_node_insert(BTree *btree, BTreePage *btree_page, BTreeCellCont
 
     /* Creates space for new cell pointer and actually serializes cell contents onto
      * page's page_data. */
-    status = insert_cell(btree, btree_page, index, &search_result, cell_contents);
+    status = insert_cell(pager, btree_page, index, &search_result, cell_contents);
     if (status != BTREE_SUCCESS) {
         return status;
     }
 
     // Sync everything that happened in RAM with the page's page_data. 
-    btree_page_sync(btree->pager, btree_page);
+    btree_page_sync(pager, btree_page);
     return BTREE_SUCCESS;
 }
 
 /* BTree Leaf Node Split.
  * Returns important split information in BTreeSplitResult. */
-BTreeStatus btree_leaf_node_split(BTree *btree, BTreePage *original_page, BTreeIndexSpec *index,
+BTreeStatus btree_leaf_node_split(Pager *pager, BTreePage *original_page, BTreeIndexSpec *index,
                                 BTreeSplitResult *split_result) {
-    if (!btree || !original_page || !original_page->page 
+    if (!pager || !original_page || !original_page->page 
         || !original_page->data || !index || !split_result) {
         return BTREE_INVALID_ARGUMENTS;
     }
     
     /* Logically allocate new page. */
     uint32_t new_page_num = 0;
-    if (!pager_allocate_page(btree->pager, &new_page_num)) {
+    if (!pager_allocate_page(pager, &new_page_num)) {
         return BTREE_ERROR;
     }
 
     /* Get it in cache. */
-    Page *new_page = pager_get_page(btree->pager, new_page_num);
+    Page *new_page = pager_get_page(pager, new_page_num);
     if (!new_page) {
         return BTREE_ERROR;
     }
@@ -314,10 +312,12 @@ BTreeStatus btree_leaf_node_split(BTree *btree, BTreePage *original_page, BTreeI
     /* Initialize right child of split. */
     BTreePage btree_right_page = {0};
     btree_page_attach(&btree_right_page, new_page);
-    BTreeStatus status = btree_page_init_empty_leaf(btree->pager, &btree_right_page);
+    BTreeStatus status = btree_page_init_empty_leaf(&btree_right_page);
     if (status != BTREE_SUCCESS) {
         return status;
     }
+    btree_page_sync(pager, &btree_right_page);
+
 
     /* Split original page's cells in half and transfers them to the right child of the split. */
     status = btree_split_cells(original_page, &btree_right_page, index);
@@ -326,20 +326,20 @@ BTreeStatus btree_leaf_node_split(BTree *btree, BTreePage *original_page, BTreeI
     }
 
     /* Compact original page's cells to remove any garbage value left behind. */
-    status = btree_compact_page(btree, original_page, index);
+    status = btree_compact_page(pager, original_page, index);
     if (status != BTREE_SUCCESS) {
         return status;
     }
 
     /* Connect original page's sibling pointers with the right child. */
-    status = connect_sibling_leaf_nodes(btree, original_page, &btree_right_page);
+    status = connect_sibling_leaf_nodes(pager, original_page, &btree_right_page);
     if (status != BTREE_SUCCESS) {
         return BTREE_ERROR;
     }
     
     // Sync with pages' page_data
-    btree_page_sync(btree->pager, original_page);
-    btree_page_sync(btree->pager, &btree_right_page);
+    btree_page_sync(pager, original_page);
+    btree_page_sync(pager, &btree_right_page);
 
     /* Extract separator key from right child and store it in BTreeSplitResult. */
     BTreeKeyView key = {0};
@@ -382,7 +382,8 @@ BTreeStatus btree_root_split(BTree *btree, BTreePage *btree_old_root, BTreeSplit
     // Create new root page
     BTreePage btree_new_root = {0};
     btree_page_attach(&btree_new_root, new_root);
-    btree_page_init_internal(btree, &btree_new_root, UINT32_MAX);
+    btree_page_init_internal(&btree_new_root, UINT32_MAX);
+    btree_page_sync(btree->pager, &btree_new_root);
 
     // Create right child page
     BTreePage btree_right_child = {0};
@@ -398,7 +399,7 @@ BTreeStatus btree_root_split(BTree *btree, BTreePage *btree_old_root, BTreeSplit
     cell.cell_size = split_result->separator_size + sizeof(uint32_t);
 
     /* Insert separator cell into new root. */
-    BTreeStatus status = btree_node_insert(btree, &btree_new_root, &cell, split_result, index);
+    BTreeStatus status = btree_node_insert(btree->pager, &btree_new_root, &cell, split_result, index);
     if (status != BTREE_SUCCESS) {
         page_free(new_root);
         return status;
@@ -412,7 +413,7 @@ BTreeStatus btree_root_split(BTree *btree, BTreePage *btree_old_root, BTreeSplit
     }
 
     /* Update BTree's root page num*/
-    btree->root_page = new_root->page_num;
+    btree->root_page_num = new_root->page_num;
 
     /* Update old root's metadata. */
     btree_old_root->is_root = false;
@@ -435,3 +436,32 @@ BTreeStatus btree_root_split(BTree *btree, BTreePage *btree_old_root, BTreeSplit
     return BTREE_SUCCESS;
 }
 
+// Traverse B+ Tree and store the numbers of the visited pages
+BTreeStatus btree_traverse_reachable_pages(BTree *btree, BTreePageCollection *visited_pages) {
+    if (!btree->pager || btree->pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+        printf("btree_traverse_reachable_pages: Invalid Pager.\n");
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    if (!visited_pages) {
+        printf("btree_traverse_reachable_pages: Invalid visited-pages structure.\n");
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    if (btree->root_page_num <= SYSTEM_CATALOG_PAGE_NUM ||
+        btree->root_page_num >= btree->pager->num_pages ||
+        btree->root_page_num >= MAX_PAGES) {
+        printf("btree_traverse_reachable_pages: Invalid root page number.\n");
+        return BTREE_CORRUPT_PAGE;
+    }
+    visited_pages->count = 0;
+   
+    // Helper that recursively traverses internal nodes, and backtracking at leaf nodes
+    BTreeStatus status = btree_traverse_page_recursive(btree, btree->root_page_num, visited_pages);
+    if (status != BTREE_SUCCESS) {
+        printf("btree_traverse_reachable_pages: Recursive Index B+ Tree traversal failed.\n");
+        return status;
+    }
+    
+    return BTREE_SUCCESS;
+}

@@ -9,14 +9,15 @@ typedef enum data_types DataType;
 typedef struct schema Schema;
 typedef struct btree_page BTreePage;
 typedef struct btree_cell_contents BTreeCellContents;
-typedef struct btree_cell BTreeCell;
+typedef struct btree_cell_view BTreeCellView;
 typedef struct btree_index_spec BTreeIndexSpec;
+typedef struct row Row;
 
 /* Serialize/Deserialize cell contents type agnostic functions. */
 extern bool serialize_cell_contents(uint8_t *write_offset, BTreePage *btree_page, BTreeCellContents *cell);
 
 extern bool deserialize_cell_contents(const Schema *schema, uint8_t *read_offset, BTreePage *btree_page,
-    BTreeCell *cell_view, BTreeCellContents *cell, BTreeIndexSpec *index);
+    BTreeCellView *cell_view, BTreeCellContents *cell, BTreeIndexSpec *index);
 
 /* Serialize/Deserialize leaf node cell metadata. */
 extern bool serialize_leaf_node(uint8_t *write_offset, BTreeCellContents *cell);

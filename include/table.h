@@ -62,7 +62,7 @@ extern Column *table_find_column(const Table *table, const char *col_name);
 
 
 /* Table disk operations */
-extern bool table_create(const char *table_name, const Schema *schema, Pager *pager);
+extern Table *table_create(const char *table_name, const Schema *schema, Pager *pager);
 
 extern bool table_materialize(Table *table, Pager *pager);
 
