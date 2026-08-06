@@ -755,9 +755,10 @@ BTreeStatus btree_traverse_page_recursive(BTree *btree, uint32_t page_num, BTree
     // Visit cell data and call the recursive function for the corresponding child page
     for (uint16_t i = 0; i < btree_page.cell_count; i++) {
         uint32_t cell_pointer = get_cell_pointer(btree_page.data, i);
-        uint32_t child_page_num = get_cell_child_pointer(btree_page.data, cell_pointer);
+        uint16_t cell_offset = get_cell_offset(cell_pointer);
+        uint32_t child_page_num = get_cell_child_pointer(btree_page.data, cell_offset);
 
-        if (!btree_traverse_page_recursive(btree, child_page_num, visited_pages)) {
+        if (btree_traverse_page_recursive(btree, child_page_num, visited_pages) != BTREE_SUCCESS) {
             return BTREE_ERROR;
         }
     }
