@@ -986,7 +986,7 @@ bool table_drop(Table *table, Pager *pager) {
 
     for (uint32_t i = 0; i < table->total_secondary_indexes; i++) {
         if (!table->secondary_indexes[i]) {
-            printf("table_drop: Secondary Index at position %u is NULL.\n");
+            printf("table_drop: Secondary Index at position %u is NULL.\n", (unsigned) i);
             return false;
         }
     }

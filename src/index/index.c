@@ -5,6 +5,7 @@
 #include "../../include/pager.h"
 #include "../../include/page.h"
 #include "../../include/btree.h"
+#include "../src/btree/btree_utils.h"
 
 /* Index metadata operations */
 
@@ -252,17 +253,13 @@ Index *index_create(const char *index_name, IndexType type, const IndexKey *key,
         goto rollback;
     }
 
+    BTreePage btree_index_root = {0}; 
     // Initialize the index root with the page's binary data
-    if (!btree_init_empty_leaf(index_root->page_data)) {
+    if (!btree_page_init_empty_leaf(&btree_index_root)) {
         printf("index_create: Root initialization failed.\n");
         goto rollback;
     }
-
-    // Mark the page as dirty (modified)
-    if (!page_mark_dirty(index_root)) {
-        printf("index_create: Root page dirty marking failed.\n");
-        goto rollback;
-    }
+    btree_page_sync(pager, &btree_index_root);
 
     // Create index metadata structure in memory
     Index *index = index_metadata_create(index_name, type, key, root_page_num);
@@ -326,7 +323,10 @@ bool index_truncate(Index *index, Pager *pager) {
     }
 
     // Traverse Index B+ Tree
-    if (!btree_traverse_reachable_pages(index, pager, visited_pages)) {
+    BTree btree = {0};
+    btree.pager = pager;
+    btree.root_page_num = index->root_page_num;
+    if (!btree_traverse_reachable_pages(&btree, visited_pages)) {
         printf("index_truncate: Couldn't traverse Index B+ Tree.\n");
         free(visited_pages);
         return false;
@@ -348,17 +348,13 @@ bool index_truncate(Index *index, Pager *pager) {
     }
 
     // Re-initializing the index B+ Tree
-    if (!btree_init_empty_leaf(root_page->page_data)) {
+    BTreePage btree_root_page = {0};
+    if (!btree_page_init_empty_leaf(&btree_root_page)) {
         printf("index_truncate: Could not clear root page.\n");
         free(visited_pages);
         return false;
     }
-
-    if (!page_mark_dirty(root_page)) {
-        printf("index_truncate: Could not mark root dirty.\n");
-        free(visited_pages);
-        return false;
-    }
+    btree_page_sync(pager, &btree_root_page);
 
     // Attempting to release all non-root pages
     // ROLLBACK IS CURRENTLY UNAVAILABLE -> Returns false if any page release fails
@@ -427,7 +423,10 @@ bool index_drop(Index *index, Pager *pager) {
     }
 
     // Traverse Index B+ Tree
-    if (!btree_traverse_reachable_pages(index, pager, visited_pages)) {
+    BTree btree = {0};
+    btree.pager = pager;
+    btree.root_page_num = index->root_page_num;
+    if (!btree_traverse_reachable_pages(&btree, visited_pages)) {
         printf("index_drop: Couldn't traverse Index B+ Tree.\n");
         free(visited_pages);
         return false;

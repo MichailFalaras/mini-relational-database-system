@@ -60,11 +60,10 @@ BTreeStatus swap_internal_rightmost_child_pointer(BTreePage *btree_page, BTreeCe
 
 /* Remove garbage cell pointers and contents by creating a new page and transfering
  * ONLY the valid metadata there. */
-BTreeStatus btree_compact_page(BTree *btree, BTreePage *btree_page, BTreeIndexSpec *index);
+BTreeStatus btree_compact_page(Pager *pager, BTreePage *btree_page, BTreeIndexSpec *index);
 
 /* Connect sibling leaf nodes right after splitting. */
-BTreeStatus connect_sibling_leaf_nodes(BTree *btree, BTreePage *btree_page1, BTreePage *btree_page2);
-
+BTreeStatus connect_sibling_leaf_nodes(Pager *pager, BTreePage *btree_page1, BTreePage *btree_page2);
 
 /* ---------- Cell Operations/Interface ---------- */
 
@@ -77,7 +76,7 @@ BTreeStatus set_cell(BTree *btree, BTreePage *btree_page, BTreeIndexSpec *index,
                     BTreeCellContents *cell_contents);
 
 /* Insert new cell's Cell Pointer and its contents onto a BTreePage AFTER BINARY SEARCH. */
-BTreeStatus insert_cell(BTree *btree, BTreePage *btree_page, BTreeIndexSpec *index, BTreeSearchResult *search_result,
+BTreeStatus insert_cell(Pager *pager, BTreePage *btree_page, BTreeIndexSpec *index, BTreeSearchResult *search_result,
     BTreeCellContents *cell_contents);
 
 /* Transfer half of src's cells to dest and update cell count. */
@@ -185,14 +184,14 @@ static inline void set_free_space_offset(uint8_t *page_data, uint16_t offset) {
 
 static inline uint32_t get_cell_pointer(const uint8_t *page_data, uint16_t cell_index) {
     BTreeNodeType node_type = get_node_type(page_data);
-    uint16_t header_size = btree_header_size(node_type);
+    uint16_t header_size = get_header_size(node_type);
 
     return load_u32_le(page_data + header_size + (cell_index * 4));
 }
 
 static inline void set_cell_pointer(uint8_t *page_data, uint16_t cell_index, uint32_t cell_pointer) {
     BTreeNodeType node_type = get_node_type(page_data);
-    uint16_t header_size = btree_header_size(node_type);
+    uint16_t header_size = get_header_size(node_type);
 
     store_u32_le(page_data + header_size + (cell_index * 4), cell_pointer);
 }
@@ -235,6 +234,6 @@ static inline void set_leaf_next(uint8_t *page_data, uint32_t next) {
 extern bool btree_collection_contains(const BTreePageCollection *visited_pages, uint32_t page_num);
 
 /* Helper that recursively traverses internal nodes, and backtracking at leaf nodes */
-extern bool btree_traverse_page_recursive(uint32_t page_num, Pager *pager, BTreePageCollection *visited_pages);
+extern BTreeStatus btree_traverse_page_recursive(BTree *btree, uint32_t page_num, BTreePageCollection *visited_pages);
 
 #endif

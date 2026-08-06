@@ -8,6 +8,8 @@
 typedef struct index_key IndexKey;
 typedef struct row Row;
 typedef enum data_types DataType;
+typedef struct value Value;
+typedef struct schema Schema;
 
 typedef enum btree_node_type {
     BTREE_LEAF_NODE,
@@ -52,7 +54,7 @@ typedef enum btree_status {
 /* BTree Component with pager for traversal. */
 typedef struct btree {
     Pager *pager;
-    uint32_t root_page;
+    uint32_t root_page_num;
 } BTree;
 
 /* Lower Bound Binary Search Result. */
@@ -73,6 +75,12 @@ typedef struct btree_split_result {
     uint16_t separator_size;
     void *separator_key;
 } BTreeSplitResult;
+
+typedef struct btree_key_view {
+    void *key;
+    uint16_t offset;
+    uint16_t key_size;
+} BTreeKeyView;
 
 /* Direct access to cell with pointers and offset. */
 typedef struct btree_cell_view {
@@ -127,6 +135,7 @@ typedef struct btree_page_collection {
 /* Structs replacing: KeyExtractionContext */
 typedef struct btree_index_spec {
     IndexKey *index_key; // Containts columns that comprise the index key
+    Schema *schema; // Schema needed for row extraction
     DataType *column_types; // Containts their data type
     bool is_unique; // If Index is unique, for duplicate key checks
     uint16_t key_size; // Key size for specific BTree
@@ -143,14 +152,12 @@ typedef struct btree_search_key {
     uint16_t num_target_keys; 
 } BTreeSearchKey;
 
-typedef struct btree_key_view {
-    const void *key;
-    uint16_t offset;
-    uint16_t key_size;
-} BTreeKeyView;
+
 
 /* Initialize btree_page as an Empty Leaf Node. */
-extern BTreeStatus btree_page_init_empty_leaf(BTree *btree, BTreePage *btree_page);
+extern BTreeStatus btree_page_init_empty_leaf(BTreePage *btree_page);
+
+extern BTreeStatus btree_page_init_internal(BTreePage *btree_page, uint32_t rightmost_child_pointer);
 
 /* Lower Bound Binary Search with a target key.
  * Used to traverse through the B+Tree and find correct cell position in a page.
@@ -166,12 +173,12 @@ extern BTreeStatus btree_root_to_leaf(BTree *btree, BTreeSearchKey *search_key, 
 /* BTree Node insert type agnostic function.
  * Content being inserted is stored in BTreeCellContents.
  * Returns BTREE_SUCCESS or BTREE_NEEDS_SPLIT/BTreeSplitResult with split boolean value equal to true. */
-extern BTreeStatus btree_node_insert(BTree *btree, BTreePage *btree_page, BTreeCellContents *cell_contents,
+extern BTreeStatus btree_node_insert(Pager *pager, BTreePage *btree_page, BTreeCellContents *cell_contents,
                             BTreeSplitResult *split_result, BTreeIndexSpec *index);
 
 /* BTree Leaf Node Split.
  * Returns important split information in BTreeSplitResult. */
-extern BTreeStatus btree_leaf_node_split(BTree *btree, BTreePage *original_page, BTreeIndexSpec *index,
+extern BTreeStatus btree_leaf_node_split(Pager *pager, BTreePage *original_page, BTreeIndexSpec *index,
                                 BTreeSplitResult *split_result);
 
 /* BTree Root Node Split.
@@ -179,5 +186,8 @@ extern BTreeStatus btree_leaf_node_split(BTree *btree, BTreePage *original_page,
  * and updates pages' metadata.
  * Returns split information in BTreeSplitResult. */
 extern BTreeStatus btree_root_split(BTree *btree, BTreePage *btree_old_root, BTreeSplitResult *split_result, BTreeIndexSpec *index);
+
+// Traverse B+Tree
+extern BTreeStatus btree_traverse_reachable_pages(BTree *btree, BTreePageCollection *visited_pages);
 
 #endif
