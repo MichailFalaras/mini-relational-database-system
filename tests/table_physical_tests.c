@@ -149,7 +149,102 @@ static void destroy_test_pager(TestPager *test_pager) {
     }
 }
 
-// B+ Tree root validation helper
+// B+ Tree Helpers
+
+// A simple deterministic B+ Tree with a root node and 2 children nodes
+typedef struct test_btree {
+    uint32_t root_page_num;
+    uint32_t child_page_nums[2];
+    uint32_t child_count;
+} TestBTree;
+
+static bool build_test_btree(Index *index, Pager *pager, TestBTree *test_btree) {
+    if (!index || !pager || !test_btree) {
+        return false;
+    }
+    
+    memset(test_btree, 0, sizeof(TestBTree));
+
+    test_btree->root_page_num = index->root_page_num;
+    test_btree->child_count = 2;
+
+    // Allocate pages & page numbers for child nodes
+    for (uint32_t i = 0; i < test_btree->child_count; i++) {
+        if (!pager_allocate_page(pager, &test_btree->child_page_nums[i])) {
+            return false;
+        }
+    }
+
+    // Retrieve the B+ Tree's pages
+    Page *root = pager_get_page(pager, test_btree->root_page_num);
+    Page *left_child = pager_get_page(pager, test_btree->child_page_nums[0]);
+    Page *right_child = pager_get_page(pager, test_btree->child_page_nums[1]);
+
+    if (!root || !left_child || !right_child) {
+        return false;
+    }
+
+    // Clear the original root and both new pages before assigning their B+ tree layouts.
+    if (!page_clear(pager, root) || !page_clear(pager, left_child) || !page_clear(pager, right_child)) {
+        return false;
+    }
+
+    BTreePage root_node = {0};
+    BTreePage left_child_node = {0};
+    BTreePage right_child_node = {0};
+
+    btree_page_attach(&root_node, root);
+    btree_page_attach(&left_child_node, left_child);
+    btree_page_attach(&right_child_node, right_child);
+
+    // Initialize leaf nodes
+    if (btree_page_init_empty_leaf(&left_child_node) != BTREE_SUCCESS || 
+        btree_page_init_empty_leaf(&right_child_node) != BTREE_SUCCESS) {
+        return false;
+    }
+
+    // Setting leaf node connections
+    left_child_node.is_root = 0;
+    left_child_node.parent_pointer = test_btree->root_page_num;
+    left_child_node.type_specific_data.siblings.previous_leaf_pointer = UINT32_MAX;
+    left_child_node.type_specific_data.siblings.next_leaf_pointer = test_btree->child_page_nums[1];
+
+    right_child_node.is_root = 0;
+    right_child_node.parent_pointer = test_btree->root_page_num;
+    right_child_node.type_specific_data.siblings.previous_leaf_pointer = test_btree->child_page_nums[0];
+    right_child_node.type_specific_data.siblings.next_leaf_pointer = UINT32_MAX;
+
+    // Synchronize leaf headers and sibling metadata
+    btree_page_sync(pager, &left_child_node);
+    btree_page_sync(pager, &right_child_node);
+
+    /* Initialize root metadata. */
+    if (btree_page_init_internal(&root_node, test_btree->child_page_nums[1]) != BTREE_SUCCESS) {
+        return false;
+    }
+
+    uint16_t cell_size = sizeof(uint32_t);
+    uint16_t cell_offset = (uint16_t)(PAGE_SIZE - cell_size);
+
+    root_node.cell_count = 1;
+    root_node.free_space_offset = cell_offset;
+
+    /*
+    * Must happen before set_cell_pointer(), because that setter reads
+    * node_type from page_data to determine the header size.
+    */
+    btree_page_sync(pager, &root_node);
+
+    set_cell_pointer(root_node.data, 0, make_cell_pointer(cell_offset, cell_size));
+
+    set_cell_child_pointer(root_node.data, cell_offset, test_btree->child_page_nums[0]);
+
+    if (!page_mark_dirty(root) || !page_touch(pager, root)) {
+        return false;
+    }
+
+    return true;
+}
 
 static bool is_empty_btree_root(Page *page) {
     if (!page) {
@@ -397,6 +492,83 @@ static int test_table_create_invalid_arguments() {
 cleanup:
     if (input_schema) { 
         schema_free(input_schema); 
+    }
+
+    destroy_test_pager(&test_pager);
+    return result;
+}
+
+
+static int test_table_create_add_secondary_index() {
+    int result = 1;
+
+    TestPager test_pager = {0};
+    Schema *input_schema = NULL;
+    Table *table = NULL;
+    IndexKey *key = NULL;
+    Index *created_index = NULL;
+    Page *root_page = NULL;
+
+    ASSERT(create_test_pager(&test_pager));
+
+    input_schema = create_test_schema_with_constraints();
+    ASSERT(input_schema != NULL);
+
+    table = table_create("test_table", input_schema, test_pager.pager);
+    ASSERT(table != NULL);
+
+    // Initial index totals
+    ASSERT(table->total_secondary_indexes == 1);
+
+    // Create secondary index with the 3rd column of the schema as its key
+    uint32_t age_column[] = {2}; 
+    key = index_key_create(age_column, 1);
+    ASSERT(key != NULL);
+
+    // Add it to the table
+    ASSERT(table_create_index(table, "idx_users_age", SECONDARY_INDEX, key, test_pager.pager));
+
+    // Retrieve the created index and verify its metadata
+    ASSERT(table->total_secondary_indexes == 2);
+
+    created_index = table_find_index(table, "idx_users_age");
+
+    ASSERT(created_index != NULL);
+    ASSERT(created_index == table->secondary_indexes[1]);
+    ASSERT(created_index->type == SECONDARY_INDEX);
+
+    ASSERT(created_index->key != NULL);
+    ASSERT(created_index->key->num_columns == 1);
+    ASSERT(created_index->key->column_index_array[0] == 2);
+
+    // Verify the existence and emptiness of the new index root
+    ASSERT(created_index->root_page_num != INVALID_ROOT_PAGE);
+
+    root_page = pager_get_page(test_pager.pager, created_index->root_page_num);
+
+    ASSERT(root_page != NULL);
+    ASSERT(is_empty_btree_root(root_page));
+
+    result = 0;
+
+cleanup:
+    if (key) {
+        index_key_free(key);
+    }
+
+    if (table) {
+        if (table->is_materialized && table_drop(table, test_pager.pager)) {
+            table = NULL;
+        }
+
+        // In case table_drop() fails, since it doesn't support rollback
+        if (table) {
+            table_free(table);
+        }
+    }
+
+    if (input_schema) {
+        schema_free(input_schema);
     }
 
     destroy_test_pager(&test_pager);
@@ -871,6 +1043,478 @@ cleanup:
 }
 
 
+static int test_table_drop_rmv_secondary_index() {
+    int result = 1;
+
+    TestPager test_pager = {0};
+    Schema *input_schema = NULL;
+    Table *table = NULL;
+    IndexKey *key = NULL;
+
+    uint32_t age_column[] = {2};
+
+    ASSERT(create_test_pager(&test_pager));
+
+    input_schema = create_test_schema_with_constraints();
+    ASSERT(input_schema != NULL);
+
+    // Firstly, create the test table with the to-be-removed secondary index
+    table = table_create("users", input_schema, test_pager.pager);
+
+    ASSERT(table != NULL);
+    ASSERT(table->total_secondary_indexes == 1);
+
+    key = index_key_create(age_column, 1);
+    ASSERT(key != NULL);
+
+    ASSERT(table_create_index(table, "idx_users_age", SECONDARY_INDEX, key, test_pager.pager));
+
+    ASSERT(table->total_secondary_indexes == 2);
+    ASSERT(strcmp(table->secondary_indexes[0]->name, "uq_users_email") == 0);
+    ASSERT(strcmp(table->secondary_indexes[1]->name, "idx_users_age") == 0);
+
+    // Drop the 1st secondary index that was created with the initial standard schema
+    ASSERT(table_drop_index(table, "uq_users_email", test_pager.pager));
+
+    // Verify it doesn't exist in the secondary index array
+    ASSERT(table->total_secondary_indexes == 1);
+    ASSERT(table_find_index(table, "uq_users_email") == NULL);
+
+    ASSERT(table->secondary_indexes[0] != NULL);
+    
+    // Verify that the 2nd secondary index has been shifted in the first position
+    ASSERT(strcmp(table->secondary_indexes[0]->name, "idx_users_age") == 0);
+    ASSERT(table->secondary_indexes[1] == NULL);
+    
+    result = 0;
+
+cleanup:
+    if (key) {
+        index_key_free(key);        
+    }
+
+    if (table) {
+        if (table->is_materialized &&
+            table_drop(table, test_pager.pager)) {
+            table = NULL;
+        }
+
+        if (table) {
+            table_free(table);
+        }
+    }
+
+    if (input_schema) {
+        schema_free(input_schema);
+    }
+
+    destroy_test_pager(&test_pager);
+    return result;
+}
+
+
+static int test_table_drop_rmv_secondary_index_reuse_root_page() {
+    int result = 1;
+
+    TestPager test_pager = {0};
+    Schema *input_schema = NULL;
+    Table *table = NULL;
+    IndexKey *key = NULL;
+
+    Index *age_index = NULL;
+
+    uint32_t age_column[] = {2};
+    uint32_t dropped_root_page = 0;
+    uint32_t reallocated_page = 0;
+
+    ASSERT(create_test_pager(&test_pager));
+
+    input_schema = create_test_schema_with_constraints();
+    ASSERT(input_schema != NULL);
+
+    table = table_create("users", input_schema, test_pager.pager);
+
+    ASSERT(table != NULL);
+
+    // Add secondary inex
+    key = index_key_create(age_column, 1);
+    ASSERT(key != NULL);
+
+    ASSERT(table_create_index(table, "idx_users_age", SECONDARY_INDEX, key, test_pager.pager));
+
+    age_index = table_find_index(table, "idx_users_age");
+
+    ASSERT(age_index != NULL);
+
+    dropped_root_page = age_index->root_page_num;
+
+    // Then drop it
+    ASSERT(table_drop_index(table, "idx_users_age", test_pager.pager));
+
+    ASSERT(table_find_index(table, "idx_users_age") == NULL);
+
+    // After that, allocate a new page and make sure the dropped index's 
+    // released root page was reallocated
+    ASSERT(pager_allocate_page(test_pager.pager, &reallocated_page));
+
+    ASSERT(reallocated_page == dropped_root_page);
+
+    result = 0;
+
+cleanup:
+    if (key) {
+        index_key_free(key);
+    }
+
+    if (table) {
+        if (table->is_materialized &&
+            table_drop(table, test_pager.pager)) {
+
+            table = NULL;
+        }
+
+        if (table) {
+            table_free(table);
+        }
+    }
+
+    if (input_schema) {
+        schema_free(input_schema);
+    }
+
+    destroy_test_pager(&test_pager);
+    return result;
+}
+
+
+static int test_table_drop_releases_all_remaining_pages() {
+    int result = 1;
+
+    TestPager test_pager = {0};
+    Schema *input_schema = NULL;
+    Table *table = NULL;
+    IndexKey *key = NULL;
+
+    uint32_t age_column[] = {2};
+
+    uint32_t dropped_roots[3] = {0};
+    uint32_t reallocated_pages[3] = {0};
+
+    ASSERT(create_test_pager(&test_pager));
+
+    input_schema = create_test_schema_with_constraints();
+    ASSERT(input_schema != NULL);
+
+    table = table_create("users", input_schema, test_pager.pager);
+    ASSERT(table != NULL);
+
+    key = index_key_create(age_column, 1);
+    ASSERT(key != NULL);
+
+    ASSERT(table_create_index(table, "idx_users_age", SECONDARY_INDEX, key, test_pager.pager));
+
+    ASSERT(table->total_secondary_indexes == 2);
+
+    // Track the root page numbers
+    dropped_roots[0] = table->primary_index->root_page_num;
+    dropped_roots[1] = table->secondary_indexes[0]->root_page_num;
+    dropped_roots[2] = table->secondary_indexes[1]->root_page_num;
+
+    ASSERT(table_drop(table, test_pager.pager));
+
+    table = NULL;
+
+    // Reallocate released pages,
+    for (uint32_t i = 0; i < 3; i++) {
+        ASSERT(pager_allocate_page(test_pager.pager, &reallocated_pages[i]));
+    }
+
+    // And verify they're the dropped root numbers
+    ASSERT(contains_page_num(reallocated_pages, 3, dropped_roots[0]));
+    ASSERT(contains_page_num(reallocated_pages, 3, dropped_roots[1]));
+    ASSERT(contains_page_num(reallocated_pages, 3, dropped_roots[2]));
+
+    result = 0;
+
+cleanup:
+    if (key) {
+        index_key_free(key);
+    }
+
+    if (table) {
+        if (table->is_materialized &&
+            table_drop(table, test_pager.pager)) {
+
+            table = NULL;
+        }
+
+        if (table) {
+            table_free(table);
+        }
+    }
+
+    if (input_schema) {
+        schema_free(input_schema);
+    }
+
+    destroy_test_pager(&test_pager);
+    return result;
+}
+
+
+/* ---------- table_truncate unit tests ---------- */
+
+static int test_table_truncate_success() {
+    int result = 1;
+
+    TestPager test_pager = {0};
+    Schema *input_schema = NULL;
+    Table *table = NULL;
+    
+    TestBTree primary_tree = {0};
+    TestBTree secondary_tree = {0};
+
+    uint32_t original_primary_root = 0;
+    uint32_t original_secondary_root = 0;
+
+    ASSERT(create_test_pager(&test_pager));
+
+    input_schema = create_test_schema_with_constraints();
+    ASSERT(input_schema != NULL);
+
+    table = table_create("users", input_schema, test_pager.pager);
+    ASSERT(table != NULL);
+
+    original_primary_root = table->primary_index->root_page_num;
+    original_secondary_root = table->secondary_indexes[0]->root_page_num;
+
+    // Create secondary indexes
+    ASSERT(build_test_btree(table->primary_index, test_pager.pager, &primary_tree));
+    ASSERT(build_test_btree(table->secondary_indexes[0], test_pager.pager, &secondary_tree));
+
+    table->row_count = 25;
+
+    // Truncate the table
+    ASSERT(table_truncate(table, test_pager.pager));
+
+    ASSERT(table->row_count == 0);
+
+    // Validate that the root page numbers are unchanged
+    ASSERT(table->primary_index->root_page_num == original_primary_root);
+    ASSERT(table->secondary_indexes[0]->root_page_num == original_secondary_root);
+    
+    result = 0;
+
+cleanup:
+    if (table) {
+        if (table->is_materialized &&
+            table_drop(table, test_pager.pager)) {
+
+            table = NULL;
+        }
+
+        if (table) {
+            table_free(table);
+        }
+    }
+
+    if (input_schema) {
+        schema_free(input_schema);
+    }
+
+    destroy_test_pager(&test_pager);
+    return result;
+}
+
+
+static int test_table_truncate_preserves_indexes() {
+    int result = 1;
+
+    TestPager test_pager = {0};
+    Schema *input_schema = NULL;
+    Table *table = NULL;
+
+    TestBTree primary_tree = {0};
+    TestBTree secondary_tree = {0};
+
+    Index *original_primary = NULL;
+    Index *original_secondary = NULL;
+
+    uint32_t primary_root = 0;
+    uint32_t secondary_root = 0;
+
+    ASSERT(create_test_pager(&test_pager));
+
+    input_schema = create_test_schema_with_constraints();
+    ASSERT(input_schema != NULL);
+
+    table = table_create("users", input_schema, test_pager.pager);
+    ASSERT(table != NULL);
+
+    original_primary = table->primary_index;
+    original_secondary = table->secondary_indexes[0];
+
+    primary_root = original_primary->root_page_num;
+    secondary_root = original_secondary->root_page_num;
+
+    // Create secondary indexes
+    ASSERT(build_test_btree(original_primary, test_pager.pager, &primary_tree));
+    ASSERT(build_test_btree(original_secondary, test_pager.pager, &secondary_tree));
+
+    // Truncate table
+    ASSERT(table_truncate(table, test_pager.pager));
+
+
+    // Verify indexes and their metadata still exist
+    ASSERT(table->primary_index == original_primary);
+    ASSERT(table->secondary_indexes[0] == original_secondary);
+
+    ASSERT(table->total_secondary_indexes == 1);
+
+    ASSERT(strcmp(table->primary_index->name, "pk_users") == 0);
+    ASSERT(strcmp(table->secondary_indexes[0]->name, "uq_users_email") == 0);
+
+    ASSERT(table->primary_index->root_page_num == primary_root);
+    ASSERT(table->secondary_indexes[0]->root_page_num == secondary_root);
+
+    // Verify that the root pages still exist and are empty B+ Tree nodes
+    Page *primary_page = pager_get_page(test_pager.pager, primary_root);
+    Page *secondary_page = pager_get_page(test_pager.pager, secondary_root);
+
+    ASSERT(primary_page != NULL);
+    ASSERT(secondary_page != NULL);
+
+    ASSERT(is_empty_btree_root(primary_page));
+    ASSERT(is_empty_btree_root(secondary_page));
+
+    result = 0;
+
+cleanup:
+    if (table) {
+        if (table->is_materialized &&
+            table_drop(table, test_pager.pager)) {
+
+            table = NULL;
+        }
+
+        if (table) {
+            table_free(table);
+        }
+    }
+
+    if (input_schema) {
+        schema_free(input_schema);
+    }
+
+    destroy_test_pager(&test_pager);
+    return result;
+}
+
+
+static int test_table_truncate_resets_row_count() {
+    int result = 1;
+
+    TestPager test_pager = {0};
+    Schema *input_schema = NULL;
+    Table *table = NULL;
+
+    ASSERT(create_test_pager(&test_pager));
+
+    input_schema = create_test_schema_with_constraints();
+    ASSERT(input_schema != NULL);
+
+    table = table_create("users", input_schema, test_pager.pager);
+    ASSERT(table != NULL);
+
+    table->row_count = 42;
+
+    // Testing only if the table count resets to 0
+    ASSERT(table_truncate(table, test_pager.pager));
+
+    ASSERT(table->row_count == 0);
+
+    result = 0;
+
+cleanup:
+    if (table) {
+        if (table->is_materialized &&
+            table_drop(table, test_pager.pager)) {
+
+            table = NULL;
+        }
+
+        if (table) {
+            table_free(table);
+        }
+    }
+
+    if (input_schema) {
+        schema_free(input_schema);
+    }
+
+    destroy_test_pager(&test_pager);
+    return result;
+}
+
+/* ---------- pager persistence integration test ---------- */
+
+static int test_table_persistence_after_reopen() {
+    int result = 1;
+    
+    TestPager test_pager = {0};
+    Schema *input_schema = NULL;
+    Table *table = NULL;
+
+    uint32_t primary_root_num = 0;
+    uint32_t secondary_root_num = 0;
+
+    ASSERT(create_test_pager(&test_pager));
+
+    input_schema = create_test_schema_with_constraints();
+    ASSERT(input_schema != NULL);
+
+    table = table_create("users", input_schema, test_pager.pager);
+    ASSERT(table != NULL);
+
+    primary_root_num = table->primary_index->root_page_num;
+    secondary_root_num = table->secondary_indexes[0]->root_page_num;
+
+    // Close the pager and reopen it
+    ASSERT(pager_close(test_pager.pager));
+    test_pager.pager = NULL;
+
+    test_pager.pager = pager_open(test_pager.path);
+    ASSERT(test_pager.pager != NULL);
+
+    // Load the root pages to the Pager and verify they're empty
+    Page *primary_root = pager_get_page(test_pager.pager, primary_root_num);
+    ASSERT(primary_root != NULL);
+    ASSERT(is_empty_btree_root(primary_root));
+
+    Page *secondary_root = pager_get_page(test_pager.pager, secondary_root_num);
+    ASSERT(secondary_root != NULL);
+    ASSERT(is_empty_btree_root(secondary_root));
+
+    result = 0;
+
+cleanup:
+    if (table) {
+        if (table->is_materialized && table_drop(table, test_pager.pager)) {
+            table = NULL;
+        }
+
+        if (table) {
+            table_free(table);
+        }
+    }
+
+    if (input_schema) {
+        schema_free(input_schema);
+    }
+
+    return result;
+}
+
 
 /* ---------- Logging Helper ---------- */
 
@@ -894,31 +1538,50 @@ int main(int argc, char *argv[]) {
     generate_output(result, 2, "test_table_create_empty_roots");
     result = test_table_create_invalid_arguments();
     generate_output(result, 3, "test_table_create_invalid_arguments");
+    result = test_table_create_add_secondary_index();
+    generate_output(result, 4, "test_table_create_add_secondary_index");
 
     /* ---------- table_materialize unit tests ---------- */
     result = test_table_materialize_success();
-    generate_output(result, 4, "test_table_materialize_success");
+    generate_output(result, 5, "test_table_materialize_success");
     result = test_table_materialize_without_constraints();
-    generate_output(result, 5, "test_table_materialize_without_constraints");
+    generate_output(result, 6, "test_table_materialize_without_constraints");
     result = test_table_materialize_empty_roots();
-    generate_output(result, 6, "test_table_materialize_empty_roots");
+    generate_output(result, 7, "test_table_materialize_empty_roots");
     result = test_table_materialize_rejects_second_call();
-    generate_output(result, 7, "test_table_materialize_rejects_second_call");
+    generate_output(result, 8, "test_table_materialize_rejects_second_call");
     result = test_table_materialize_preserves_metadata();
-    generate_output(result, 8, "test_table_materialize_preserves_metadata");
+    generate_output(result, 9, "test_table_materialize_preserves_metadata");
     result = test_table_materialize_invalid_arguments();
-    generate_output(result, 9, "test_table_materialize_invalid_arguments");
+    generate_output(result, 10, "test_table_materialize_invalid_arguments");
 
     /* ---------- table_drop unit tests ---------- */
     result = test_table_drop_success();
-    generate_output(result, 10, "test_table_drop_success");
+    generate_output(result, 11, "test_table_drop_success");
     result = test_table_drop_reuses_root_pages();
-    generate_output(result, 11, "test_table_drop_reuses_root_pages");
+    generate_output(result, 12, "test_table_drop_reuses_root_pages");
     result = test_table_drop_rejects_unmaterialized_table();
-    generate_output(result, 12, "test_table_drop_rejects_unmaterialized_table");
+    generate_output(result, 13, "test_table_drop_rejects_unmaterialized_table");
     result = test_table_drop_invalid_arguments();
-    generate_output(result, 13, "test_table_drop_invalid_arguments");
+    generate_output(result, 14, "test_table_drop_invalid_arguments");
+    result = test_table_drop_rmv_secondary_index();
+    generate_output(result, 15, "test_table_drop_rmv_secondary_index");
+    result = test_table_drop_rmv_secondary_index_reuse_root_page();
+    generate_output(result, 16, "test_table_drop_rmv_secondary_index_reuse_root_page");
+    result = test_table_drop_releases_all_remaining_pages();
+    generate_output(result, 17, "test_table_drop_releases_all_remaining_pages");
     
-    
+    /* ---------- table_truncate unit tests ---------- */
+    result = test_table_truncate_success();
+    generate_output(result, 18, "test_table_truncate_success");
+    result = test_table_truncate_preserves_indexes();
+    generate_output(result, 19, "test_table_truncate_preserves_indexes");
+    result = test_table_truncate_resets_row_count();
+    generate_output(result, 20, "test_table_truncate_resets_row_count");
+
+    /* ---------- pager persistence integration test ---------- */
+    result = test_table_persistence_after_reopen();
+    generate_output(result, 21, "test_table_persistence_after_reopen");
+
     return 0;
 }
