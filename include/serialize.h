@@ -44,4 +44,12 @@ extern bool serialize_value_data(Value *value, void *serialized_output);
 
 extern Value *deserialize_value_data(DataType type, void *offset);
 
+/* Serialize/Deserialize catalog contents */
+
+extern bool serialize_catalog_contents(uint8_t *write_offset, BTreePage *btree_page, BTreeCellContents *cell);
+
+extern bool serialize_catalog_leaf_payload(uint8_t *write_offset, BTreeCellContents *cell);
+
+extern Value *deserialize_catalog_leaf_payload(uint8_t *read_offset);
+
 #endif
