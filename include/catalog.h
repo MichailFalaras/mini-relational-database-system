@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 /* Catalog entry type --> Table or Index */
-typedef struct catalog_entry_type {
+typedef enum catalog_entry_type {
     CATALOG_TABLE,
     CATALOG_INDEX
 } CatalogEntryType;

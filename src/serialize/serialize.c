@@ -420,6 +420,122 @@ bool serialize_catalog_leaf_node(uint8_t *write_offset, BTreeCellContents *cell)
 }
 
 /* Deserialize catalog leaf payload */
-Value *deserialize_catalog_leaf_payload() {
+bool deserialize_catalog_contents(uint8_t *read_offset, BTreePage *btree_page, BTreeCellView *cell_view, 
+BTreeCellContents *cell, BTreeIndexSpec *index) {
 
+    if (!read_offset || !btree_page || !btree_page->page || 
+        !btree_page->data  || !cell || !cell_view || !index) {
+        printf("deserialize_catalog_contents: Invalid input data.\n");
+        return false;
+    }
+
+    switch (btree_page->type) {
+        case BTREE_INTERNAL_NODE:
+            return deserialize_internal_node(read_offset, cell_view, cell, index);
+
+        case BTREE_LEAF_NODE:
+            return deserialize_catalog_leaf_node(read_offset, cell_view, cell, index);
+
+        default:
+            printf("deserialize_catalog_contents: BTreePage type is not valid.\n");
+            return false;
+    }
+
+}
+
+bool deserialize_catalog_leaf_node(uint8_t *read_offset, BTreeCellView *cell_view, BTreeCellContents *cell,
+BTreeIndexSpec *index) {
+    if (!read_offset || !cell_view || !cell || !index || !index->index_key) {
+        printf("deserialize_catalog_leaf_node: Invalid input data.\n");
+        return false;
+    }
+
+    // Reject a payload that doesn't even have the fixed metadata
+    const uint32_t fixed_payload_size = sizeof(CatalogEntryType) + sizeof(uint32_t) + sizeof(uint32_t);
+
+    if (cell_view->payload_size < fixed_payload_size) {
+        printf("deserialize_catalog_leaf_node: Catalog payload is too small.\n");
+        return false;
+    }
+
+    // Setting key metadata
+    cell->key_size = cell_view->key.key_size;
+    cell->num_keys = index->index_key->num_columns;
+    cell->cell_size = cell->key_size + cell_view->payload_size;
+
+    cell->keys = (Value **) calloc(cell->num_keys, sizeof(Value *));
+    if (!cell->keys) {
+        printf("deserialize_catalog_leaf_node: Catalog key array could not be allocated.\n");
+        return false;
+    }
+
+    // Deserializing the node's key
+    if (!deserialize_keys(&read_offset, cell, index)) {
+        cell->keys = NULL;
+        return false;
+    }
+
+    // Allocating the catalog payload structure
+    CatalogPayload *catalog = (CatalogPayload *) calloc(1, sizeof(CatalogPayload));
+    if (!catalog) {
+        printf("deserialize_catalog_leaf_node: Catalog payload could not be allocated.\n");
+
+        value_free_array(cell->keys, cell->num_keys);
+        cell->keys = NULL;
+        return false;
+    }
+
+    // Deserializing the Catalog payload
+    memcpy(&catalog->type, read_offset, sizeof(CatalogEntryType));
+    read_offset += sizeof(CatalogEntryType);
+
+    memcpy(&catalog->root_page_num, read_offset, sizeof(uint32_t));
+    read_offset += sizeof(uint32_t);
+
+    memcpy(&catalog->ddl_size, read_offset, sizeof(uint32_t));
+    read_offset += sizeof(uint32_t);
+
+    // Verifying the DDL statement's size before allocating it and deserializing it
+    uint32_t remaining_payload_size = cell_view->payload_size - fixed_payload_size;
+
+    if (catalog->ddl_size != remaining_payload_size) {
+        printf("deserialize_catalog_leaf_node: Invalid catalog DDL size.\n");
+        free(catalog);
+        
+        value_free_array(cell->keys, cell->num_keys);
+        cell->keys = NULL;
+        return false;
+    }
+
+    // If there's actually a DDL statement, allocate its memory and deserialize it
+    if (catalog->ddl_size > 0) {
+        catalog->ddl = (char *) malloc((size_t) catalog->ddl_size + 1);
+
+        if (!catalog->ddl) {
+            printf("deserialize_catalog_leaf_node: DDL string could not be allocated.\n");
+            free(catalog);
+
+            value_free_array(cell->keys, cell->num_keys);
+            cell->keys = NULL;
+            return false;
+        }
+
+        memcpy(catalog->ddl, read_offset, catalog->ddl_size);
+
+        catalog->ddl[catalog->ddl_size] = '\0';
+    }
+
+    if (catalog->type != CATALOG_TABLE && catalog->type != CATALOG_INDEX) {
+        printf("deserialize_catalog_leaf_node: Invalid catalog entry type.\n");
+        free(catalog->ddl);
+        free(catalog);
+
+        value_free_array(cell->keys, cell->num_keys);
+        cell->keys = NULL;
+        return false;
+    }
+
+    cell->BTreePayload.catalog = catalog;
+
+    return true;
 }
