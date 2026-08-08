@@ -10,6 +10,7 @@ typedef struct row Row;
 typedef enum data_types DataType;
 typedef struct value Value;
 typedef struct schema Schema;
+typedef struct catalog_payload CatalogPayload;
 
 typedef enum btree_node_type {
     BTREE_LEAF_NODE,
@@ -99,6 +100,7 @@ typedef struct btree_cell_contents {
     union {
         Row *row;
         uint32_t child_pointer;
+        CatalogPayload *catalog;
     } BTreePayload;
     uint16_t cell_size;
 } BTreeCellContents;

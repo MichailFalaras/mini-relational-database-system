@@ -8,6 +8,7 @@
 #include "../src/data_types/data_types_utils.h"
 #include "../src/btree/btree_utils.h"
 #include "../../include/schema.h"
+#include "../../include/catalog.h"
 
 /* Serialize/Deserialize cell contents type agnostic functions. */
 bool serialize_cell_contents(uint8_t *write_offset, BTreePage *btree_page, BTreeCellContents *cell) {
@@ -18,23 +19,15 @@ bool serialize_cell_contents(uint8_t *write_offset, BTreePage *btree_page, BTree
 
     switch (btree_page->type) {
         case BTREE_INTERNAL_NODE:
-            if (!serialize_internal_node(write_offset, cell)) {
-                return false;
-            }
+            return serialize_internal_node(write_offset, cell);
 
-            break;
         case BTREE_LEAF_NODE:
-            if (!serialize_leaf_node(write_offset, cell)) {
-                return false;
-            }
+            return serialize_leaf_node(write_offset, cell);
 
-            break;
         default:
             fprintf(stderr, "serialize_cell_contents: BTreePage type is not valid.\n");
             return false;
     }
-
-    return true;
 }
 
 bool deserialize_cell_contents(const Schema *schema, uint8_t *read_offset, BTreePage *btree_page,
@@ -364,3 +357,69 @@ Value *deserialize_value_data(DataType type, void *offset) {
 
     return value;
 } 
+
+/* Serialize catalog contents */
+bool serialize_catalog_contents(uint8_t *write_offset, BTreePage *btree_page, BTreeCellContents *cell) {
+    if (!write_offset || !btree_page || !cell) {
+        printf("serialize_catalog_contents: Invalid input data.\n");
+        return false;
+    }
+
+    switch(btree_page->type) {
+        case BTREE_INTERNAL_NODE:
+            return serialize_internal_node(write_offset, cell);
+
+        case BTREE_LEAF_NODE:
+            return serialize_catalog_leaf_node(write_offset, cell);
+
+        default:
+            printf("serialize_catalog_contents: BTreePage type is not valid.\n");
+            return false;
+    }
+}
+
+/* Serialize catalog leaf key + payload */
+bool serialize_catalog_leaf_node(uint8_t *write_offset, BTreeCellContents *cell) {
+    if (!write_offset || !cell) {
+        printf("serialize_catalog_leaf_node: Invalid input data.\n");
+        return false;
+    }
+
+    // Validating catalog payload
+    CatalogPayload *catalog = cell->BTreePayload.catalog;
+    if (!catalog) {
+        printf("serialize_catalog_leaf_node: Catalog payload is NULL.\n");
+        return false;
+    }
+
+    if (catalog->ddl_size > 0 && !catalog->ddl) {
+        printf("serialize_catalog_leaf_node: Invalid DDL payload.\n");
+        return false;
+    }
+    
+    // Serialize the Catalog key
+    if (!serialize_keys(&write_offset, cell)) {
+        return false;
+    }
+
+    // Serializing the Catalog payload
+    memcpy(write_offset, &catalog->type, sizeof(CatalogEntryType));
+    write_offset += sizeof(CatalogEntryType);
+
+    memcpy(write_offset, &catalog->root_page_num, sizeof(uint32_t));
+    write_offset += sizeof(uint32_t);
+
+    memcpy(write_offset, &catalog->ddl_size, sizeof(uint32_t));
+    write_offset += sizeof(uint32_t);
+
+    if (catalog->ddl_size > 0) {
+        memcpy(write_offset, catalog->ddl, catalog->ddl_size);
+    }
+
+    return true;
+}
+
+/* Deserialize catalog leaf payload */
+Value *deserialize_catalog_leaf_payload() {
+
+}
