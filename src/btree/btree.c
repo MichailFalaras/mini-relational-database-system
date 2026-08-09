@@ -465,3 +465,99 @@ BTreeStatus btree_traverse_reachable_pages(BTree *btree, BTreePageCollection *vi
     
     return BTREE_SUCCESS;
 }
+
+
+/* Find B+ Tree Key */
+BTreeStatus btree_find_exact_key(BTree *btree, BTreeSearchKey *search_key, BTreeSearchResult *search_result,
+                                 BTreeCellContents *cell_contents) {
+    // Validate inputs
+    if (!btree || !search_key || !search_result || !cell_contents) {
+        printf("btree_find_exact_key: Invalid inputs.\n");
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    if (!btree->pager || 
+        btree->root_page_num == INVALID_ROOT_PAGE ||
+        btree->root_page_num >= btree->pager->num_pages) {
+        printf("btree_find_exact_key: Invalid input B+ Tree.\n");
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    if (!search_key->index || 
+        !search_key->index->index_key || 
+        !search_key->index->index_key->column_index_array ||
+        search_key->index->index_key->num_columns == 0) {
+        printf("btree_find_exact_key: Invalid index Key.\n");
+        return BTREE_INVALID_ARGUMENTS;        
+    }
+
+    if (!search_key->target_key ||
+        search_key->num_target_keys == 0 ||
+        search_key->num_target_keys != search_key->index->index_key->num_columns) {
+        printf("btree_find_exact_key: Invalid target search Key.\n");
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    // Initializing the search result structure to default values,
+    // in cases the search function call fails
+    *search_result = (BTreeSearchResult) {
+        .found = false,
+        .exact_match = false,
+        .page = NULL,
+        .result_index = UINT32_MAX
+    };
+
+    BTreeStatus status = btree_root_to_leaf(btree, search_key, search_result);
+    
+    // Search operation failed
+    if (status != BTREE_SUCCESS) {
+        return status;
+    }
+
+    // Search did not find an exact match of the requested search key
+    if (!search_result->exact_match) {
+        return BTREE_NOT_FOUND;
+    }
+
+    // Search result must point to an existing (the leaf) page 
+    if (!search_result->page) {
+        return BTREE_ERROR;
+    }
+
+    // Load the leaf page to a BTreePage structure
+    BTreePage leaf = {0};
+
+    status = btree_page_attach_load_validate(btree->pager, &leaf, search_result->page, search_key->index);
+    if (status != BTREE_SUCCESS) {
+        return status;
+    }
+
+    // Validating that the result page is actually a leaf,
+    // and that the exact match result index is within the available cell count
+    if (leaf.type != BTREE_LEAF_NODE || search_result->result_index >= leaf.cell_count) {
+        return BTREE_CORRUPT_PAGE;
+    }
+
+    BTreeCellView cell_view = {0};
+
+    // Get cell view 
+    status = get_cell(&leaf, search_result->result_index, &cell_view, search_key->index);
+    if (status != BTREE_SUCCESS) {
+        return status;
+    }
+
+    // Deserialize the exact-matching cell contents. 
+    // If the process fails, the page is corrupt
+    if (!deserialize_cell_contents(
+        search_key->index->schema, 
+        leaf.data,
+        &leaf,
+        &cell_view,
+        cell_contents,
+        search_key->index)) {
+        
+        return BTREE_CORRUPT_PAGE;
+    }
+
+    return BTREE_SUCCESS;
+}

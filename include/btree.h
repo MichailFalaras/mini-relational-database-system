@@ -49,7 +49,8 @@ typedef enum btree_status {
     BTREE_FREE_PAGE,
     BTREE_NEEDS_SPLIT,
     BTREE_DUPLICATE_KEY,
-    BTREE_SUCCESS
+    BTREE_SUCCESS,
+    BTREE_NOT_FOUND
 } BTreeStatus;
 
 /* BTree Component with pager for traversal. */
@@ -191,5 +192,9 @@ extern BTreeStatus btree_root_split(BTree *btree, BTreePage *btree_old_root, BTr
 
 // Traverse B+Tree
 extern BTreeStatus btree_traverse_reachable_pages(BTree *btree, BTreePageCollection *visited_pages);
+
+/* Find B+ Tree Key */
+extern BTreeStatus btree_find_exact_key(BTree *btree, BTreeSearchKey *search_key, BTreeSearchResult *search_result);
+
 
 #endif
