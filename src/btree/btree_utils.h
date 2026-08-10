@@ -36,6 +36,15 @@ void btree_page_sync(Pager *pager, BTreePage *btree_page);
 /* Wrapper function that initializes and validates BTreePage fully. */
 BTreeStatus btree_page_attach_load_validate(Pager *pager, BTreePage *btree_page, Page *page, BTreeIndexSpec *index);
 
+/* ---------- BTreeRangeResult Helpers ---------- */
+
+extern BTreeStatus btree_range_result_init(BTreeRangeResult *result);
+
+extern BTreeStatus btree_range_result_append(BTreeRangeResult *result, BTreeCellContents *new_cell);
+
+extern void btree_cell_contents_free(BTreeCellContents *cell);
+
+extern void btree_range_result_free(BTreeRangeResult *result);
 
 /* ---------- Miscellaneous  ---------- */
 
@@ -64,6 +73,9 @@ BTreeStatus btree_compact_page(Pager *pager, BTreePage *btree_page, BTreeIndexSp
 
 /* Connect sibling leaf nodes right after splitting. */
 BTreeStatus connect_sibling_leaf_nodes(Pager *pager, BTreePage *btree_page1, BTreePage *btree_page2);
+
+/* Find the leftmost leaf page */
+BTreeStatus btree_find_leftmost_page(BTree *btree, BTreeIndexSpec *index, Page **res_page);
 
 /* ---------- Cell Operations/Interface ---------- */
 
