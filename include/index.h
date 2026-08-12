@@ -38,7 +38,27 @@ typedef struct index {
     IndexType type;
     IndexKey *key;
     uint32_t root_page_num;
+    bool is_unique;
 } Index;
+
+/* Index search-related metadata */
+typedef enum index_lookup_status {
+    INDEX_LOOKUP_SUCCESS,
+    INDEX_LOOKUP_NOT_FOUND,
+    INDEX_LOOKUP_INVALID_ARGUMENTS,
+    INDEX_LOOKUP_ERROR
+} IndexLookupStatus;
+
+typedef struct index_entry {
+    Row *row;
+} IndexEntry;
+
+typedef struct index_range_result {
+    IndexEntry *entries;
+    uint32_t count;
+    uint32_t capacity;
+} IndexRangeResult;
+
 
 /* Index metadata operations */
 extern Index *index_metadata_create(const char *index_name, IndexType type, const IndexKey *key, uint32_t root_page_num);
@@ -62,5 +82,14 @@ extern Index *index_create(const char *index_name, IndexType type, const IndexKe
 extern bool index_truncate(Index *index, Pager *pager);
 
 extern bool index_drop(Index *index, Pager *pager);
+
+// Find exact-match index entry
+extern IndexLookupStatus index_find_exact(const Index *index, Pager *pager, Schema *schema, 
+    Value **key_values, const uint32_t *column_ids, uint32_t num_columns, IndexEntry *result);
+
+//Find range of index entries that match the range query bounds
+extern IndexLookupStatus index_find_range(const Index *index, Pager *pager, Value **start_key_values,
+    uint32_t start_key_count, bool include_start, Value **end_key_values, uint32_t end_key_count,
+    bool include_end, IndexRangeResult *result);
 
 #endif

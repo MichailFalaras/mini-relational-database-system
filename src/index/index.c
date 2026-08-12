@@ -6,6 +6,7 @@
 #include "../../include/page.h"
 #include "../../include/btree.h"
 #include "../src/btree/btree_utils.h"
+#include "../../include/schema.h"
 
 /* Index metadata operations */
 
@@ -464,4 +465,100 @@ bool index_drop(Index *index, Pager *pager) {
     // Free index metadata, only if the whole physical index B+ Tree was released successfully.
     index_free(index);
     return all_released;
+}
+
+
+// Find exact-match index entry
+IndexLookupStatus index_find_exact(const Index *index, Pager *pager, Schema *schema,
+    Value **key_values, const uint32_t *column_ids, uint32_t num_columns, IndexEntry *result) {
+
+    // Validate inputs
+    if (!index || !index->key || 
+        !index->key->column_index_array || 
+        index->key->num_columns == 0) {
+        return INDEX_LOOKUP_INVALID_ARGUMENTS;
+    }
+
+    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+        return INDEX_LOOKUP_INVALID_ARGUMENTS;
+    }
+
+    if (index->root_page_num <= SYSTEM_CATALOG_PAGE_NUM ||
+        index->root_page_num >= pager->num_pages ||
+        index->root_page_num >= MAX_PAGES) {
+        return INDEX_LOOKUP_INVALID_ARGUMENTS;
+    }
+
+    if (num_columns != index->key->num_columns) {
+        return INDEX_LOOKUP_INVALID_ARGUMENTS;
+    }
+
+    if (!schema || !column_ids || !key_values || num_columns == 0 || !result) {
+        return INDEX_LOOKUP_INVALID_ARGUMENTS;
+    }
+
+    if (!index_key_matches_key(index, column_ids, num_columns)) {
+        return INDEX_LOOKUP_INVALID_ARGUMENTS;
+    }
+
+    result->row = NULL;
+
+    // Initialize B+ Tree structures
+    BTree btree = {0};
+    btree.pager = pager;
+    btree.root_page_num = index->root_page_num;
+
+    BTreeIndexSpec spec = {0};
+    if (!btree_index_spec_init(index, schema, &spec)) {
+        return INDEX_LOOKUP_ERROR;
+    }
+
+    BTreeSearchKey search_key = {0};
+
+    search_key.index = &spec;
+    search_key.target_key = key_values;
+    search_key.num_target_keys = num_columns;
+
+
+    BTreeSearchResult search_result = {0};
+    BTreeCellContents cell_contents = {0};
+
+    // Call the B+ Tree function to find the exact match
+    BTreeStatus status = btree_find_exact_key(&btree, &search_key, &search_result, &cell_contents);
+    
+    switch (status) {
+        case BTREE_SUCCESS:
+            break;
+
+        case BTREE_NOT_FOUND:
+            index_btree_spec_free(&spec);
+            btree_cell_contents_free(&cell_contents);
+            return INDEX_LOOKUP_NOT_FOUND;
+
+        case BTREE_INVALID_ARGUMENTS:
+            index_btree_spec_free(&spec);
+            btree_cell_contents_free(&cell_contents);
+            return INDEX_LOOKUP_INVALID_ARGUMENTS;
+
+        default:
+            index_btree_spec_free(&spec);
+            btree_cell_contents_free(&cell_contents);
+            return INDEX_LOOKUP_ERROR;
+    }
+
+    // Transfer ownership of result Row to the IndexEntry structure
+    result->row = cell_contents.BTreePayload.row;
+    cell_contents.BTreePayload.row = NULL;
+
+    btree_cell_contents_free(&cell_contents);
+    index_btree_spec_free(&spec);
+
+    return INDEX_LOOKUP_SUCCESS;
+}
+
+//Find range of index entries that match the range query bounds
+IndexLookupStatus index_find_range(const Index *index, Pager *pager, Value **start_key_values,
+    uint32_t start_key_count, bool include_start, Value **end_key_values, uint32_t end_key_count,
+    bool include_end, IndexRangeResult *result) {
+
 }
