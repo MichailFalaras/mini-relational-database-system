@@ -136,12 +136,7 @@ BTreeStatus btree_page_validate(Pager *pager, BTreePage *btree_page, BTreeIndexS
             }
         }
     }
-
-    uint16_t cell_pointer = get_cell_pointer(btree_page->data, btree_page->cell_count-1);
-    if (cell_pointer > btree_page->free_space_offset) {
-        return BTREE_CORRUPT_PAGE;
-    }
-
+    
     // No actual payload checks here, just metadata. 
 
     return BTREE_SUCCESS;
@@ -196,8 +191,7 @@ void btree_page_sync(Pager *pager, BTreePage *btree_page) {
 
 /* Wrapper function that initializes and validates BTreePage fully. */
 BTreeStatus btree_page_attach_load_validate(Pager *pager, BTreePage *btree_page, Page *page, BTreeIndexSpec *index) {
-    if (!pager || !btree_page || !btree_page->page 
-        || !btree_page->data || !page) {
+    if (!pager || !btree_page || !page) {
         return BTREE_INVALID_ARGUMENTS;
     }
 
@@ -224,7 +218,9 @@ BTreeStatus get_key(BTreePage *btree_page, uint16_t cell_index, BTreeKeyView *ke
         return status;
     }
 
-    key = &cell.key;
+    key->key = cell.key.key;
+    key->key_size = cell.key.key_size;
+    key->offset = cell.key.offset;
     
     return BTREE_SUCCESS;
 }
@@ -232,28 +228,26 @@ BTreeStatus get_key(BTreePage *btree_page, uint16_t cell_index, BTreeKeyView *ke
 /* Comparing BTree Internal/Leaf Node Keys. */
 BTreeStatus btree_compare(Value **values, BTreeKeyView *btree_key, BTreeSearchKey *search_key, int *result) {
     if (!values || !search_key || !result) {
-        return false;
+        return BTREE_INVALID_ARGUMENTS;
     }
 
-    Value **key_val = (Value **) btree_key->key;
-
+    Value **target_key = (Value **) search_key->target_key; 
     /* Compare both same index columns. (With upper limit the search keys used, not
     the amount of keys the BTree is organized with) */
     for (uint32_t i = 0; i < search_key->num_target_keys; i++) {
-        if (!value_compare(values[i], key_val[i], result)) {
-            return false;
+        if (!value_compare(values[i], target_key[i], result)) {
+            return BTREE_ERROR;
         }
 
         // result == -1 for values[i] < key_val
         // result == 1 for values[i] > key_val
-
         /* If it isn't equal, don't bother comparing other columns. */
         if (*result != 0) {
             break;
         } 
     }
 
-    return true;
+    return BTREE_SUCCESS;
 }
 
 /* Check if there's enough space to store a Cell and its Cell Pointer. */
@@ -266,12 +260,12 @@ BTreeStatus btree_page_has_enough_space(BTreePage *btree_page, BTreeCellContents
     uint16_t header_size = get_header_size(btree_page->type);
 
     reserved_space += header_size;
-    reserved_space += btree_page->cell_count * 2;
+    reserved_space += btree_page->cell_count * sizeof(uint32_t);
     
     uint16_t available_space = btree_page->free_space_offset - reserved_space;
 
     // +2 for the cell pointer.
-    uint16_t needed_space = cell_contents->key_size + cell_contents->cell_size + 2;
+    uint16_t needed_space = cell_contents->cell_size + sizeof(uint32_t);
 
     if (available_space >= needed_space) {
         return true;
@@ -362,7 +356,7 @@ BTreeStatus btree_compact_page(Pager *pager, BTreePage *btree_page, BTreeIndexSp
 
     /* Transfer all cell pointers and contents onto new page. */
     BTreeStatus status = BTREE_SUCCESS;
-    for (uint16_t i = 0; i < replacement.cell_count; i++) {
+    for (uint16_t i = 0; i < btree_page->cell_count; i++) {
         status = btree_transfer_cells(btree_page, i, &replacement, i, index);
         if (status != BTREE_SUCCESS) {
             return status;
@@ -375,7 +369,13 @@ BTreeStatus btree_compact_page(Pager *pager, BTreePage *btree_page, BTreeIndexSp
     page_free(btree_page->page);
     btree_page->page = NULL;
 
+    replacement.is_root = btree_page->is_root;
+    replacement.parent_pointer = btree_page->parent_pointer;
+    replacement.cell_count = btree_page->cell_count;
+    btree_page_sync(pager, &replacement);
+
     btree_page_attach(btree_page, new_page);
+    btree_page_load(btree_page);
     return BTREE_SUCCESS;
 }
 
@@ -435,9 +435,9 @@ BTreeStatus get_cell(BTreePage *btree_page, uint16_t cell_index, BTreeCellView *
     }
 
     cell->key.key_size = index->key_size;
-    cell->payload = data;
+    cell->payload = cell->key.key + cell->key.key_size;
     cell->offset = offset;
-    cell->payload_size = size;
+    cell->payload_size = size - cell->key.key_size;
 
     return BTREE_SUCCESS;
 }
@@ -456,23 +456,23 @@ BTreeStatus insert_cell(Pager *pager, BTreePage *btree_page, BTreeIndexSpec *ind
         return status;
     }
 
-    uint8_t write_offset = btree_page->free_space_offset - cell_contents->cell_size;
+    uint16_t offset = btree_page->free_space_offset - cell_contents->cell_size;
+    uint8_t *write_offset = btree_page->data + offset;
     uint16_t size = cell_contents->cell_size;
     /* Fill that empty space with the new cell pointer. */
     set_cell_pointer(
         btree_page->data,
         search_result->result_index,
-        make_cell_pointer(write_offset, size)
+        make_cell_pointer(offset, size)
     );
 
     /* Serialize and write payload onto page. */
-    if (!serialize_cell_contents(&write_offset, btree_page, cell_contents)) {
+    if (!serialize_cell_contents(write_offset, btree_page, cell_contents)) {
         return BTREE_ERROR;
     }
     
     /* Update metadata. */
-    btree_page->cell_count++;
-    btree_page->free_space_offset = write_offset;
+    btree_page->free_space_offset = offset;
 
     if (!page_mark_dirty(btree_page->page) 
         || !page_touch(pager, btree_page->page)) {
@@ -495,15 +495,14 @@ BTreeStatus btree_split_cells(BTreePage *src, BTreePage *dest, BTreeIndexSpec *i
     /* Transfer half of cells. */
     for (uint16_t i = cell_index; i < src->cell_count; i++) {
         status = btree_transfer_cells(src, i, dest, i - cell_index, index);
-
         if (status != BTREE_SUCCESS) {
             return status;
         }
     }
 
     /* Update cell count on both pages. */
-    set_cell_count(src->data, cell_index);
-    set_cell_count(dest->data, src->cell_count - cell_index);
+    dest->cell_count = src->cell_count - cell_index;
+    src->cell_count = cell_index;
 
     return BTREE_SUCCESS;
 }
@@ -518,31 +517,28 @@ BTreeStatus btree_transfer_cells(BTreePage *src, uint16_t src_idx, BTreePage *de
 
     BTreeCellView src_cell_view = {0};
     BTreeStatus status = get_cell(src, src_idx, &src_cell_view, index);
+    if (status != BTREE_SUCCESS) {
+        return status;
+    }
     BTreeCellContents src_cell = {0};
     
     if (!deserialize_cell_contents(index->schema, src->data, src, &src_cell_view, &src_cell, index)) {
-        return false;
-    }
-    
-    /* Update dest with new cell pointer & free_space_offset. */
-    dest->free_space_offset -= src_cell_view.payload_size;
-    set_cell_pointer(dest->data, dest_idx, make_cell_pointer(dest->free_space_offset, src_cell_view.payload_size));
-    
-    if (!serialize_cell_contents((uint8_t *) &dest->free_space_offset, dest, &src_cell)) {
         return BTREE_ERROR;
     }
 
-    status = shift_cell_pointer(src, src_idx, BTREE_SHIFT_DELETE);
-    if (status != BTREE_SUCCESS) {
-        return status;
+    /* Update dest with new cell pointer & free_space_offset. */
+    dest->free_space_offset -= src_cell.cell_size;
+    set_cell_pointer(dest->data, dest_idx, make_cell_pointer(dest->free_space_offset, src_cell.cell_size));
+    
+    if (!serialize_cell_contents(dest->data + dest->free_space_offset, dest, &src_cell)) {
+        return BTREE_ERROR;
     }
 
     return BTREE_SUCCESS;
 }
 
-
 /* Remove cell by SHIFTING DOWN cell pointers and contents. */
-BTreeStatus btree_remove_cell(BTreePage *btree_page, uint32_t cell_pointer_index, BTreeIndexSpec *index) {
+BTreeStatus btree_remove_cell(BTreePage *btree_page, uint32_t cell_pointer_index) {
     if (!btree_page || !btree_page->page || !btree_page->data) {
         return BTREE_INVALID_ARGUMENTS;
     }
@@ -571,6 +567,7 @@ BTreeStatus shift_cell_pointer(BTreePage *btree_page, uint16_t index, BTreeShift
 
     /* No shifting needed for it to be added in the end. */
     if (index >= btree_page->cell_count) {
+        btree_page->cell_count++;
         return BTREE_SUCCESS;
     }
 
@@ -604,7 +601,7 @@ BTreeStatus shift_cell_pointer(BTreePage *btree_page, uint16_t index, BTreeShift
 
 /* Shift cell forward/backwards to insert/delete specific cell and its contents. */
 BTreeStatus shift_cell(BTreePage *btree_page, uint32_t cell_pointer, BTreeShiftDirection shift_direction) {
-    if (!btree_page || !btree_page->type || !btree_page->data) {
+    if (!btree_page || !btree_page->page || !btree_page->data) {
         return BTREE_INVALID_ARGUMENTS;
     }
 
@@ -755,16 +752,16 @@ BTreeStatus btree_traverse_page_recursive(BTree *btree, uint32_t page_num, BTree
     // Visit cell data and call the recursive function for the corresponding child page
     for (uint16_t i = 0; i < btree_page.cell_count; i++) {
         uint32_t cell_pointer = get_cell_pointer(btree_page.data, i);
-        uint32_t child_page_num = get_cell_child_pointer(btree_page.data, cell_pointer);
+        uint32_t child_page_num = get_cell_child_pointer(btree_page.data, get_cell_offset(cell_pointer));
 
-        if (!btree_traverse_page_recursive(btree, child_page_num, visited_pages)) {
-            return BTREE_ERROR;
+        BTreeStatus status = btree_traverse_page_recursive(btree, child_page_num, visited_pages);
+        if (status != BTREE_SUCCESS) {
+            return status;
         }
     }
 
     // Visit the rightmost child page (which is a standard internal node field)
     uint32_t rightmost_child_page_num = get_rightmost_child(btree_page.data);
     
-
     return btree_traverse_page_recursive(btree, rightmost_child_page_num, visited_pages);
 }

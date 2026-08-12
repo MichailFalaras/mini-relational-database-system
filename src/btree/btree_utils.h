@@ -86,7 +86,7 @@ BTreeStatus btree_split_cells(BTreePage *src, BTreePage *dest, BTreeIndexSpec *i
 BTreeStatus btree_transfer_cells(BTreePage *src, uint16_t src_idx, BTreePage *dest, uint16_t dest_idx, BTreeIndexSpec *index);
 
 /* Remove cell by SHIFTING DOWN cell pointers and contents. */
-BTreeStatus btree_remove_cell(BTreePage *btree_page, uint32_t cell_pointer_index, BTreeIndexSpec *index);
+BTreeStatus btree_remove_cell(BTreePage *btree_page, uint32_t cell_pointer_index);
 
 
 /* ---------- Shift Cell Pointers & Cell Contents ---------- */

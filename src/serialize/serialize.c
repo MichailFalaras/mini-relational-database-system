@@ -40,7 +40,7 @@ bool serialize_cell_contents(uint8_t *write_offset, BTreePage *btree_page, BTree
 bool deserialize_cell_contents(const Schema *schema, uint8_t *read_offset, BTreePage *btree_page,
     BTreeCellView *cell_view, BTreeCellContents *cell, BTreeIndexSpec *index) {
     if (!schema || !read_offset || !btree_page || !btree_page->page
-        || !btree_page->data || !cell_view || !cell || !index) {
+        || !btree_page->data || !cell_view || !cell || !index) {         
         return false;
     }
 
@@ -74,7 +74,7 @@ bool serialize_leaf_node(uint8_t *write_offset, BTreeCellContents *cell) {
     if (!serialize_keys(&write_offset, cell)) {
         return false;
     }
-    
+
     if (!serialize_row(&write_offset, cell->BTreePayload.row)) {
         return false;
     }
@@ -95,6 +95,7 @@ bool deserialize_leaf_node(const Schema *schema, uint8_t *read_offset, BTreeCell
         return false;
     }
     
+    read_offset += cell_view->offset;
     if (!deserialize_keys(&read_offset, cell, index)) {
         return false;
     }
@@ -198,7 +199,7 @@ bool serialize_row(uint8_t **write_offset, const Row *row) {
         if (!serialize_value_data(row->values[i], *write_offset)) {
             return false;
         }
-
+        
         *write_offset += get_data_type_size(row->values[i]->type);
     }
 
