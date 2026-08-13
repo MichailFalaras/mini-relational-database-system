@@ -467,7 +467,7 @@ BTreeStatus btree_traverse_reachable_pages(BTree *btree, BTreePageCollection *vi
 }
 
 
-/* Find B+ Tree Key */
+/* Find a unique B+ Tree key */
 BTreeStatus btree_find_exact_key(BTree *btree, BTreeSearchKey *search_key, BTreeSearchResult *search_result,
                                  BTreeCellContents *cell_contents) {
     // Validate inputs
@@ -562,6 +562,26 @@ BTreeStatus btree_find_exact_key(BTree *btree, BTreeSearchKey *search_key, BTree
     return BTREE_SUCCESS;
 }
 
+
+// Find all B+ Tree Key prefixes
+BTreeStatus btree_find_prefix_keys(BTree *btree, BTreeIndexSpec *index, BTreeSearchKey *prefix_key,
+    BTreeRangeResult *result) {
+
+    if (!btree || !index || !index->index_key ||
+        !index->index_key->column_index_array ||
+        index->index_key->num_columns == 0) {
+        return BTREE_INVALID_ARGUMENTS;        
+    }
+    
+    if (!prefix_key || !prefix_key->target_key ||
+        prefix_key->index != index ||
+        prefix_key->num_target_keys == 0 ||
+        prefix_key->num_target_keys > index->index_key->num_columns || !result) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    return btree_find_range_keys(btree, index, prefix_key, true, prefix_key, true, result);
+}
 
 /* Find B+ Tree Range of Keys 
  *
