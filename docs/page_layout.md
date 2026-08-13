@@ -23,15 +23,17 @@
 ## 2. 🗂️ System Catalog Payload (Table/Index Metadata)
 **System Catalog Leaf Node Cell Specific Data**
 
+The Table/Index name is stored as the B+ tree key of the catalog cell
+and is therefore not duplicated inside the catalog payload.
+
 | Relative Offset | Size | C Type | Description
 | :--- | :--- | :--- | :--- |
 | 0 | 1 | `uint8_t` | Type (`0` for Table, `1` for Index) |
-| 1 | 64 | `char[64]` | Table/Index Name |
-| 65 | 4 | `uint32_t` | Root Table/Index Page Num
-| 69 | 4 | `uint32_t` | DDL Statement Size
-| 73 | Dynamic | `char[]` | DDL Statement<br><small>(Either `CREATE TABLE`/`CREATE INDEX` containing info for Schema/Index key)</small>
+| 1 | 4 | `uint32_t` | Root Table/Index Page Num
+| 5 | 4 | `uint32_t` | DDL Statement Size
+| 9 | Dynamic | `char[]` | DDL Statement<br><small>(Either `CREATE TABLE`/`CREATE INDEX` containing info for Schema/Index key)</small>
 
-**Total Size:** (73 + length of `SQL QUery for Schema`) bytes
+**Total Size:** (9 + length of `SQL QUery for Schema`) bytes
 
 ---
 

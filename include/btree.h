@@ -10,6 +10,7 @@ typedef struct row Row;
 typedef enum data_types DataType;
 typedef struct value Value;
 typedef struct schema Schema;
+typedef struct catalog_payload CatalogPayload;
 
 typedef enum btree_node_type {
     BTREE_LEAF_NODE,
@@ -48,7 +49,8 @@ typedef enum btree_status {
     BTREE_FREE_PAGE,
     BTREE_NEEDS_SPLIT,
     BTREE_DUPLICATE_KEY,
-    BTREE_SUCCESS
+    BTREE_SUCCESS,
+    BTREE_NOT_FOUND
 } BTreeStatus;
 
 /* BTree Component with pager for traversal. */
@@ -99,6 +101,7 @@ typedef struct btree_cell_contents {
     union {
         Row *row;
         uint32_t child_pointer;
+        CatalogPayload *catalog;
     } BTreePayload;
     uint16_t cell_size;
 } BTreeCellContents;
@@ -152,6 +155,13 @@ typedef struct btree_search_key {
     uint16_t num_target_keys; 
 } BTreeSearchKey;
 
+/* Result structure storing the matching cell contents for a range query */
+#define BTREE_RANGE_INITIAL_CAPACITY 16
+typedef struct btree_range_result {
+    BTreeCellContents *cells;
+    uint32_t count;
+    uint32_t capacity;
+} BTreeRangeResult;
 
 
 /* Initialize btree_page as an Empty Leaf Node. */
@@ -189,5 +199,13 @@ extern BTreeStatus btree_root_split(BTree *btree, BTreePage *btree_old_root, BTr
 
 // Traverse B+Tree
 extern BTreeStatus btree_traverse_reachable_pages(BTree *btree, BTreePageCollection *visited_pages);
+
+// Find B+ Tree Key 
+extern BTreeStatus btree_find_exact_key(BTree *btree, BTreeSearchKey *search_key, BTreeSearchResult *search_result,
+    BTreeCellContents *cell_contents);
+
+// Find B+ Tree Range of Keys
+extern BTreeStatus btree_find_range_keys(BTree *btree, BTreeSearchKey *start_search_key, bool includes_start, 
+    BTreeSearchKey *end_search_key, bool includes_end, BTreeRangeResult *result);
 
 #endif

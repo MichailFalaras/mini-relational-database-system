@@ -253,12 +253,16 @@ Index *index_create(const char *index_name, IndexType type, const IndexKey *key,
         goto rollback;
     }
 
+    // Initialize the BTreePage wrapper with the leaf root
     BTreePage btree_index_root = {0}; 
-    // Initialize the index root with the page's binary data
-    if (!btree_page_init_empty_leaf(&btree_index_root)) {
+
+    btree_page_attach(&btree_index_root, index_root);
+    
+    if (btree_page_init_empty_leaf(&btree_index_root) != BTREE_SUCCESS) {
         printf("index_create: Root initialization failed.\n");
         goto rollback;
     }
+
     btree_page_sync(pager, &btree_index_root);
 
     // Create index metadata structure in memory
@@ -326,7 +330,8 @@ bool index_truncate(Index *index, Pager *pager) {
     BTree btree = {0};
     btree.pager = pager;
     btree.root_page_num = index->root_page_num;
-    if (!btree_traverse_reachable_pages(&btree, visited_pages)) {
+
+    if (btree_traverse_reachable_pages(&btree, visited_pages) != BTREE_SUCCESS) {
         printf("index_truncate: Couldn't traverse Index B+ Tree.\n");
         free(visited_pages);
         return false;
@@ -349,11 +354,15 @@ bool index_truncate(Index *index, Pager *pager) {
 
     // Re-initializing the index B+ Tree
     BTreePage btree_root_page = {0};
-    if (!btree_page_init_empty_leaf(&btree_root_page)) {
+
+    btree_page_attach(&btree_root_page, root_page);
+
+    if (btree_page_init_empty_leaf(&btree_root_page) != BTREE_SUCCESS) {
         printf("index_truncate: Could not clear root page.\n");
         free(visited_pages);
         return false;
     }
+
     btree_page_sync(pager, &btree_root_page);
 
     // Attempting to release all non-root pages
@@ -426,7 +435,7 @@ bool index_drop(Index *index, Pager *pager) {
     BTree btree = {0};
     btree.pager = pager;
     btree.root_page_num = index->root_page_num;
-    if (!btree_traverse_reachable_pages(&btree, visited_pages)) {
+    if (btree_traverse_reachable_pages(&btree, visited_pages) != BTREE_SUCCESS) {
         printf("index_drop: Couldn't traverse Index B+ Tree.\n");
         free(visited_pages);
         return false;

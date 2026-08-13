@@ -412,6 +412,69 @@ BTreeStatus connect_sibling_leaf_nodes(Pager *pager, BTreePage *btree_page1, BTr
     return BTREE_SUCCESS;
 }
 
+
+/* Find the leftmost leaf page */
+BTreeStatus btree_find_leftmost_page(BTree *btree, BTreeIndexSpec *index, Page **res_page) {
+    if (!btree || !btree->pager || !index) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    if (btree->root_page_num == INVALID_ROOT_PAGE ||
+        btree->root_page_num >= btree->pager->num_pages) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    // Get root page
+    Page *page = pager_get_page(btree->pager, btree->root_page_num);
+
+    if (!page) {
+        return BTREE_ERROR;
+    }
+
+    while (true) {
+        BTreePage btree_page = {0};
+
+        // In iteration, attach the current page to a BTreePage stucture
+        BTreeStatus status = btree_page_attach_load_validate(btree->pager, &btree_page, page, index);
+        if (status != BTREE_SUCCESS) {
+            return status;
+        }
+
+        // Check if the leftmost leaf has been found
+        if (btree_page.type == BTREE_LEAF_NODE) {
+            *res_page = page;
+            return BTREE_SUCCESS;
+        }
+
+        // Empty-cell invalid page
+        if (btree_page.cell_count == 0) {
+            return BTREE_CORRUPT_PAGE;
+        }
+
+        // Find the leftmost child of the current internal node/page
+        uint32_t cell_pointer = get_cell_pointer(btree_page.data, 0);
+        uint16_t cell_offset = get_cell_offset(cell_pointer);
+        uint32_t child_page_num = get_cell_child_pointer(btree_page.data, cell_offset);
+
+        // Validate page number
+        if (child_page_num <= SYSTEM_CATALOG_PAGE_NUM ||
+            child_page_num >= btree->pager->num_pages) {
+            return BTREE_CORRUPT_PAGE;
+        }
+
+        // Load leftmost child page
+        page = pager_get_page(btree->pager, child_page_num);
+
+        if (!page) {
+            return BTREE_ERROR;
+        }
+
+    }
+
+    
+}
+
+
 /* BTreeCellView RAM Component Interface for easy cell access with offset and its length.
  * DOESNT update the Page Data, just for cell viewing and accesibility. */
 BTreeStatus get_cell(BTreePage *btree_page, uint16_t cell_index, BTreeCellView *cell, BTreeIndexSpec *index) {
@@ -764,4 +827,93 @@ BTreeStatus btree_traverse_page_recursive(BTree *btree, uint32_t page_num, BTree
     uint32_t rightmost_child_page_num = get_rightmost_child(btree_page.data);
     
     return btree_traverse_page_recursive(btree, rightmost_child_page_num, visited_pages);
+}
+
+
+/* ---------- BTreeRangeResult Helpers ---------- */
+
+/* The caller owns the BTreeRangeResult struct */
+BTreeStatus btree_range_result_init(BTreeRangeResult *result) {
+    if (!result) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    result->cells = (BTreeCellContents *) calloc(BTREE_RANGE_INITIAL_CAPACITY, sizeof(BTreeCellContents));
+    
+    if(!result->cells) {
+        result->count = 0;
+        result->capacity = 0;
+        return BTREE_ERROR;
+    }
+    
+    result->count = 0;
+    result->capacity = BTREE_RANGE_INITIAL_CAPACITY;
+    return BTREE_SUCCESS;
+}
+
+
+BTreeStatus btree_range_result_append(BTreeRangeResult *result, BTreeCellContents *new_cell) {
+    if (!result || !new_cell) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    // Checking if range result struct is full
+    if (result->count == result->capacity) {
+        uint32_t new_capacity = 
+            (result->capacity == 0) ? BTREE_RANGE_INITIAL_CAPACITY : result->capacity * 2;
+
+        if (new_capacity < result->capacity) {
+            return BTREE_ERROR;
+        }
+
+        // Increasing the size of the cell contents array
+        BTreeCellContents *new_result_cells = 
+            (BTreeCellContents *) realloc(result->cells, new_capacity * sizeof(BTreeCellContents));
+
+        if (!new_result_cells) {
+            return BTREE_ERROR;
+        }
+
+        result->cells = new_result_cells;
+        result->capacity = new_capacity;
+    }
+
+    // Appending the new cell content struct
+    result->cells[result->count] = *new_cell;
+    result->count++;
+
+    return BTREE_SUCCESS;
+}
+
+void btree_cell_contents_free(BTreeCellContents *cell) {
+    if (!cell) {
+        return;
+    }
+
+    if (cell->keys) {
+        value_free_array(cell->keys, cell->num_keys);
+        cell->keys = NULL;
+    }
+
+    if (cell->BTreePayload.row) {
+        row_free(cell->BTreePayload.row);
+        cell->BTreePayload.row = NULL;
+    }
+}
+
+void btree_range_result_free(BTreeRangeResult *result) {
+    if (!result) {
+        return;
+    }
+
+    // Free the allocate Key and Rows for each cell contents entry in the ragne result
+    for (uint32_t i = 0; i < result->count; i++) {
+        btree_cell_contents_free(&result->cells[i]);
+    }
+
+    free(result->cells);
+
+    result->cells = NULL;
+    result->count = 0;
+    result->capacity = 0;
 }

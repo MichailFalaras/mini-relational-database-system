@@ -484,3 +484,334 @@ BTreeStatus btree_traverse_reachable_pages(BTree *btree, BTreePageCollection *vi
     
     return BTREE_SUCCESS;
 }
+
+
+/* Find B+ Tree Key */
+BTreeStatus btree_find_exact_key(BTree *btree, BTreeSearchKey *search_key, BTreeSearchResult *search_result,
+                                 BTreeCellContents *cell_contents) {
+    // Validate inputs
+    if (!btree || !search_key || !search_result || !cell_contents) {
+        printf("btree_find_exact_key: Invalid inputs.\n");
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    if (!btree->pager || 
+        btree->root_page_num == INVALID_ROOT_PAGE ||
+        btree->root_page_num >= btree->pager->num_pages) {
+        printf("btree_find_exact_key: Invalid input B+ Tree.\n");
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    if (!search_key->index || 
+        !search_key->index->index_key || 
+        !search_key->index->index_key->column_index_array ||
+        search_key->index->index_key->num_columns == 0) {
+        printf("btree_find_exact_key: Invalid index Key.\n");
+        return BTREE_INVALID_ARGUMENTS;        
+    }
+
+    if (!search_key->target_key ||
+        search_key->num_target_keys == 0 ||
+        search_key->num_target_keys != search_key->index->index_key->num_columns) {
+        printf("btree_find_exact_key: Invalid target search Key.\n");
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    // Initializing the search result structure to default values,
+    // in cases the search function call fails
+    *search_result = (BTreeSearchResult) {
+        .found = false,
+        .exact_match = false,
+        .page = NULL,
+        .result_index = UINT32_MAX
+    };
+
+    BTreeStatus status = btree_root_to_leaf(btree, search_key, search_result);
+    
+    // Search operation failed
+    if (status != BTREE_SUCCESS) {
+        return status;
+    }
+
+    // Search did not find an exact match of the requested search key
+    if (!search_result->exact_match) {
+        return BTREE_NOT_FOUND;
+    }
+
+    // Search result must point to an existing (the leaf) page 
+    if (!search_result->page) {
+        return BTREE_ERROR;
+    }
+
+    // Load the leaf page to a BTreePage structure
+    BTreePage leaf = {0};
+
+    status = btree_page_attach_load_validate(btree->pager, &leaf, search_result->page, search_key->index);
+    if (status != BTREE_SUCCESS) {
+        return status;
+    }
+
+    // Validating that the result page is actually a leaf,
+    // and that the exact match result index is within the available cell count
+    if (leaf.type != BTREE_LEAF_NODE || search_result->result_index >= leaf.cell_count) {
+        return BTREE_CORRUPT_PAGE;
+    }
+
+    BTreeCellView cell_view = {0};
+
+    // Get cell view 
+    status = get_cell(&leaf, search_result->result_index, &cell_view, search_key->index);
+    if (status != BTREE_SUCCESS) {
+        return status;
+    }
+
+    // Deserialize the exact-matching cell contents. 
+    // If the process fails, the page is corrupt
+    if (!deserialize_cell_contents(
+        search_key->index->schema, 
+        leaf.data,
+        &leaf,
+        &cell_view,
+        cell_contents,
+        search_key->index)) {
+        
+        return BTREE_CORRUPT_PAGE;
+    }
+
+    return BTREE_SUCCESS;
+}
+
+
+/* Find B+ Tree Range of Keys 
+ *
+ * start_search_key == NULL -> unbounded lower search
+ * end_search_key == NULL -> unbounded upper search
+ * 
+*/
+BTreeStatus btree_find_range_keys(BTree *btree, BTreeIndexSpec *index, BTreeSearchKey *start_search_key, 
+    bool includes_start, BTreeSearchKey *end_search_key, bool includes_end, BTreeRangeResult *result) {
+
+    // Validate inputs
+    if (!btree || !btree->pager || !index || !result) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    if (btree->root_page_num == INVALID_ROOT_PAGE ||
+        btree->root_page_num >= btree->pager->num_pages) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    if (start_search_key) {
+        if (!start_search_key->index || start_search_key->index != index ||
+            !start_search_key->target_key) {
+            return BTREE_INVALID_ARGUMENTS;
+        }
+    }
+    
+
+    if (end_search_key) {
+        if (!end_search_key->index || end_search_key->index != index ||
+            !end_search_key->target_key) {
+            return BTREE_INVALID_ARGUMENTS;
+        }
+    }
+
+
+    // Allocating Range Result structure using a helper
+    BTreeStatus status = btree_range_result_init(result);
+    if (status != BTREE_SUCCESS) {
+        return status;
+    }
+
+    Page *starting_page = NULL;
+    uint16_t starting_index_pos = 0;
+
+    // Search for the starting leaf page where the range result entries should begin
+    if (start_search_key) {
+        BTreeSearchResult start_result = {0};
+
+        BTreeStatus status = btree_root_to_leaf(btree, start_search_key, &start_result);
+        if (status != BTREE_SUCCESS) {
+            btree_range_result_free(result);
+            return status;
+        }
+
+        // Found the starting page, and starting cell's index position
+        starting_page = start_result.page;
+        starting_index_pos = start_result.result_index;
+    }
+    else {
+        // If there's no lower bound in the range query, start from the leftmost leaf page
+        // and the first cell contents entry there
+        status = btree_find_leftmost_page(btree, index, &starting_page);
+        if (status != BTREE_SUCCESS) {
+            return status;
+        }
+
+        starting_index_pos = 0;
+    }
+
+    
+    Page *page = starting_page;
+    uint16_t index_pos = starting_index_pos;
+
+
+    BTreePageCollection visited_pages = {0};
+
+    // Main loop where matching entries are appended in the BTreeRangeResult structure
+    while (true) {
+
+        // Detect sibling cycles (e.g., leaf 8 -> leaf 9 -> leaf 8) or duplicate leaf references
+        if (btree_collection_contains(&visited_pages, page->page_num)) {
+            btree_range_result_free(result);
+            return BTREE_CORRUPT_PAGE;
+        }
+
+        if (visited_pages.count >= MAX_PAGES) {
+            btree_range_result_free(result);
+            return BTREE_CORRUPT_PAGE;
+        }
+
+        visited_pages.page_numbers[visited_pages.count] = page->page_num;
+        visited_pages.count++;
+
+
+        // Loading current page to a BTreePage structure
+        BTreePage btree_page = {0};
+        
+        status = btree_page_attach_load_validate(btree->pager, &btree_page, page, index);
+        if (status != BTREE_SUCCESS) {
+            btree_range_result_free(result);
+            return status;
+        }
+
+        if (btree_page.type != BTREE_LEAF_NODE) {
+            btree_range_result_free(result);
+            return BTREE_CORRUPT_PAGE;
+        }
+        
+        // Traversing the rest of the cells for the current page
+        while (index_pos < btree_page.cell_count) {
+            BTreeCellView cell_view = {0};
+
+            status = get_cell(&btree_page, index_pos, &cell_view, index);
+            if (status != BTREE_SUCCESS) {
+                btree_range_result_free(result);
+                return status;
+            }
+
+            // Creating a Value ** structure from the cell view's key 
+            Value **values = (Value **) calloc(index->index_key->num_columns, sizeof(Value *));
+            if (!values) {
+                btree_range_result_free(result);
+                return BTREE_ERROR;
+            }
+
+            uint8_t *key_offset = (uint8_t *) cell_view.key.key;
+
+            for (uint16_t i = 0; i < index->index_key->num_columns; i++) {
+                values[i] = value_create(index->column_types[i], key_offset);
+
+                if (!values[i]) {
+                    value_free_array(values, i);
+                    btree_range_result_free(result);
+                    return BTREE_ERROR;
+                }
+
+                key_offset += get_data_type_size(index->column_types[i]);
+            }
+
+            // Compare current Key with the lower bound search Key
+            if (start_search_key) {
+                int cmp_start = 0;
+
+                status = btree_compare(values, &cell_view.key, start_search_key, &cmp_start);
+                if (status != BTREE_SUCCESS) {
+                    value_free_array(values, index->index_key->num_columns);
+                    btree_range_result_free(result);
+                    return status;
+                }
+
+                // If current key is less than the lower bound key, 
+                // or, equal to lower bound key but lower bound is not included, skip it
+                if (cmp_start < 0 || (cmp_start == 0 && !includes_start)) {
+                    value_free_array(values, index->index_key->num_columns);
+                    index_pos++;
+                    continue;
+                }
+            }
+
+            // Compare current Key with the upper bound search Key
+            if (end_search_key) {
+                int cmp_end = 0;
+
+                status = btree_compare(values, &cell_view.key, end_search_key, &cmp_end);
+                if (status != BTREE_SUCCESS) {
+                    value_free_array(values, index->index_key->num_columns);
+                    btree_range_result_free(result);
+                    return status;
+                }
+
+                // If current key is greater than the upper bound key, 
+                // or, equal to upper bound key but upper bound is not included, the range query is complete
+                if (cmp_end > 0 || (cmp_end == 0 && !includes_end)) {
+                    value_free_array(values, index->index_key->num_columns);
+                    return BTREE_SUCCESS;
+                }
+            }
+
+            value_free_array(values, index->index_key->num_columns);
+
+            // Deserialize cell contents entry
+            BTreeCellContents cell = {0};
+
+            if (!deserialize_cell_contents(
+                    index->schema, 
+                    btree_page.data, 
+                    &btree_page, 
+                    &cell_view, 
+                    &cell, 
+                    index)) {
+                btree_range_result_free(result);
+                return BTREE_CORRUPT_PAGE;                  
+            }
+            
+            // Add current matching entry to the range results' structure
+            status = btree_range_result_append(result, &cell);
+
+            if (status != BTREE_SUCCESS) {
+                btree_cell_contents_free(&cell);
+                btree_range_result_free(result);
+                return status;
+            }
+
+            index_pos++;
+        }
+        
+        uint32_t next_page_num = btree_page.type_specific_data.siblings.next_leaf_pointer;
+
+        // The current page was the rightmost leaf page, and the range query is successful
+        if (next_page_num == UINT32_MAX) {
+            return BTREE_SUCCESS;
+        }
+
+        // Invalid next leaf node/page
+        if (next_page_num <= SYSTEM_CATALOG_PAGE_NUM || next_page_num >= btree->pager->num_pages) {
+            btree_range_result_free(result);
+            return BTREE_CORRUPT_PAGE;
+        }
+
+        // Retrieving the next leaf page
+        page = pager_get_page(btree->pager, next_page_num);
+
+        if (!page) {
+            btree_range_result_free(result);
+            return BTREE_ERROR;
+        }
+
+        // Resetting cell index position
+        index_pos = 0;
+    }
+
+}
+
