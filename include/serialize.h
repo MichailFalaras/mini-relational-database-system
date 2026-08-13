@@ -45,11 +45,15 @@ extern bool serialize_value_data(Value *value, void *serialized_output);
 extern Value *deserialize_value_data(DataType type, void *offset);
 
 /* Serialize/Deserialize catalog contents */
-
 extern bool serialize_catalog_contents(uint8_t *write_offset, BTreePage *btree_page, BTreeCellContents *cell);
 
-extern bool serialize_catalog_leaf_payload(uint8_t *write_offset, BTreeCellContents *cell);
+extern bool deserialize_catalog_contents(uint8_t *read_offset, BTreePage *btree_page, BTreeCellView *cell_view,
+    BTreeCellContents *cell, BTreeIndexSpec *index);
 
-extern Value *deserialize_catalog_leaf_payload(uint8_t *read_offset);
+/* Serialize/Deserialize catalog leaf key + payload */
+extern bool serialize_catalog_leaf_node(uint8_t *write_offset, BTreeCellContents *cell);
+
+extern bool deserialize_catalog_leaf_node(uint8_t *read_offset, BTreeCellView *cell_view, BTreeCellContents *cell, 
+    BTreeIndexSpec *index);
 
 #endif
