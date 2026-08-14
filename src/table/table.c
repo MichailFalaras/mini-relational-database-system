@@ -111,7 +111,8 @@ Table *table_metadata_create(const char *table_name, const Schema *schema) {
                     constraint->constraint_name,
                     PRIMARY_INDEX,
                     key,
-                    INVALID_ROOT_PAGE
+                    INVALID_ROOT_PAGE,
+                    true
                 );
 
                 // Index key is deep-copied. Free the old copy 
@@ -149,7 +150,8 @@ Table *table_metadata_create(const char *table_name, const Schema *schema) {
                     constraint->constraint_name,
                     SECONDARY_INDEX,
                     key,
-                    INVALID_ROOT_PAGE
+                    INVALID_ROOT_PAGE,
+                    true
                 );
 
                 // Index key is deep-copied. Free the old copy 
@@ -482,7 +484,8 @@ bool table_alter_modify_col(Table *table, const Database *db, const char *old_co
 }
 
 /* Create Index for a Table */
-bool table_create_index(Table *table, const char *index_name, IndexType type, const IndexKey *key, Pager *pager) {
+bool table_create_index(Table *table, const char *index_name, IndexType type, const IndexKey *key, 
+    Pager *pager, bool is_unique) {
     // Validate inputs
     if (!table || !table->table_schema) {
         printf("table_create_index: Input table is NULL.\n");
@@ -542,6 +545,11 @@ bool table_create_index(Table *table, const char *index_name, IndexType type, co
         return false;
     }
 
+    if (type == PRIMARY_INDEX && !is_unique) {
+        printf("table_create_index: Primary index must be unique.\n");
+        return false;
+    }
+
     // Checking if the table is at full capacity of secondary indexes
     if (type == SECONDARY_INDEX && table->total_secondary_indexes >= MAX_INDEXES) {
         printf("table_create_index: Full capacity of secondary Indexes.\n");
@@ -565,7 +573,8 @@ bool table_create_index(Table *table, const char *index_name, IndexType type, co
         }
     }
 
-    Index *index = index_create(index_name, type, key, pager);
+
+    Index *index = index_create(index_name, type, key, pager, is_unique);
     if (!index) {
         printf("table_create_index: The table's index could not be created.\n");
         return false;
@@ -851,7 +860,8 @@ bool table_materialize(Table *table, Pager *pager) {
             table->primary_index->name, 
             table->primary_index->type, 
             table->primary_index->key, 
-            pager
+            pager,
+            table->primary_index->is_unique
         );
 
         if (!created_primary_index) {
@@ -868,7 +878,8 @@ bool table_materialize(Table *table, Pager *pager) {
             index_metadata->name,
             index_metadata->type,
             index_metadata->key,
-            pager
+            pager,
+            index_metadata->is_unique
         );
 
         if (!created_secondary_indexes[i]) {
