@@ -523,7 +523,7 @@ BTreeStatus btree_find_exact_key(BTree *btree, BTreeSearchKey *search_key, BTree
         .found = false,
         .exact_match = false,
         .page = NULL,
-        .result_index = UINT32_MAX
+        .result_index = UINT16_MAX
     };
 
     BTreeStatus status = btree_root_to_leaf(btree, search_key, search_result);
@@ -535,6 +535,9 @@ BTreeStatus btree_find_exact_key(BTree *btree, BTreeSearchKey *search_key, BTree
 
     // Search did not find an exact match of the requested search key
     if (!search_result->exact_match) {
+        search_result->found = false;
+        search_result->page = NULL;
+        search_result->result_index = UINT16_MAX;
         return BTREE_NOT_FOUND;
     }
 
@@ -796,7 +799,9 @@ BTreeStatus btree_find_range_keys(BTree *btree, BTreeIndexSpec *index, BTreeSear
         }
 
         // Invalid next leaf node/page
-        if (next_page_num <= SYSTEM_CATALOG_PAGE_NUM || next_page_num >= btree->pager->num_pages) {
+        if (next_page_num <= SYSTEM_CATALOG_PAGE_NUM 
+            || next_page_num >= btree->pager->num_pages
+            || next_page_num >= MAX_PAGES) {
             btree_range_result_free(result);
             return BTREE_CORRUPT_PAGE;
         }

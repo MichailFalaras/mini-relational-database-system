@@ -359,7 +359,7 @@ Value *deserialize_value_data(DataType type, void *offset) {
     return value;
 } 
 
-/* Serialize catalog contents */
+/* Serialize/Deserialize catalog contents */
 bool serialize_catalog_contents(uint8_t *write_offset, BTreePage *btree_page, BTreeCellContents *cell) {
     if (!write_offset || !btree_page || !cell) {
         printf("serialize_catalog_contents: Invalid input data.\n");
@@ -379,7 +379,30 @@ bool serialize_catalog_contents(uint8_t *write_offset, BTreePage *btree_page, BT
     }
 }
 
-/* Serialize catalog leaf key + payload */
+bool deserialize_catalog_contents(uint8_t *read_offset, BTreePage *btree_page, BTreeCellView *cell_view, 
+BTreeCellContents *cell, BTreeIndexSpec *index) {
+
+    if (!read_offset || !btree_page || !btree_page->page || 
+        !btree_page->data  || !cell || !cell_view || !index) {
+        printf("deserialize_catalog_contents: Invalid input data.\n");
+        return false;
+    }
+
+    switch (btree_page->type) {
+        case BTREE_INTERNAL_NODE:
+            return deserialize_internal_node(read_offset, cell_view, cell, index);
+
+        case BTREE_LEAF_NODE:
+            return deserialize_catalog_leaf_node(read_offset, cell_view, cell, index);
+
+        default:
+            printf("deserialize_catalog_contents: BTreePage type is not valid.\n");
+            return false;
+    }
+
+}
+
+/* Serialize/Deserialize catalog leaf key + payload */
 bool serialize_catalog_leaf_node(uint8_t *write_offset, BTreeCellContents *cell) {
     if (!write_offset || !cell) {
         printf("serialize_catalog_leaf_node: Invalid input data.\n");
@@ -418,30 +441,6 @@ bool serialize_catalog_leaf_node(uint8_t *write_offset, BTreeCellContents *cell)
     }
 
     return true;
-}
-
-/* Deserialize catalog leaf payload */
-bool deserialize_catalog_contents(uint8_t *read_offset, BTreePage *btree_page, BTreeCellView *cell_view, 
-BTreeCellContents *cell, BTreeIndexSpec *index) {
-
-    if (!read_offset || !btree_page || !btree_page->page || 
-        !btree_page->data  || !cell || !cell_view || !index) {
-        printf("deserialize_catalog_contents: Invalid input data.\n");
-        return false;
-    }
-
-    switch (btree_page->type) {
-        case BTREE_INTERNAL_NODE:
-            return deserialize_internal_node(read_offset, cell_view, cell, index);
-
-        case BTREE_LEAF_NODE:
-            return deserialize_catalog_leaf_node(read_offset, cell_view, cell, index);
-
-        default:
-            printf("deserialize_catalog_contents: BTreePage type is not valid.\n");
-            return false;
-    }
-
 }
 
 bool deserialize_catalog_leaf_node(uint8_t *read_offset, BTreeCellView *cell_view, BTreeCellContents *cell,

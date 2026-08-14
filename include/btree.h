@@ -205,7 +205,7 @@ extern BTreeStatus btree_find_exact_key(BTree *btree, BTreeSearchKey *search_key
     BTreeCellContents *cell_contents);
 
 // Find B+ Tree Range of Keys
-extern BTreeStatus btree_find_range_keys(BTree *btree, BTreeSearchKey *start_search_key, bool includes_start, 
-    BTreeSearchKey *end_search_key, bool includes_end, BTreeRangeResult *result);
+extern BTreeStatus btree_find_range_keys(BTree *btree, BTreeIndexSpec *index, BTreeSearchKey *start_search_key, 
+    bool includes_start, BTreeSearchKey *end_search_key, bool includes_end, BTreeRangeResult *result);
 
 #endif
