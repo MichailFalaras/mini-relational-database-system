@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include "../../include/index.h"
 #include "../../include/row.h"
 #include "index_utils.h"

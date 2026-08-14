@@ -126,6 +126,7 @@ bool deserialize_internal_node(uint8_t *read_offset, BTreeCellView *cell_view, B
     cell->key_size = cell_view->key.key_size;
     cell->cell_size = cell->key_size + sizeof(uint32_t);
 
+    read_offset += cell_view->offset;
     memcpy(&cell->BTreePayload.child_pointer, read_offset, sizeof(uint32_t));
     read_offset += sizeof(uint32_t);
 
