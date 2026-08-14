@@ -76,7 +76,7 @@ Index *index_init(Pager *pager, const char *name, IndexType type,
         return NULL;
     }
 
-    Index *index = index_create(name, type, index_key, pager);
+    Index *index = index_create(name, type, index_key, pager, false);
     index_key_free(index_key);
 
     return index;
@@ -1045,7 +1045,8 @@ static int test_leaf_node_split() {
     /* Check if correct key was moved as separator key to the node above. */
     Value **separator_key = (Value **) calloc(index_spec.index_key->num_columns, sizeof(Value *));
     ASSERT(separator_key);
-    Value *split_result_separator_key = NULL;    
+    Value *split_result_separator_key = NULL;   
+    uint8_t *separator_offset = split_result.separator_key; 
     for (uint32_t i = 0; i < index_spec.index_key->num_columns; i++) {
         if (separator_key[i]) {
             value_free(separator_key[i]);
@@ -1056,12 +1057,12 @@ static int test_leaf_node_split() {
         if (split_result_separator_key) {
             value_free(split_result_separator_key);
         }
-        split_result_separator_key = value_create(UNSIGNED_INTEGER, split_result.separator_key);
+        split_result_separator_key = value_create(UNSIGNED_INTEGER, separator_offset);
         int result = 0;
         value_compare(split_result_separator_key, separator_key[i], &result);
         ASSERT(result == 0);
 
-        split_result.separator_key += get_data_type_size(UNSIGNED_INTEGER);
+        separator_offset += get_data_type_size(UNSIGNED_INTEGER);
     }
     ASSERT(split_result.separator_size == key_view.key_size);
     ASSERT(split_result.right_page == right_page.page->page_num);
@@ -1165,6 +1166,7 @@ static int test_root_node_split() {
         separator_offset += get_data_type_size(index_spec.column_types[i]);
     }
 
+    uint32_t right_page_num = split_result.right_page;
     status = btree_root_split(test_btree.btree, &btree_page, &split_result, &index_spec);
     ASSERT(status == BTREE_SUCCESS);
     ASSERT(pager->pages[4]);
@@ -1175,7 +1177,7 @@ static int test_root_node_split() {
 
     uint32_t child_pointer = get_cell_child_pointer(new_root_page.data, get_cell_offset(get_cell_pointer(new_root_page.data, 0))); 
     ASSERT(child_pointer == btree_page.page->page_num);
-    ASSERT(new_root_page.type_specific_data.rightmost_child_pointer == split_result.right_page);
+    ASSERT(new_root_page.type_specific_data.rightmost_child_pointer == right_page_num);
 
     ASSERT(test_btree.btree->root_page_num == new_root_page.page->page_num);
     ASSERT(btree_page.is_root == false);
@@ -1184,7 +1186,7 @@ static int test_root_node_split() {
     ASSERT(new_root_page.parent_pointer == UINT32_MAX);
 
     BTreePage right_page = {0};
-    btree_page_attach(&right_page, pager->pages[split_result.right_page]);
+    btree_page_attach(&right_page, pager->pages[right_page_num]);
     btree_page_load(&right_page);
     ASSERT(right_page.is_root == false);
     ASSERT(right_page.parent_pointer == new_root_page.page->page_num);
@@ -1201,7 +1203,7 @@ static int test_root_node_split() {
             value_free(new_root_keys[i]);
         }
         new_root_keys[i] = value_create(index_spec.column_types[i], key_view.key);
-
+        
         int result = 0;
         ASSERT(value_compare(new_root_keys[i], separator_key[i], &result));
         ASSERT(result == 0);
