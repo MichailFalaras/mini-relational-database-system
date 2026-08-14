@@ -9,6 +9,7 @@
 #include "../../include/serialize.h"
 #include "../../include/index.h"
 #include "../../include/row.h"
+#include "../../include/schema.h"
 
 /* Pass address of BTreePage in Stack and then logically connect it with a page. */
 void btree_page_attach(BTreePage *btree_page, Page *page) {
@@ -916,4 +917,67 @@ void btree_range_result_free(BTreeRangeResult *result) {
     result->cells = NULL;
     result->count = 0;
     result->capacity = 0;
+}
+
+
+/* ---------- BTreeIndexSpec Helpers ---------- */
+
+// Initialize BTreeIndexSpec fields
+bool btree_index_spec_init(const Index *index, Schema *schema, BTreeIndexSpec *spec) {
+    // Validate inputs
+    if (!index || !index->key ||
+        !index->key->column_index_array ||
+        index->key->num_columns == 0) {
+        return false;
+    }
+
+    if (!schema || !schema->columns || !spec) {
+        return false;
+    }
+
+    memset(spec, 0, sizeof(BTreeIndexSpec));
+
+    spec->schema = schema;
+    spec->index_key = index->key;
+    
+    spec->column_types = calloc(index->key->num_columns, sizeof(DataType));
+    if (!spec->column_types) {
+        return false;
+    }
+
+    uint32_t key_size = 0;
+    for (uint32_t i = 0; i < index->key->num_columns; i++) {
+        uint32_t column_index = index->key->column_index_array[i];
+
+        if (column_index >= schema->num_columns || !schema->columns[column_index]) {
+            free(spec->column_types);
+            spec->column_types = NULL;
+            return false;
+        }
+
+        DataType type = schema->columns[column_index]->type;
+        spec->column_types[i] = type;
+
+        key_size += get_data_type_size(type);
+
+        if (key_size > UINT16_MAX) {
+            free(spec->column_types);
+            spec->column_types = NULL;
+            return false;
+        }
+    }
+
+    spec->key_size = key_size;
+    spec->is_unique = index->is_unique;
+
+    return true;
+}
+
+void index_btree_spec_free(BTreeIndexSpec *spec) {
+    if (!spec) {
+        return;
+    }
+
+    free(spec->column_types);
+    spec->column_types = NULL;
 }

@@ -204,6 +204,10 @@ extern BTreeStatus btree_traverse_reachable_pages(BTree *btree, BTreePageCollect
 extern BTreeStatus btree_find_exact_key(BTree *btree, BTreeSearchKey *search_key, BTreeSearchResult *search_result,
     BTreeCellContents *cell_contents);
 
+// Find B+ Tree Key 
+extern BTreeStatus btree_find_prefix_keys(BTree *btree, BTreeIndexSpec *index, BTreeSearchKey *prefix_key,
+    BTreeRangeResult *result);
+
 // Find B+ Tree Range of Keys
 extern BTreeStatus btree_find_range_keys(BTree *btree, BTreeIndexSpec *index, BTreeSearchKey *start_search_key, 
     bool includes_start, BTreeSearchKey *end_search_key, bool includes_end, BTreeRangeResult *result);
