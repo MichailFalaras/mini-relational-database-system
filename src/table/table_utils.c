@@ -54,6 +54,11 @@ bool table_row_result_init(TableRowResult *result) {
         return false;
     }
 
+    // Result must be in an empty, uninitialized state
+    if (result->rows ||result->count != 0 || result->capacity != 0) {
+        return false;
+    }
+
     result->rows = (Row **) calloc(TABLE_RANGE_INITIAL_CAPACITY, sizeof(Row *));
     
     if (!result->rows) {

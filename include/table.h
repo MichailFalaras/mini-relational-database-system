@@ -45,6 +45,7 @@ typedef enum table_lookup_status {
     TABLE_LOOKUP_ERROR
 } TableLookupStatus;
 
+#define TABLE_RANGE_INITIAL_CAPACITY 16
 typedef struct row_result {
     Row **rows;
     uint32_t count;
@@ -103,8 +104,8 @@ extern TableLookupStatus table_find_prefix(const Table *table, Pager *pager, Val
 
 // Range key search
 extern TableLookupStatus table_find_range(const Table *table, Pager *pager, 
-    Value **start_values, const uint32_t *start_columns_ids, uint32_t start_num_columns, 
-    bool include_start, Value **end_values, const uint32_t *end_columns_ids, uint32_t end_num_columns, 
+    Value **start_key_values, const uint32_t *start_column_ids, uint32_t start_num_columns, 
+    bool include_start, Value **end_key_values, const uint32_t *end_column_ids, uint32_t end_num_columns, 
     bool include_end, TableRowResult *result);
 
 // Full table scan
