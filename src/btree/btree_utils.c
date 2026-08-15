@@ -334,7 +334,7 @@ BTreeStatus swap_internal_rightmost_child_pointer(BTreePage *btree_page, BTreeCe
     return BTREE_SUCCESS;
 }
 
-/* Remove garbage cell pointers and contents by creating a new page and transfering
+/* (Type-agnostic) Remove garbage cell pointers and contents by creating a new page and transfering
  * ONLY the valid metadata there. */
 BTreeStatus btree_compact_page(Pager *pager, BTreePage *btree_page, BTreeIndexSpec *index) {
     if (!pager || !btree_page || !btree_page->page 
@@ -352,7 +352,13 @@ BTreeStatus btree_compact_page(Pager *pager, BTreePage *btree_page, BTreeIndexSp
     /* Create BTreePage and initialize with the same header metadata. */
     BTreePage replacement = {0};
     btree_page_attach(&replacement, new_page);
-    btree_page_init_empty_leaf(&replacement);
+    if (btree_page->type == BTREE_LEAF_NODE) {
+        btree_page_init_empty_leaf(&replacement);
+        replacement.type_specific_data.siblings.next_leaf_pointer = btree_page->type_specific_data.siblings.previous_leaf_pointer;
+        replacement.type_specific_data.siblings.next_leaf_pointer = btree_page->type_specific_data.siblings.next_leaf_pointer;
+    } else {
+        btree_page_init_internal(&replacement, btree_page->type_specific_data.rightmost_child_pointer);
+    }
     btree_page_sync(pager, &replacement);
 
     /* Transfer all cell pointers and contents onto new page. */
@@ -393,7 +399,7 @@ BTreeStatus connect_sibling_leaf_nodes(Pager *pager, BTreePage *btree_page1, BTr
             return BTREE_ERROR;
         }
 
-        set_leaf_next(left_page->page_data, btree_page2->page->page_num);
+        set_leaf_next(left_page->page_data, btree_page1->page->page_num);
     }
 
     if (btree_page1->type_specific_data.siblings.next_leaf_pointer != UINT32_MAX) {
@@ -412,7 +418,6 @@ BTreeStatus connect_sibling_leaf_nodes(Pager *pager, BTreePage *btree_page1, BTr
 
     return BTREE_SUCCESS;
 }
-
 
 /* Find the leftmost leaf page */
 BTreeStatus btree_find_leftmost_page(BTree *btree, BTreeIndexSpec *index, Page **res_page) {
@@ -475,7 +480,6 @@ BTreeStatus btree_find_leftmost_page(BTree *btree, BTreeIndexSpec *index, Page *
     
 }
 
-
 /* BTreeCellView RAM Component Interface for easy cell access with offset and its length.
  * DOESNT update the Page Data, just for cell viewing and accesibility. */
 BTreeStatus get_cell(BTreePage *btree_page, uint16_t cell_index, BTreeCellView *cell, BTreeIndexSpec *index) {
@@ -490,19 +494,41 @@ BTreeStatus get_cell(BTreePage *btree_page, uint16_t cell_index, BTreeCellView *
     uint16_t size = get_cell_size(cell_pointer);
     void *data = (void *) (btree_page->data + offset);
 
+
+    if (btree_page->type == BTREE_INTERNAL_NODE) {
+        cell->key.key = (uint8_t *) data + sizeof(uint32_t);
+        cell->key.key_size = index->key_size;
+        cell->key.offset = offset + sizeof(uint32_t);
+
+        cell->payload = (uint8_t *) data;
+        cell->payload_size = sizeof(uint32_t);
+    } else {
+        cell->key.key = (uint8_t *) data;
+        cell->key.key_size = index->key_size;
+        cell->key.offset = offset;
+
+        cell->payload = (uint8_t *) data + cell->key.key_size;
+        cell->payload_size = size - cell->key.key_size;
+    }
+    cell->offset = offset;
+
+
+#if 0
     /* Create BTreeKeyView struct too. */
     cell->key.key = data;
     cell->key.offset = offset;
     if (btree_page->type == BTREE_INTERNAL_NODE) {
         cell->key.key += 4;
         cell->key.offset += 4;
+
+        cell->payload = 
     }
 
     cell->key.key_size = index->key_size;
     cell->payload = cell->key.key + cell->key.key_size;
     cell->offset = offset;
     cell->payload_size = size - cell->key.key_size;
-
+#endif
     return BTREE_SUCCESS;
 }
 
@@ -571,7 +597,7 @@ BTreeStatus btree_split_cells(BTreePage *src, BTreePage *dest, BTreeIndexSpec *i
     return BTREE_SUCCESS;
 }
 
-/* Function that actually does that transferring of cell pointers and contents. */
+/* Function that actually does type-agnostic transferring of cell pointers and contents. */
 BTreeStatus btree_transfer_cells(BTreePage *src, uint16_t src_idx, BTreePage *dest, uint16_t dest_idx, BTreeIndexSpec *index) {
     if (!src || !src->page || !src->data
         || !dest || !dest->page || !dest->data
@@ -607,10 +633,10 @@ BTreeStatus btree_remove_cell(BTreePage *btree_page, uint32_t cell_pointer_index
         return BTREE_INVALID_ARGUMENTS;
     }
 
-    uint32_t cell_pointer = get_cell_pointer(btree_page->data, 0);
+    uint32_t cell_pointer = get_cell_pointer(btree_page->data, cell_pointer_index);
 
     // Close separator key gap without needing to compact whole page
-    BTreeStatus status = shift_cell_pointer(btree_page, 0, BTREE_SHIFT_DELETE);
+    BTreeStatus status = shift_cell_pointer(btree_page, cell_pointer_index, BTREE_SHIFT_DELETE);
     if (status != BTREE_SUCCESS) {
         return status;
     }
@@ -830,6 +856,63 @@ BTreeStatus btree_traverse_page_recursive(BTree *btree, uint32_t page_num, BTree
     return btree_traverse_page_recursive(btree, rightmost_child_page_num, visited_pages);
 }
 
+/* Update parent pointers of child pages right after split. */
+BTreeStatus update_parent_pointers(Pager *pager, BTreePage *btree_page, BTreeIndexSpec *index) {
+    if (!btree_page) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    Page *page = pager_get_page(pager, btree_page->type_specific_data.rightmost_child_pointer);
+    if (!page) {
+        return BTREE_ERROR;
+    }
+
+    BTreePage rightmost_child = {0};
+    BTreeStatus status = btree_page_attach_load_validate(pager, &rightmost_child, page, index);
+    if (status != BTREE_SUCCESS) {
+        return status;
+    }
+
+    rightmost_child.parent_pointer = btree_page->page->page_num;
+    btree_page_sync(pager, &rightmost_child);
+
+    for (uint32_t i = 0; i < btree_page->cell_count; i++) {
+        uint32_t cell_pointer = get_cell_pointer(btree_page->data, i);
+        uint32_t child_pointer = get_cell_child_pointer(btree_page->data, get_cell_offset(cell_pointer));
+
+        page = pager_get_page(pager, child_pointer);
+        if (!page) {
+            return BTREE_ERROR;
+        }
+
+        if (get_parent_pointer(page->page_data) == btree_page->page->page_num) {
+            continue;
+        }
+
+        BTreePage child = {0};
+        status = btree_page_attach_load_validate(pager, &child, page, index);
+        if (status != BTREE_SUCCESS) {
+            return status;
+        }
+
+        child.parent_pointer = btree_page->page->page_num;
+        btree_page_sync(pager, &child);
+    }
+
+    
+    return BTREE_SUCCESS;
+}
+
+/* Allocate memory for serialized separator key from key_view. */
+void *separator_key_alloc(BTreeKeyView *key_view) {
+    void *separator_key = malloc(key_view->key_size);
+    if (!separator_key) {
+        return NULL;
+    }
+
+    memcpy(separator_key, key_view->key, key_view->key_size);
+    return separator_key;
+}
 
 /* ---------- BTreeRangeResult Helpers ---------- */
 
@@ -851,7 +934,6 @@ BTreeStatus btree_range_result_init(BTreeRangeResult *result) {
     result->capacity = BTREE_RANGE_INITIAL_CAPACITY;
     return BTREE_SUCCESS;
 }
-
 
 BTreeStatus btree_range_result_append(BTreeRangeResult *result, BTreeCellContents *new_cell) {
     if (!result || !new_cell) {

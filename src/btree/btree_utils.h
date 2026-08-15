@@ -4,6 +4,7 @@
 #include "../../include/btree.h"
 #include "../../include/page.h"
 
+typedef struct index Index;
 typedef struct value Value;
 typedef struct page Page;
 typedef struct pager Pager;
@@ -61,6 +62,12 @@ extern bool btree_index_spec_init(const Index *index, Schema *schema, BTreeIndex
 extern void index_btree_spec_free(BTreeIndexSpec *spec);
 
 /* ---------- Miscellaneous  ---------- */
+
+/* Allocate memory for serialized separator key from key_view. */
+void *separator_key_alloc(BTreeKeyView *key_view);
+
+/* Update parent pointers of child pages right after split. */
+BTreeStatus update_parent_pointers(Pager *pager, BTreePage *right_page, BTreeIndexSpec *index);
 
 /* Get exact offset and size of key and store it in BTreeKeyView. */
 BTreeStatus get_key(BTreePage *btree_page, uint16_t cell_index, BTreeKeyView *key, BTreeIndexSpec *index);

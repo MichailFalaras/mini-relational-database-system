@@ -190,6 +190,10 @@ extern BTreeStatus btree_node_insert(Pager *pager, BTreePage *btree_page, BTreeC
  * Returns important split information in BTreeSplitResult. */
 extern BTreeStatus btree_leaf_node_split(Pager *pager, BTreePage *original_page, BTreeIndexSpec *index,
                                 BTreeSplitResult *split_result);
+/* BTree Internal Node Split. 
+ * Returns split information BTreeSplitResult. */
+BTreeStatus btree_internal_node_split(Pager *pager, BTreePage *original_page, BTreeIndexSpec *index,
+                                BTreeSplitResult *split_result);
 
 /* BTree Root Node Split.
  * Split has already happened, this just creates new root, moves separator key
