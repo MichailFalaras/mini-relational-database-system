@@ -409,7 +409,7 @@ BTreeStatus btree_internal_node_split(Pager *pager, BTreePage *original_page, BT
     btree_right_page.type_specific_data.rightmost_child_pointer = original_page->
                                                                 type_specific_data.rightmost_child_pointer;
 
-    /* Update right page's connected leaf nodes parent pointer metadata. */
+    /* Update right page's connected child nodes' parent pointer metadata. */
     status = update_parent_pointers(pager, &btree_right_page, index);
     if (status != BTREE_SUCCESS) {
         return status;

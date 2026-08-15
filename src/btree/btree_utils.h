@@ -66,7 +66,7 @@ extern void index_btree_spec_free(BTreeIndexSpec *spec);
 /* Allocate memory for serialized separator key from key_view. */
 void *separator_key_alloc(BTreeKeyView *key_view);
 
-/* Update internal node's connected leaf nodes' parent pointers right after split. */
+/* Update parent pointers of child pages right after split. */
 BTreeStatus update_parent_pointers(Pager *pager, BTreePage *right_page, BTreeIndexSpec *index);
 
 /* Get exact offset and size of key and store it in BTreeKeyView. */

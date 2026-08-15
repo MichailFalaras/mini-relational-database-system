@@ -867,9 +867,14 @@ BTreeStatus update_parent_pointers(Pager *pager, BTreePage *btree_page, BTreeInd
         return BTREE_ERROR;
     }
 
-    BTreePage leaf_node = {0};
-    btree_page_attach_load_validate(pager, &leaf_node, page, index);
-    leaf_node.parent_pointer = btree_page->page->page_num;
+    BTreePage rightmost_child = {0};
+    BTreeStatus status = btree_page_attach_load_validate(pager, &rightmost_child, page, index);
+    if (status != BTREE_SUCCESS) {
+        return status;
+    }
+
+    rightmost_child.parent_pointer = btree_page->page->page_num;
+    btree_page_sync(pager, &rightmost_child);
 
     for (uint32_t i = 0; i < btree_page->cell_count; i++) {
         uint32_t cell_pointer = get_cell_pointer(btree_page->data, i);
@@ -884,13 +889,14 @@ BTreeStatus update_parent_pointers(Pager *pager, BTreePage *btree_page, BTreeInd
             continue;
         }
 
-        BTreeStatus status = btree_page_attach_load_validate(pager, &leaf_node, page, index);
+        BTreePage child = {0};
+        status = btree_page_attach_load_validate(pager, &child, page, index);
         if (status != BTREE_SUCCESS) {
             return status;
         }
 
-        leaf_node.parent_pointer = btree_page->page->page_num;
-        btree_page_sync(pager, &leaf_node);
+        child.parent_pointer = btree_page->page->page_num;
+        btree_page_sync(pager, &child);
     }
 
     
