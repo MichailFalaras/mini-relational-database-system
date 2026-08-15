@@ -1,8 +1,9 @@
-
+#include <stdlib.h>
 #include "./table_utils.h"
 #include "../../include/table.h"
 #include "../../include/index.h"
 #include "../../include/schema.h"
+#include "../../include/row.h"
 
 // Helper that validates a table's logical index metadata
 bool table_validate_logical_index(const Table *table, const Index *index, IndexType expected_type) {
@@ -44,4 +45,79 @@ bool table_validate_logical_index(const Table *table, const Index *index, IndexT
     }
 
     return true;
+}
+
+/* ---------- TableResult helpers ---------- */
+
+bool table_row_result_init(TableRowResult *result) {
+    if (!result) {
+        return false;
+    }
+
+    result->rows = (Row **) calloc(TABLE_RANGE_INITIAL_CAPACITY, sizeof(Row *));
+    
+    if (!result->rows) {
+        result->count = 0;
+        result->capacity = 0;
+        return false;
+    } 
+
+    result->count = 0;
+    result->capacity = TABLE_RANGE_INITIAL_CAPACITY;
+    return true;
+}
+
+// On success, ownership of Row is transferred to the result structure
+// On failure, ownership remains with the caller
+bool table_row_result_append(TableRowResult *result, Row *row) {
+    if (!result || !row) {
+        return false;
+    }
+
+    if (result->count == result->capacity) {
+        uint32_t new_capacity = 
+                        result->capacity == 0
+                            ? TABLE_RANGE_INITIAL_CAPACITY
+                            : result->capacity * 2;
+
+        if (new_capacity < result->capacity) {
+            return false;
+        }
+
+        Row **result_rows = (Row **) realloc(result->rows, new_capacity * sizeof(Row *));
+
+        if (!result_rows) {
+            return false;
+        }
+
+        result->rows = result_rows;
+        result->capacity = new_capacity;
+    }
+
+    result->rows[result->count] = row;
+    result->count++;
+    
+    return true;
+}
+
+void table_row_result_free(TableRowResult *result) {
+    if (!result) {
+        return;
+    }
+
+    if (result->rows) {
+        for (uint32_t i = 0; i < result->count; i++) {
+            if (result->rows[i]) {
+                row_free(result->rows[i]);
+                result->rows[i] = NULL;
+            }
+            
+        }
+
+        free(result->rows);
+    }
+
+    result->rows = NULL;
+    result->count = 0;
+    result->capacity = 0;
 }
