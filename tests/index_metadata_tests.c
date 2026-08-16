@@ -49,12 +49,13 @@ static int test_index_metadata_create() {
     IndexKey *input_key = index_key_create(column_indexes, 3);
     ASSERT(input_key != NULL);
 
-    Index *index = index_metadata_create("New Index", PRIMARY_INDEX, input_key, 2);
+    Index *index = index_metadata_create("New Index", PRIMARY_INDEX, input_key, 2, true);
     ASSERT(index != NULL);
 
     ASSERT(strcmp(index->name, "New Index") == 0);
     ASSERT(index->type == PRIMARY_INDEX);
     ASSERT(index->root_page_num == 2);
+    ASSERT(index->is_unique);
 
     ASSERT(index->key != NULL);
     ASSERT(index->key != input_key);
@@ -76,7 +77,7 @@ static int test_index_metadata_create_null_name() {
     IndexKey *key = index_key_create(column_indexes, 3);
     ASSERT(key != NULL);
 
-    ASSERT(!index_metadata_create(NULL, PRIMARY_INDEX, key, 2));
+    ASSERT(!index_metadata_create(NULL, PRIMARY_INDEX, key, 2, true));
 
     index_key_free(key);
     return 0;
@@ -87,7 +88,7 @@ static int test_index_metadata_create_empty_name() {
     IndexKey *key = index_key_create(column_indexes, 3);
     ASSERT(key != NULL);
 
-    ASSERT(!index_metadata_create("", PRIMARY_INDEX, key, 2));
+    ASSERT(!index_metadata_create("", PRIMARY_INDEX, key, 2, true));
 
     index_key_free(key);
     return 0;
@@ -98,14 +99,14 @@ static int test_index_metadata_create_invalid_index_type() {
     IndexKey *key = index_key_create(column_indexes, 3);
     ASSERT(key != NULL);
 
-    ASSERT(!index_metadata_create("New Index", (IndexType)9999, key, 2));
+    ASSERT(!index_metadata_create("New Index", (IndexType)9999, key, 2, false));
 
     index_key_free(key);
     return 0;
 }
 
 static int test_index_metadata_create_null_index_key() {
-    ASSERT(!index_metadata_create("New Index", SECONDARY_INDEX, NULL, 2));
+    ASSERT(!index_metadata_create("New Index", SECONDARY_INDEX, NULL, 2, false));
 
     return 0;
 }
@@ -113,7 +114,7 @@ static int test_index_metadata_create_null_index_key() {
 static int test_index_metadata_create_null_column_array() {
     IndexKey invalid_key = {.column_index_array = NULL, .num_columns = 3 };
 
-    ASSERT(!index_metadata_create("New Index", SECONDARY_INDEX, &invalid_key, 2));
+    ASSERT(!index_metadata_create("New Index", SECONDARY_INDEX, &invalid_key, 2, false));
 
     return 0;
 }
@@ -122,7 +123,7 @@ static int test_index_metadata_create_zero_key_columns() {
     uint32_t column_indexes[] = {2, 3, 5};
     IndexKey invalid_key = {.column_index_array = column_indexes, .num_columns = 0};
 
-    ASSERT(!index_metadata_create("New Index", SECONDARY_INDEX, &invalid_key, 2));
+    ASSERT(!index_metadata_create("New Index", SECONDARY_INDEX, &invalid_key, 2, false));
 
     return 0;
 }
@@ -133,10 +134,10 @@ static int test_index_metadata_create_invalid_pages() {
     ASSERT(key != NULL);
 
     // Page 0: superblock.
-    ASSERT(!index_metadata_create("New Index", PRIMARY_INDEX, key, SUPERBLOCK_PAGE_NUM));
+    ASSERT(!index_metadata_create("New Index", PRIMARY_INDEX, key, SUPERBLOCK_PAGE_NUM, true));
 
     // Page 1: system catalog.
-    ASSERT(!index_metadata_create("New Index", SECONDARY_INDEX, key, SYSTEM_CATALOG_PAGE_NUM));
+    ASSERT(!index_metadata_create("New Index", SECONDARY_INDEX, key, SYSTEM_CATALOG_PAGE_NUM, false));
 
     index_key_free(key);
     return 0;
@@ -152,7 +153,7 @@ static int test_index_metadata_create_name_exceeds_limit() {
     IndexKey *key = index_key_create(column_indexes, 3);
     ASSERT(key != NULL);
 
-    ASSERT(!index_metadata_create(index_name, SECONDARY_INDEX, key, 2));
+    ASSERT(!index_metadata_create(index_name, SECONDARY_INDEX, key, 2, false));
 
     index_key_free(key);
     return 0;
@@ -168,7 +169,7 @@ static int test_index_metadata_create_max_valid_name() {
     IndexKey *key = index_key_create(column_indexes, 3);
     ASSERT(key != NULL);
 
-    Index *index = index_metadata_create(index_name, SECONDARY_INDEX, key, 2);
+    Index *index = index_metadata_create(index_name, SECONDARY_INDEX, key, 2, false);
     ASSERT(index != NULL);
     ASSERT(strcmp(index->name, index_name) == 0);
 
@@ -184,7 +185,7 @@ static int test_index_key_has_column() {
     IndexKey *key = index_key_create(column_indexes, 3);
     ASSERT(key != NULL);
 
-    Index *index = index_metadata_create("New Index", PRIMARY_INDEX,key, 2);
+    Index *index = index_metadata_create("New Index", PRIMARY_INDEX, key, 2, true);
     ASSERT(index != NULL);
 
     ASSERT(index_key_has_column(index, 2));
@@ -235,7 +236,7 @@ static int test_index_key_matches_key() {
     IndexKey *key = index_key_create(column_indexes, 3);
     ASSERT(key != NULL);
 
-    Index *index = index_metadata_create("New Index", PRIMARY_INDEX, key, 2);
+    Index *index = index_metadata_create("New Index", PRIMARY_INDEX, key, 2, true);
     ASSERT(index != NULL);
 
     uint32_t exact_match[] = {2, 3, 5};
@@ -267,7 +268,7 @@ static int test_index_key_matches_key_null_column_ids() {
     IndexKey *key = index_key_create(column_indexes, 3);
     ASSERT(key != NULL);
 
-    Index *index = index_metadata_create("New Index", PRIMARY_INDEX, key, 2);
+    Index *index = index_metadata_create("New Index", PRIMARY_INDEX, key, 2, true);
     ASSERT(index != NULL);
 
     ASSERT(!index_key_matches_key(index, NULL, 3));
@@ -282,7 +283,7 @@ static int test_index_key_matches_key_zero_num_columns() {
     IndexKey *key = index_key_create(column_indexes, 3);
     ASSERT(key != NULL);
 
-    Index *index = index_metadata_create("New Index", PRIMARY_INDEX, key, 2);
+    Index *index = index_metadata_create("New Index", PRIMARY_INDEX, key, 2, true);
     ASSERT(index != NULL);
 
     uint32_t column_ids[] = {2, 3, 5};
@@ -301,7 +302,7 @@ static int test_index_key_matches_prefix() {
     IndexKey *key = index_key_create(column_indexes, 3);
     ASSERT(key != NULL);
 
-    Index *index = index_metadata_create("New Index", PRIMARY_INDEX,key, 2);
+    Index *index = index_metadata_create("New Index", PRIMARY_INDEX,key, 2, true);
     ASSERT(index != NULL);
 
     uint32_t prefix_one[] = {2};
@@ -339,7 +340,7 @@ static int test_index_key_matches_prefix_null_column_ids() {
     IndexKey *key = index_key_create(column_indexes, 3);
     ASSERT(key != NULL);
 
-    Index *index = index_metadata_create("New Index", PRIMARY_INDEX, key, 2);
+    Index *index = index_metadata_create("New Index", PRIMARY_INDEX, key, 2, true);
     ASSERT(index != NULL);
 
     ASSERT(!index_key_matches_prefix(index, NULL, 2));
@@ -354,7 +355,7 @@ static int test_index_key_matches_prefix_zero_num_columns() {
     IndexKey *key = index_key_create(column_indexes, 3);
     ASSERT(key != NULL);
 
-    Index *index = index_metadata_create("New Index", PRIMARY_INDEX, key, 2);
+    Index *index = index_metadata_create("New Index", PRIMARY_INDEX, key, 2, true);
     ASSERT(index != NULL);
 
     uint32_t column_ids[] = {2, 3, 5};

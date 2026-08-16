@@ -83,14 +83,15 @@ static IndexKey *create_test_index_key_from(const uint32_t *columns, uint32_t co
     return index_key_create(columns, count);
 }
 
-static Index *create_test_index_with(Pager *pager, const char *name, IndexType type, const uint32_t *columns, uint32_t column_count) {
+static Index *create_test_index_with(Pager *pager, const char *name, IndexType type, 
+    const uint32_t *columns, uint32_t column_count, bool is_unique) {
     
     IndexKey *key = index_key_create(columns, column_count);
     if (!key) {
         return NULL;
     }
 
-    Index *index = index_create(name, type, key, pager);
+    Index *index = index_create(name, type, key, pager, is_unique);
     
     index_key_free(key);
 
@@ -241,12 +242,13 @@ static int test_index_create_success() {
     key = create_test_index_key_from(columns, 1);
     ASSERT(key);
 
-    index = index_create("test_index", PRIMARY_INDEX, key, test_pager.pager);
+    index = index_create("test_index", PRIMARY_INDEX, key, test_pager.pager, true);
     ASSERT(index);
 
     ASSERT(strcmp(index->name, "test_index") == 0);
 
     ASSERT(index->type == PRIMARY_INDEX);
+    ASSERT(index->is_unique);
 
     ASSERT(index->key &&
            index->key->column_index_array &&
@@ -281,7 +283,7 @@ static int test_index_create_initialize_empty_root() {
     key = create_test_index_key_from(columns, 1);
     ASSERT(key);
 
-    index = index_create("test_index", PRIMARY_INDEX, key, test_pager.pager);
+    index = index_create("test_index", PRIMARY_INDEX, key, test_pager.pager, true);
     ASSERT(index);
 
     Page *root = pager_get_page(test_pager.pager, index->root_page_num);
@@ -313,15 +315,15 @@ static int test_index_create_invalid_arguments() {
 
     // Testing various error cases
     // If any error cases somehow turns up to be successfully, the test fails
-    ASSERT(!(index_create(NULL, PRIMARY_INDEX, key, test_pager.pager)));
+    ASSERT(!(index_create(NULL, PRIMARY_INDEX, key, test_pager.pager, true)));
 
-    ASSERT(!(index_create("", PRIMARY_INDEX, key, test_pager.pager)));
+    ASSERT(!(index_create("", PRIMARY_INDEX, key, test_pager.pager, true)));
 
-    ASSERT(!(index_create("test_index", (IndexType) 99, key, test_pager.pager)));
+    ASSERT(!(index_create("test_index", (IndexType) 99, key, test_pager.pager, false)));
 
-    ASSERT(!(index_create("test_index", PRIMARY_INDEX, NULL, test_pager.pager)));
+    ASSERT(!(index_create("test_index", PRIMARY_INDEX, NULL, test_pager.pager, true)));
 
-    ASSERT(!(index_create("test_index", PRIMARY_INDEX, key, NULL)));
+    ASSERT(!(index_create("test_index", PRIMARY_INDEX, key, NULL, true)));
 
     result = 0;
 
@@ -352,7 +354,7 @@ static int test_index_create_reuses_released_pages() {
 
     ASSERT(pager_release_page(test_pager.pager, released_page_num));
 
-    index = index_create("test_index", PRIMARY_INDEX, key, test_pager.pager);
+    index = index_create("test_index", PRIMARY_INDEX, key, test_pager.pager, true);
     ASSERT(index);
 
     // Creating the index should use the released page 0
@@ -381,7 +383,7 @@ static int test_index_truncate_empty_tree() {
 
     ASSERT(create_test_pager(&test_pager));
 
-    index = create_test_index_with(test_pager.pager, "test_index", PRIMARY_INDEX, columns, 1);
+    index = create_test_index_with(test_pager.pager, "test_index", PRIMARY_INDEX, columns, 1, true);
     ASSERT(index);
 
     original_root_page_num = index->root_page_num;
@@ -416,7 +418,7 @@ static int test_index_truncate_multi_page_tree() {
 
     ASSERT(create_test_pager(&test_pager));
 
-    index = create_test_index_with(test_pager.pager, "test_index", PRIMARY_INDEX, columns, 1);
+    index = create_test_index_with(test_pager.pager, "test_index", PRIMARY_INDEX, columns, 1, true);
     ASSERT(index);
 
     original_root_page_num = index->root_page_num;
@@ -469,7 +471,7 @@ static int test_index_truncate_preserves_metadata() {
 
     ASSERT(create_test_pager(&test_pager));
 
-    index = create_test_index_with(test_pager.pager, "test_index", SECONDARY_INDEX, columns, 2);
+    index = create_test_index_with(test_pager.pager, "test_index", SECONDARY_INDEX, columns, 2, false);
     ASSERT(index);
 
     original_root_page_num = index->root_page_num;
@@ -505,7 +507,7 @@ static int test_index_truncate_invalid_arguments() {
 
     ASSERT(create_test_pager(&test_pager));
 
-    index = create_test_index_with(test_pager.pager, "test_index", SECONDARY_INDEX, columns, 2);
+    index = create_test_index_with(test_pager.pager, "test_index", SECONDARY_INDEX, columns, 2, false);
     ASSERT(index);
 
     // If error cases somehow succeed, the test fails
@@ -536,7 +538,7 @@ static int test_index_drop_single_page_tree() {
 
     ASSERT(create_test_pager(&test_pager));
 
-    index = create_test_index_with(test_pager.pager, "test_index", PRIMARY_INDEX, columns, 1);
+    index = create_test_index_with(test_pager.pager, "test_index", PRIMARY_INDEX, columns, 1, true);
     ASSERT(index);
 
     root_page_num = index->root_page_num;
@@ -571,7 +573,7 @@ static int test_index_drop_multi_page_tree() {
 
     ASSERT(create_test_pager(&test_pager));
 
-    index = create_test_index_with(test_pager.pager, "test_index", PRIMARY_INDEX, columns, 1);
+    index = create_test_index_with(test_pager.pager, "test_index", PRIMARY_INDEX, columns, 1, true);
     ASSERT(index);
 
     ASSERT(build_test_btree(index, test_pager.pager, &test_btree));
@@ -606,7 +608,7 @@ static int test_index_drop_invalid_arguments(void) {
 
     ASSERT(create_test_pager(&test_pager));
 
-    index = create_test_index_with(test_pager.pager, "test_index", PRIMARY_INDEX, columns, 1);
+    index = create_test_index_with(test_pager.pager, "test_index", PRIMARY_INDEX, columns, 1, true);
     ASSERT(index);
 
     // If any error case somehow succeeds, the test fails
