@@ -10,6 +10,7 @@
 #include "../../include/index.h"
 #include "../index/index_utils.h"
 #include "../../include/pager.h"
+#include "../../include/row.h"
 
 
 /* Creation of logical Table struct */
@@ -111,7 +112,8 @@ Table *table_metadata_create(const char *table_name, const Schema *schema) {
                     constraint->constraint_name,
                     PRIMARY_INDEX,
                     key,
-                    INVALID_ROOT_PAGE
+                    INVALID_ROOT_PAGE,
+                    true
                 );
 
                 // Index key is deep-copied. Free the old copy 
@@ -149,7 +151,8 @@ Table *table_metadata_create(const char *table_name, const Schema *schema) {
                     constraint->constraint_name,
                     SECONDARY_INDEX,
                     key,
-                    INVALID_ROOT_PAGE
+                    INVALID_ROOT_PAGE,
+                    true
                 );
 
                 // Index key is deep-copied. Free the old copy 
@@ -482,7 +485,8 @@ bool table_alter_modify_col(Table *table, const Database *db, const char *old_co
 }
 
 /* Create Index for a Table */
-bool table_create_index(Table *table, const char *index_name, IndexType type, const IndexKey *key, Pager *pager) {
+bool table_create_index(Table *table, const char *index_name, IndexType type, const IndexKey *key, 
+    Pager *pager, bool is_unique) {
     // Validate inputs
     if (!table || !table->table_schema) {
         printf("table_create_index: Input table is NULL.\n");
@@ -542,6 +546,11 @@ bool table_create_index(Table *table, const char *index_name, IndexType type, co
         return false;
     }
 
+    if (type == PRIMARY_INDEX && !is_unique) {
+        printf("table_create_index: Primary index must be unique.\n");
+        return false;
+    }
+
     // Checking if the table is at full capacity of secondary indexes
     if (type == SECONDARY_INDEX && table->total_secondary_indexes >= MAX_INDEXES) {
         printf("table_create_index: Full capacity of secondary Indexes.\n");
@@ -565,7 +574,8 @@ bool table_create_index(Table *table, const char *index_name, IndexType type, co
         }
     }
 
-    Index *index = index_create(index_name, type, key, pager);
+
+    Index *index = index_create(index_name, type, key, pager, is_unique);
     if (!index) {
         printf("table_create_index: The table's index could not be created.\n");
         return false;
@@ -851,7 +861,8 @@ bool table_materialize(Table *table, Pager *pager) {
             table->primary_index->name, 
             table->primary_index->type, 
             table->primary_index->key, 
-            pager
+            pager,
+            table->primary_index->is_unique
         );
 
         if (!created_primary_index) {
@@ -868,7 +879,8 @@ bool table_materialize(Table *table, Pager *pager) {
             index_metadata->name,
             index_metadata->type,
             index_metadata->key,
-            pager
+            pager,
+            index_metadata->is_unique
         );
 
         if (!created_secondary_indexes[i]) {
@@ -1023,4 +1035,668 @@ bool table_drop(Table *table, Pager *pager) {
     table_free(table);
 
     return true;
+}
+
+
+// Exact key search
+TableLookupStatus table_find_exact(const Table *table, Pager *pager, Value **key_values,
+    const uint32_t *column_ids, uint32_t num_columns, TableRowResult *result) {
+
+    // Validate inputs
+    if (!table || 
+        !table->table_schema ||
+        !table->secondary_indexes || 
+        table->is_deleted || 
+        !table->is_materialized) {
+        printf("table_find_exact: Invalid input Table.\n");
+        return TABLE_LOOKUP_INVALID_ARGUMENTS;
+    }
+
+    if (table->total_secondary_indexes > MAX_INDEXES) {
+        printf("table_find_exact: Invalid secondary-index count.\n");
+        return TABLE_LOOKUP_INVALID_ARGUMENTS;
+    }
+
+    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+        printf("table_find_exact: Invalid input Pager.\n");
+        return TABLE_LOOKUP_INVALID_ARGUMENTS;
+    }
+    
+    if (!key_values || !column_ids || num_columns == 0) {
+        printf("table_find_exact: Invalid search key inputs.\n");
+        return TABLE_LOOKUP_INVALID_ARGUMENTS;
+    }
+
+    if (!result || result->rows || result->count != 0 || result->capacity != 0) {
+        printf("table_find_exact: Invalid results structure.\n");
+        return TABLE_LOOKUP_INVALID_ARGUMENTS;
+    }
+
+    Index *target_index = NULL;
+
+    // Find the target index that's going to be used by the exact search.
+    // Firstly, check if the search key matches the primary key
+    if (table->primary_index) {
+        Index *primary_index = table->primary_index;
+
+        if (!primary_index->key ||
+            !primary_index->key->column_index_array ||
+            primary_index->key->num_columns == 0) {
+
+            printf("table_find_exact: Invalid primary index.\n");
+            return TABLE_LOOKUP_INVALID_ARGUMENTS;
+        }
+
+
+        if (index_key_matches_key(primary_index, column_ids, num_columns)) {
+            target_index = primary_index;
+        }
+    }
+
+    // If the primary key doesn't match, check if any secondary keys match
+    if (!target_index && table->total_secondary_indexes > 0) {
+
+        for (uint32_t i = 0; i < table->total_secondary_indexes; i++) {
+            Index *current_index = table->secondary_indexes[i];
+
+            if (!current_index ||
+                !current_index->key ||
+                !current_index->key->column_index_array ||
+                current_index->key->num_columns == 0) {
+
+                printf("table_find_exact: Invalid secondary index at position %u.\n", i);
+                return TABLE_LOOKUP_INVALID_ARGUMENTS;
+            }
+
+            if (index_key_matches_key(current_index, column_ids, num_columns)) {
+                target_index = current_index;
+                break;
+            }
+        }
+    }
+
+    if (!target_index) {
+        printf("table_find_exact: No usable indexes were found for the input search key.\n");
+        return TABLE_LOOKUP_NO_USABLE_INDEX;
+    }
+    
+    IndexRangeResult lookup_result = {0};
+
+    IndexLookupStatus status = index_find_exact(
+        target_index, pager, table->table_schema,
+        key_values, column_ids, num_columns,
+        &lookup_result
+    );
+
+    // Verifying lookup status
+    switch (status) {
+        case INDEX_LOOKUP_SUCCESS:
+            break;
+
+        case INDEX_LOOKUP_NOT_FOUND:
+            index_range_result_free(&lookup_result);
+            return TABLE_LOOKUP_NOT_FOUND;
+        
+        case INDEX_LOOKUP_INVALID_ARGUMENTS:
+            index_range_result_free(&lookup_result);
+            return TABLE_LOOKUP_INVALID_ARGUMENTS;
+        
+        case INDEX_LOOKUP_ERROR:
+            index_range_result_free(&lookup_result);
+            return TABLE_LOOKUP_ERROR;
+        
+        default: 
+            index_range_result_free(&lookup_result);
+            return TABLE_LOOKUP_ERROR;
+    }
+
+    if (lookup_result.count == 0) {
+        index_range_result_free(&lookup_result);
+        return TABLE_LOOKUP_NOT_FOUND;
+    }
+
+    // Initializing TableRowResult structure
+    if (!table_row_result_init(result)) {
+        index_range_result_free(&lookup_result);
+        return TABLE_LOOKUP_ERROR;
+    }
+
+    // Transfer result rows to TableRowResult, excluding deleted rows
+    for (uint32_t i = 0; i < lookup_result.count; i++) {
+        Row *current_row = lookup_result.entries[i].row;
+        
+        if (!current_row) {
+            printf("table_find_exact: Current row is NULL.\n");
+
+            index_range_result_free(&lookup_result);
+            table_row_result_free(result);
+            return TABLE_LOOKUP_ERROR;
+        }
+        
+        // Skip deleted row
+        if (current_row->is_deleted) {
+            continue;
+        }
+        
+        // Append current row to the results structure
+        if (!table_row_result_append(result, current_row)) {
+            printf("table_find_exact: Row couldn't be appended to TableRowResult structure.\n");
+
+            index_range_result_free(&lookup_result);
+            table_row_result_free(result);
+            return TABLE_LOOKUP_ERROR;
+        }
+
+        // Ownership moved to TableRowResult
+        lookup_result.entries[i].row = NULL;
+    }
+
+    index_range_result_free(&lookup_result);
+
+    // Case where all the matching results rows are tombstoned
+    if (result->count == 0) {
+        table_row_result_free(result);
+        return TABLE_LOOKUP_NOT_FOUND;
+    }
+
+    return TABLE_LOOKUP_SUCCESS;
+}
+
+
+// Prefix key search
+TableLookupStatus table_find_prefix(const Table *table, Pager *pager, Value **key_values,
+    const uint32_t *column_ids, uint32_t num_columns, TableRowResult *result) {
+
+    // Validate inputs
+    if (!table || 
+        !table->table_schema ||
+        !table->secondary_indexes || 
+        table->is_deleted || 
+        !table->is_materialized) {
+        printf("table_find_prefix: Invalid input Table.\n");
+        return TABLE_LOOKUP_INVALID_ARGUMENTS;
+    }
+
+    if (table->total_secondary_indexes > MAX_INDEXES) {
+        printf("table_find_prefix: Invalid secondary-index count.\n");
+        return TABLE_LOOKUP_INVALID_ARGUMENTS;
+    }
+
+    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+        printf("table_find_prefix: Invalid input Pager.\n");
+        return TABLE_LOOKUP_INVALID_ARGUMENTS;
+    }
+    
+    if (!key_values || !column_ids || num_columns == 0) {
+        printf("table_find_prefix: Invalid search key inputs.\n");
+        return TABLE_LOOKUP_INVALID_ARGUMENTS;
+    }
+
+    if (!result || result->rows || result->count != 0 || result->capacity != 0) {
+        printf("table_find_prefix: Invalid results structure.\n");
+        return TABLE_LOOKUP_INVALID_ARGUMENTS;
+    }
+
+    Index *target_index = NULL;
+
+    // Find the target index that's going to be used by the exact search.
+    // Firstly, check if the search key matches the primary key
+    if (table->primary_index) {
+        Index *primary_index = table->primary_index;
+
+        if (!primary_index->key ||
+            !primary_index->key->column_index_array ||
+            primary_index->key->num_columns == 0) {
+
+            printf("table_find_prefix: Invalid primary index.\n");
+            return TABLE_LOOKUP_INVALID_ARGUMENTS;
+        }
+
+
+        if (index_key_matches_prefix(primary_index, column_ids, num_columns)) {
+            target_index = primary_index;
+        }
+    }
+
+    // If the primary key doesn't match, check if any secondary keys match
+    if (!target_index && table->total_secondary_indexes > 0) {
+
+        for (uint32_t i = 0; i < table->total_secondary_indexes; i++) {
+            Index *current_index = table->secondary_indexes[i];
+
+            if (!current_index ||
+                !current_index->key ||
+                !current_index->key->column_index_array ||
+                current_index->key->num_columns == 0) {
+
+                printf("table_find_prefix: Invalid secondary index at position %u.\n", i);
+                return TABLE_LOOKUP_INVALID_ARGUMENTS;
+            }
+
+            if (index_key_matches_prefix(current_index, column_ids, num_columns)) {
+                target_index = current_index;
+                break;
+            }
+        }
+    }
+
+    if (!target_index) {
+        printf("table_find_prefix: No usable indexes were found for the input search key.\n");
+        return TABLE_LOOKUP_NO_USABLE_INDEX;
+    }
+    
+    IndexRangeResult lookup_result = {0};
+
+    IndexLookupStatus status = index_find_prefix(
+        target_index, pager, table->table_schema,
+        key_values, column_ids, num_columns,
+        &lookup_result
+    );
+
+    // Verifying lookup status
+    switch (status) {
+        case INDEX_LOOKUP_SUCCESS:
+            break;
+
+        case INDEX_LOOKUP_NOT_FOUND:
+            index_range_result_free(&lookup_result);
+            return TABLE_LOOKUP_NOT_FOUND;
+        
+        case INDEX_LOOKUP_INVALID_ARGUMENTS:
+            index_range_result_free(&lookup_result);
+            return TABLE_LOOKUP_INVALID_ARGUMENTS;
+        
+        case INDEX_LOOKUP_ERROR:
+            index_range_result_free(&lookup_result);
+            return TABLE_LOOKUP_ERROR;
+        
+        default: 
+            index_range_result_free(&lookup_result);
+            return TABLE_LOOKUP_ERROR;
+    }
+
+    if (lookup_result.count == 0) {
+        index_range_result_free(&lookup_result);
+        return TABLE_LOOKUP_NOT_FOUND;
+    }
+
+    // Initializing TableRowResult structure
+    if (!table_row_result_init(result)) {
+        index_range_result_free(&lookup_result);
+        return TABLE_LOOKUP_ERROR;
+    }
+
+    // Transfer result rows to TableRowResult, excluding deleted rows
+    for (uint32_t i = 0; i < lookup_result.count; i++) {
+        Row *current_row = lookup_result.entries[i].row;
+        
+        if (!current_row) {
+            printf("table_find_prefix: Current row is NULL.\n");
+
+            index_range_result_free(&lookup_result);
+            table_row_result_free(result);
+            return TABLE_LOOKUP_ERROR;
+        }
+        
+        // Skip deleted row
+        if (current_row->is_deleted) {
+            continue;
+        }
+        
+        // Append current row to the results structure
+        if (!table_row_result_append(result, current_row)) {
+            printf("table_find_prefix: Row couldn't be appended to TableRowResult structure.\n");
+
+            index_range_result_free(&lookup_result);
+            table_row_result_free(result);
+            return TABLE_LOOKUP_ERROR;
+        }
+
+        // Ownership moved to TableRowResult
+        lookup_result.entries[i].row = NULL;
+    }
+
+    index_range_result_free(&lookup_result);
+
+    // Case where all the matching results rows are tombstoned
+    if (result->count == 0) {
+        table_row_result_free(result);
+        return TABLE_LOOKUP_NOT_FOUND;
+    }
+
+    return TABLE_LOOKUP_SUCCESS;   
+}
+
+
+// Range key search
+TableLookupStatus table_find_range(const Table *table, Pager *pager, 
+    Value **start_key_values, const uint32_t *start_column_ids, uint32_t start_num_columns, 
+    bool include_start, Value **end_key_values, const uint32_t *end_column_ids, uint32_t end_num_columns, 
+    bool include_end, TableRowResult *result) {
+    
+    // Validate inputs
+    if (!table || 
+        !table->table_schema ||
+        !table->secondary_indexes || 
+        table->is_deleted || 
+        !table->is_materialized) {
+        printf("table_find_range: Invalid input Table.\n");
+        return TABLE_LOOKUP_INVALID_ARGUMENTS;
+    }
+
+    if (table->total_secondary_indexes > MAX_INDEXES) {
+        printf("table_find_range: Invalid secondary-index count.\n");
+        return TABLE_LOOKUP_INVALID_ARGUMENTS;
+    }
+
+    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+        printf("table_find_range: Invalid input Pager.\n");
+        return TABLE_LOOKUP_INVALID_ARGUMENTS;
+    }
+    
+    bool has_start = start_key_values != NULL || start_column_ids != NULL || start_num_columns != 0;
+    bool has_end = end_key_values != NULL || end_column_ids != NULL || end_num_columns != 0;
+
+    if (!has_start && !has_end) {
+        printf("table_find_range: At least one range bound is required.\n");
+        return TABLE_LOOKUP_INVALID_ARGUMENTS;
+    }
+
+    if (has_start && (!start_key_values || !start_column_ids || start_num_columns == 0)) {
+        printf("table_find_range: Invalid start search key inputs.\n");
+        return TABLE_LOOKUP_INVALID_ARGUMENTS;
+    }
+    
+    if (has_end && (!end_key_values || !end_column_ids || end_num_columns == 0)) {
+        printf("table_find_range: Invalid end search key inputs.\n");
+        return TABLE_LOOKUP_INVALID_ARGUMENTS;
+    }
+
+    if (has_start && has_end) {
+        if (start_num_columns != end_num_columns) {
+            printf("table_find_range: Start and end search keys have different number of columns.\n");
+            return TABLE_LOOKUP_INVALID_ARGUMENTS;
+        }
+
+        for (uint32_t i = 0; i < start_num_columns; i++) {
+            if (start_column_ids[i] != end_column_ids[i]) {
+                printf("table_find_range: Start and end search keys have column mismatch.\n");
+                return TABLE_LOOKUP_INVALID_ARGUMENTS;
+            }
+        }
+
+    }
+    if (!result || result->rows || result->count != 0 || result->capacity != 0) {
+        printf("table_find_range: Invalid results structure.\n");
+        return TABLE_LOOKUP_INVALID_ARGUMENTS;
+    }
+
+    Index *target_index = NULL;
+    
+    // Choosing the existing bound key for comparison
+    const uint32_t *search_column_ids = has_start ? start_column_ids : end_column_ids;
+    uint32_t num_columns = has_start ? start_num_columns : end_num_columns;
+
+    // Find the target index that's going to be used by the exact search.
+    // Firstly, check if the search key matches the primary key
+    if (table->primary_index) {
+        Index *primary_index = table->primary_index;
+
+        if (!primary_index->key ||
+            !primary_index->key->column_index_array ||
+            primary_index->key->num_columns == 0) {
+
+            printf("table_find_range: Invalid primary index.\n");
+            return TABLE_LOOKUP_INVALID_ARGUMENTS;
+        }
+
+        // Using prefix key check for range scan, since it also covers the exact key match
+        if (index_key_matches_prefix(primary_index, search_column_ids, num_columns)) {
+            target_index = primary_index;
+        }
+    }
+
+    // If the primary key doesn't match, check if any secondary keys match
+    if (!target_index && table->total_secondary_indexes > 0) {
+
+        for (uint32_t i = 0; i < table->total_secondary_indexes; i++) {
+            Index *current_index = table->secondary_indexes[i];
+
+            if (!current_index ||
+                !current_index->key ||
+                !current_index->key->column_index_array ||
+                current_index->key->num_columns == 0) {
+
+                printf("table_find_range: Invalid secondary index at position %u.\n", i);
+                return TABLE_LOOKUP_INVALID_ARGUMENTS;
+            }
+
+            // Using prefix key check for range scan, since it also covers the exact key match
+            if (index_key_matches_prefix(current_index, search_column_ids, num_columns)) {
+                target_index = current_index;
+                break;
+            }
+        }
+    }
+
+    if (!target_index) {
+        printf("table_find_range: No usable indexes were found for the input search key.\n");
+        return TABLE_LOOKUP_NO_USABLE_INDEX;
+    }
+    
+    IndexRangeResult lookup_result = {0};
+
+    IndexLookupStatus status = index_find_range(
+        target_index, pager, table->table_schema,
+        start_key_values, start_column_ids, start_num_columns, include_start,
+        end_key_values, end_column_ids, end_num_columns, include_end,
+        &lookup_result
+    );
+
+    // Verifying lookup status
+    switch (status) {
+        case INDEX_LOOKUP_SUCCESS:
+            break;
+
+        case INDEX_LOOKUP_NOT_FOUND:
+            index_range_result_free(&lookup_result);
+            return TABLE_LOOKUP_SUCCESS;
+        
+        case INDEX_LOOKUP_INVALID_ARGUMENTS:
+            index_range_result_free(&lookup_result);
+            return TABLE_LOOKUP_INVALID_ARGUMENTS;
+        
+        case INDEX_LOOKUP_ERROR:
+            index_range_result_free(&lookup_result);
+            return TABLE_LOOKUP_ERROR;
+        
+        default: 
+            index_range_result_free(&lookup_result);
+            return TABLE_LOOKUP_ERROR;
+    }
+
+    // An empty range scan is considered successful
+    if (lookup_result.count == 0) {
+        index_range_result_free(&lookup_result);
+
+        result->rows = NULL;
+        result->count = 0;
+        result->capacity = 0;
+
+        return TABLE_LOOKUP_SUCCESS;
+    }
+
+    // Initializing TableRowResult structure
+    if (!table_row_result_init(result)) {
+        index_range_result_free(&lookup_result);
+        return TABLE_LOOKUP_ERROR;
+    }
+
+    // Transfer result rows to TableRowResult, excluding deleted rows
+    for (uint32_t i = 0; i < lookup_result.count; i++) {
+        Row *current_row = lookup_result.entries[i].row;
+        
+        if (!current_row) {
+            printf("table_find_range: Current row is NULL.\n");
+
+            index_range_result_free(&lookup_result);
+            table_row_result_free(result);
+            return TABLE_LOOKUP_ERROR;
+        }
+        
+        // Skip deleted row
+        if (current_row->is_deleted) {
+            continue;
+        }
+        
+        // Append current row to the results structure
+        if (!table_row_result_append(result, current_row)) {
+            printf("table_find_range: Row couldn't be appended to TableRowResult structure.\n");
+
+            index_range_result_free(&lookup_result);
+            table_row_result_free(result);
+            return TABLE_LOOKUP_ERROR;
+        }
+
+        // Ownership moved to TableRowResult
+        lookup_result.entries[i].row = NULL;
+    }
+
+    index_range_result_free(&lookup_result);
+
+    // Case where all the matching results rows are tombstoned
+    if (result->count == 0) {
+        table_row_result_free(result);
+        return TABLE_LOOKUP_SUCCESS;
+    }
+
+    return TABLE_LOOKUP_SUCCESS; 
+}
+
+
+// Full table scan
+TableLookupStatus table_scan(const Table *table, Pager *pager, TableRowResult *result) {
+
+    // Validate inputs
+    if (!table || 
+        !table->table_schema ||
+        !table->secondary_indexes || 
+        table->is_deleted || 
+        !table->is_materialized) {
+        printf("table_scan: Invalid input Table.\n");
+        return TABLE_LOOKUP_INVALID_ARGUMENTS;
+    }
+
+    if (table->total_secondary_indexes > MAX_INDEXES) {
+        printf("table_scan: Invalid secondary-index count.\n");
+        return TABLE_LOOKUP_INVALID_ARGUMENTS;
+    }
+
+    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+        printf("table_scan: Invalid input Pager.\n");
+        return TABLE_LOOKUP_INVALID_ARGUMENTS;
+    }
+
+    if (!result || result->rows || result->count != 0 || result->capacity != 0) {
+        printf("table_scan: Invalid result structure.\n");
+        return TABLE_LOOKUP_INVALID_ARGUMENTS;
+    }
+
+    if (!table->primary_index) {
+        printf("table_scan: Table has no canonical primary index.\n");
+        return TABLE_LOOKUP_ERROR;
+    }
+
+    IndexRangeResult lookup_result = {0};
+
+    IndexLookupStatus status = index_scan(
+        table->primary_index,
+        pager,
+        table->table_schema,
+        &lookup_result
+    );
+
+    // Verifying lookup status
+    switch (status) {
+        case INDEX_LOOKUP_SUCCESS:
+            break;
+
+        case INDEX_LOOKUP_NOT_FOUND:
+            index_range_result_free(&lookup_result);
+
+            result->rows = NULL;
+            result->count = 0;
+            result->capacity = 0;
+
+            return TABLE_LOOKUP_SUCCESS;
+        
+        case INDEX_LOOKUP_INVALID_ARGUMENTS:
+            index_range_result_free(&lookup_result);
+            return TABLE_LOOKUP_INVALID_ARGUMENTS;
+        
+        case INDEX_LOOKUP_ERROR:
+            index_range_result_free(&lookup_result);
+            return TABLE_LOOKUP_ERROR;
+        
+        default: 
+            index_range_result_free(&lookup_result);
+            return TABLE_LOOKUP_ERROR;
+    }
+
+    // An empty range scan is considered successful
+    if (lookup_result.count == 0) {
+        index_range_result_free(&lookup_result);
+
+        result->rows = NULL;
+        result->count = 0;
+        result->capacity = 0;
+
+        return TABLE_LOOKUP_SUCCESS;
+    }
+
+    // Initializing TableRowResult structure
+    if (!table_row_result_init(result)) {
+        index_range_result_free(&lookup_result);
+        return TABLE_LOOKUP_ERROR;
+    }
+
+    // Transfer result rows to TableRowResult, excluding deleted rows
+    for (uint32_t i = 0; i < lookup_result.count; i++) {
+        Row *current_row = lookup_result.entries[i].row;
+        
+        if (!current_row) {
+            printf("table_scan: Current row is NULL.\n");
+
+            index_range_result_free(&lookup_result);
+            table_row_result_free(result);
+            return TABLE_LOOKUP_ERROR;
+        }
+        
+        // Skip deleted row
+        if (current_row->is_deleted) {
+            continue;
+        }
+        
+        // Append current row to the results structure
+        if (!table_row_result_append(result, current_row)) {
+            printf("table_scan: Row couldn't be appended to TableRowResult structure.\n");
+
+            index_range_result_free(&lookup_result);
+            table_row_result_free(result);
+            return TABLE_LOOKUP_ERROR;
+        }
+
+        // Ownership moved to TableRowResult
+        lookup_result.entries[i].row = NULL;
+    }
+
+    index_range_result_free(&lookup_result);
+
+    // Case where all the matching results rows are tombstoned
+    if (result->count == 0) {
+        table_row_result_free(result);
+        return TABLE_LOOKUP_SUCCESS;
+    }
+
+    return TABLE_LOOKUP_SUCCESS; 
 }

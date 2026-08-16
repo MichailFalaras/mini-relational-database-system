@@ -944,3 +944,18 @@ IndexLookupStatus index_find_range(const Index *index, Pager *pager, Schema *sch
     
     return INDEX_LOOKUP_SUCCESS;
 }
+
+
+// Full Index scan
+IndexLookupStatus index_scan(const Index *index, Pager *pager, Schema *schema, 
+    IndexRangeResult *result) {
+    
+    return index_find_range(
+        index, 
+        pager, 
+        schema,
+        NULL, NULL, 0, true,
+        NULL, NULL, 0, true,
+        result
+    );
+}

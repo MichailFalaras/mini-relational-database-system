@@ -35,6 +35,25 @@ typedef struct table {
     uint32_t row_count;
 } Table;
 
+
+/* Search-related structures */
+typedef enum table_lookup_status {
+    TABLE_LOOKUP_SUCCESS,
+    TABLE_LOOKUP_NOT_FOUND,
+    TABLE_LOOKUP_INVALID_ARGUMENTS,
+    TABLE_LOOKUP_NO_USABLE_INDEX,
+    TABLE_LOOKUP_ERROR
+} TableLookupStatus;
+
+#define TABLE_RANGE_INITIAL_CAPACITY 16
+typedef struct row_result {
+    Row **rows;
+    uint32_t count;
+    uint32_t capacity;
+} TableRowResult;
+
+
+
 /* Table metadata operations */
 extern Table *table_metadata_create(const char *table_name, const Schema *schema);
 
@@ -70,8 +89,26 @@ extern bool table_drop(Table *table, Pager *pager);
 
 extern bool table_truncate(Table *table, Pager *pager);
 
-extern bool table_create_index(Table *table, const char *index_name, IndexType type, const IndexKey *key, Pager *page);
+extern bool table_create_index(Table *table, const char *index_name, IndexType type, 
+    const IndexKey *key, Pager *page, bool is_unique);
 
 extern bool table_drop_index(Table *table, const char *index_name, Pager *page);
+
+// Exact key search
+extern TableLookupStatus table_find_exact(const Table *table, Pager *pager, Value **key_values,
+    const uint32_t *column_ids, uint32_t num_columns, TableRowResult *result);
+
+// Prefix key search
+extern TableLookupStatus table_find_prefix(const Table *table, Pager *pager, Value **key_values,
+    const uint32_t *column_ids, uint32_t num_columns, TableRowResult *result);
+
+// Range key search
+extern TableLookupStatus table_find_range(const Table *table, Pager *pager, 
+    Value **start_key_values, const uint32_t *start_column_ids, uint32_t start_num_columns, 
+    bool include_start, Value **end_key_values, const uint32_t *end_column_ids, uint32_t end_num_columns, 
+    bool include_end, TableRowResult *result);
+
+// Full table scan
+extern TableLookupStatus table_scan(const Table *table, Pager *pager, TableRowResult *result);
 
 #endif

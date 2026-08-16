@@ -42,6 +42,11 @@ bool index_range_result_init(IndexRangeResult *result) {
         return false;
     }
 
+    // Result must be in an empty, uninitialized state
+    if (result->entries || result->count != 0 || result->capacity != 0) {
+        return false;
+    }
+
     result->entries = (IndexEntry *) calloc(INDEX_RANGE_INITIAL_CAPACITY, sizeof(IndexEntry));
     
     if (!result->entries) {

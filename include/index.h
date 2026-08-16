@@ -90,10 +90,19 @@ extern bool index_drop(Index *index, Pager *pager);
 extern IndexLookupStatus index_find_exact(const Index *index, Pager *pager, Schema *schema,
     Value **key_values, const uint32_t *column_ids, uint32_t num_columns, IndexRangeResult *result);
 
-//Find range of index entries that match the range query bounds
+// Find prefix-key matching entries
+extern IndexLookupStatus index_find_prefix(const Index *index, Pager *pager, Schema *schema, 
+    Value **prefix_key_values, const uint32_t *prefix_column_ids, uint32_t prefix_num_columns,
+    IndexRangeResult *result);
+
+// Find range of index entries that match the range query bounds
 extern IndexLookupStatus index_find_range(const Index *index, Pager *pager, Schema *schema,
     Value **start_key_values, const uint32_t *start_column_ids, uint32_t start_num_columns, bool include_start, 
     Value **end_key_values, const uint32_t *end_column_ids, uint32_t end_num_columns, bool include_end, 
     IndexRangeResult *result);
+
+// Full Index scan
+extern IndexLookupStatus index_scan(const Index *index, Pager *pager, Schema *schema, IndexRangeResult *result);
+
 
 #endif
