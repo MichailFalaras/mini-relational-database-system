@@ -13,6 +13,7 @@
 typedef struct pager Pager;
 typedef struct schema Schema;
 typedef enum data_types DataType;
+typedef struct row Row;
 
 /* Index type. */
 typedef enum index_type {
