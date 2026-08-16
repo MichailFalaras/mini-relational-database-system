@@ -32,7 +32,7 @@ void btree_page_load(BTreePage *btree_page);
 
 /* Sync BTreePage header metadata with page's page_data in order to be
  * written in the disk later. */
-void btree_page_sync(Pager *pager, BTreePage *btree_page);
+bool btree_page_sync(Pager *pager, BTreePage *btree_page);
 
 /* Wrapper function that initializes and validates BTreePage fully. */
 BTreeStatus btree_page_attach_load_validate(Pager *pager, BTreePage *btree_page, Page *page, BTreeIndexSpec *index);
@@ -64,7 +64,7 @@ extern void index_btree_spec_free(BTreeIndexSpec *spec);
 /* ---------- Miscellaneous  ---------- */
 
 /* Allocate memory for serialized separator key from key_view. */
-void *separator_key_alloc(BTreeKeyView *key_view);
+void *serialized_key_alloc(BTreeKeyView *key_view);
 
 /* Update parent pointers of child pages right after split. */
 BTreeStatus update_parent_pointers(Pager *pager, BTreePage *right_page, BTreeIndexSpec *index);
@@ -77,6 +77,10 @@ BTreeStatus btree_compare(Value **values, BTreeKeyView *btree_key, BTreeSearchKe
 
 /* Check if there's enough space to store a Cell and its Cell Pointer. */
 BTreeStatus btree_page_has_enough_space(BTreePage *btree_page, BTreeCellContents *cell_contents);
+
+/* Check if less than 25% of usable space is being taken up.
+ * Roots are allowed to contain less than underflow. */
+BTreeStatus btree_check_underflow(BTreePage *btree_page);
 
 /* Check if leaf is duplicate by comparing the keys. */
 BTreeStatus check_leaf_duplicate(BTreePage *btree_page, BTreeSearchKey *search_key,

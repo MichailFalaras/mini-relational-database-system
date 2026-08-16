@@ -94,10 +94,16 @@ BTreeStatus btree_lower_bound_search(BTreePage *btree_page, BTreeSearchKey *sear
         /* Temporary version of comparison between keys. */
         /* Allocate as much needed space to extract values from the key. */
         values = (Value **) calloc(search_key->num_target_keys, sizeof(Value *));
+        if (!values) {
+            return BTREE_ERROR;
+        }
+
         uint8_t *key_offset = (uint8_t *) btree_key.key;
         for (uint16_t i = 0; i < search_key->num_target_keys; i++) {
             values[i] = value_create(search_key->index->column_types[i], key_offset);
-
+            if (!values[i]) {
+                value_free_array(values, search_key->num_target_keys);
+            }
             key_offset += get_data_type_size(search_key->index->column_types[i]);
         }
 
@@ -163,6 +169,7 @@ BTreeStatus btree_root_to_leaf(BTree *btree, BTreeSearchKey *search_key, BTreeSe
     BTreePage btree_page = {0};
     BTreeStatus status = btree_page_attach_load_validate(btree->pager, &btree_page, page, search_key->index);
     if (status != BTREE_SUCCESS) {
+        pager_evict_page(btree->pager, page->page_num);
         return status;
     }
 
@@ -262,9 +269,13 @@ BTreeStatus btree_node_insert(Pager *pager, BTreePage *btree_page, BTreeCellCont
 
     /* First check if what's going to be inserted is a duplicate,
      * then check if there's enough space, update split flag and return BTREE_NEEDS_SPLIT. */
-    if (!btree_page_has_enough_space(btree_page, cell_contents)) {
-        split_result->split = true;
-        return BTREE_NEEDS_SPLIT;
+    status = btree_page_has_enough_space(btree_page, cell_contents);
+    if (status != BTREE_SUCCESS) {
+        if (status == BTREE_NEEDS_SPLIT) {
+            split_result->split = true;
+        }
+
+        return status;
     }
 
     /* INTERNAL NODE SPECIFIC CHECK: 
@@ -286,8 +297,88 @@ BTreeStatus btree_node_insert(Pager *pager, BTreePage *btree_page, BTreeCellCont
     }
 
     // Sync everything that happened in RAM with the page's page_data. 
-    btree_page_sync(pager, btree_page);
+    if (!btree_page_sync(pager, btree_page)){
+        return BTREE_ERROR;
+    }
     return BTREE_SUCCESS;
+}
+
+BTreeStatus btree_node_delete(Pager *pager, BTreePage *btree_page, BTreeSearchKey *search_key, BTreeDeletionResult *deletion_result) {
+    if (!pager || !btree_page || !btree_page->page
+        || !btree_page->data || !search_key 
+        || !search_key->index || !deletion_result) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+    BTreeStatus deletion_status = BTREE_SUCCESS;
+
+    /* Initialize deletion result metadata. */
+    deletion_result->underflow = false; // To change only if there's underflow
+    deletion_result->page_num = btree_page->page->page_num;
+    deletion_result->deleted = false;
+    deletion_result->first_key_changed = false;
+    deletion_result->new_first_key = NULL;
+
+    /* Find index of exact cell we want to delete.*/
+    BTreeSearchResult search_result = {0};
+    BTreeStatus status = btree_lower_bound_search(btree_page, search_key, &search_result);
+    if (status != BTREE_SUCCESS) {
+        fprintf(stderr, "btree_node_delete: Something went wrong.\n");
+        return status;
+    }
+    
+    /* We want an exact match of keys in order to delete. */
+    if (search_result.exact_match == false) {
+        return BTREE_NOT_FOUND;
+    }
+
+    /* Acquire serialized first key before removing the cell. */
+    BTreeKeyView key_view = {0};
+    void *first_key = NULL;
+    if (search_result.result_index == 0 && btree_page->cell_count > 1) {
+        /* index 1 because we are choosing the key that is GOING TO BE the first key
+        * after deletion of the first one. */
+        status = get_key(btree_page, 1, &key_view, search_key->index);
+        if (status != BTREE_SUCCESS) {
+            return status;
+        }
+        
+        first_key = serialized_key_alloc(&key_view);
+        if (!first_key) {
+            return BTREE_ERROR;
+        }
+    }
+
+    /* Remove specific cell. */
+    status = btree_remove_cell(btree_page, search_result.result_index);
+    if (status != BTREE_SUCCESS) {
+        free(first_key);
+        return status;
+    }
+
+    /* Check if page is underflowing. */
+    status = btree_check_underflow(btree_page);
+    if (status == BTREE_NODE_UNDERFLOW) {
+        deletion_result->underflow = true;
+        deletion_status = BTREE_NODE_UNDERFLOW;
+
+    } else if (status != BTREE_SUCCESS) {
+        free(first_key);
+        return status;
+    }
+
+    if (!btree_page_sync(pager, btree_page)) {
+        free(first_key);
+        return BTREE_ERROR;
+    }
+
+    /* Pass serialized first key only if everything went ok. */
+    if (search_result.result_index == 0) {
+        deletion_result->first_key_changed = true;
+        deletion_result->new_first_key = first_key;
+    }
+    deletion_result->deleted = true;
+
+    return deletion_status;
 }
 
 /* BTree Leaf Node Split.
@@ -312,6 +403,7 @@ BTreeStatus btree_leaf_node_split(Pager *pager, BTreePage *original_page, BTreeI
     /* Get it in cache. */
     Page *new_page = pager_get_page(pager, new_page_num);
     if (!new_page) {
+        pager_release_page(pager, new_page->page_num);
         return BTREE_ERROR;
     }
 
@@ -320,44 +412,57 @@ BTreeStatus btree_leaf_node_split(Pager *pager, BTreePage *original_page, BTreeI
     btree_page_attach(&btree_right_page, new_page);
     BTreeStatus status = btree_page_init_empty_leaf(&btree_right_page);
     if (status != BTREE_SUCCESS) {
+        pager_release_page(pager, new_page->page_num);
         return status;
     }
     
     /* Split original page's cells in half and transfers them to the right child of the split. */
     status = btree_split_cells(original_page, &btree_right_page, index);
     if (status != BTREE_SUCCESS) {
+        pager_release_page(pager, new_page->page_num);
         return status;
     }
 
-    btree_page_sync(pager, original_page);
-    btree_page_sync(pager, &btree_right_page);
+    if (!btree_page_sync(pager, original_page) 
+        || !btree_page_sync(pager, &btree_right_page)) {
+        pager_release_page(pager, new_page->page_num);
+        return BTREE_ERROR;
+    }
 
     /* Compact original page's cells to remove any garbage value left behind. */
     status = btree_compact_page(pager, original_page, index);
     if (status != BTREE_SUCCESS) {
+        pager_release_page(pager, new_page->page_num);
         return status;
     }
 
     /* Connect original page's sibling pointers with the right child. */
     status = connect_sibling_leaf_nodes(pager, original_page, &btree_right_page);
     if (status != BTREE_SUCCESS) {
+        pager_release_page(pager, new_page->page_num);
         return BTREE_ERROR;
     }
     
     // Sync with pages' page_data
-    btree_page_sync(pager, original_page);
-    btree_page_sync(pager, &btree_right_page);
+    if (!btree_page_sync(pager, original_page) 
+        || !btree_page_sync(pager, &btree_right_page)) {
+        pager_release_page(pager, new_page->page_num);
+        return BTREE_ERROR;
+    }
 
     /* Extract separator key from right child and store it in BTreeSplitResult. */
     BTreeKeyView key_view = {0};
     status = get_key(&btree_right_page, 0, &key_view, index);
     if (status != BTREE_SUCCESS) {
+        pager_release_page(pager, new_page->page_num);
         return BTREE_ERROR;
     }
 
     split_result->right_page = btree_right_page.page->page_num;
-    split_result->separator_key = separator_key_alloc(&key_view);
+    split_result->separator_key = serialized_key_alloc(&key_view);
     if (!split_result->separator_key) {
+        pager_release_page(pager, new_page->page_num);
+        split_result->right_page = UINT32_MAX;
         return BTREE_ERROR;
     }
     split_result->separator_size = key_view.key_size;
@@ -381,12 +486,14 @@ BTreeStatus btree_internal_node_split(Pager *pager, BTreePage *original_page, BT
     /* Logically allocate new page. */
     uint32_t new_page_num = 0;
     if (!pager_allocate_page(pager, &new_page_num)) {
+        pager_release_page(pager, new_page_num);
         return BTREE_ERROR;
     }
 
     /* Get it in cache. */
     Page *new_page = pager_get_page(pager, new_page_num);
     if (!new_page) {
+        pager_release_page(pager, new_page_num);
         return BTREE_ERROR;
     }
 
@@ -395,12 +502,14 @@ BTreeStatus btree_internal_node_split(Pager *pager, BTreePage *original_page, BT
     btree_page_attach(&btree_right_page, new_page);
     BTreeStatus status = btree_page_init_internal(&btree_right_page, UINT32_MAX);
     if (status != BTREE_SUCCESS) {
+        pager_release_page(pager, new_page_num);
         return status;
     }
     
     /* Split original page's cells in half and transfers them to the right child of the split. */
     status = btree_split_cells(original_page, &btree_right_page, index);
     if (status != BTREE_SUCCESS) {
+        pager_release_page(pager, new_page_num);
         return status;
     }
 
@@ -412,25 +521,34 @@ BTreeStatus btree_internal_node_split(Pager *pager, BTreePage *original_page, BT
     /* Update right page's connected child nodes' parent pointer metadata. */
     status = update_parent_pointers(pager, &btree_right_page, index);
     if (status != BTREE_SUCCESS) {
+        pager_release_page(pager, new_page_num);
         return status;
     }
 
-    btree_page_sync(pager, original_page);
-    btree_page_sync(pager, &btree_right_page);
+    if (!btree_page_sync(pager, original_page) 
+        || !btree_page_sync(pager, &btree_right_page)) {
+        pager_release_page(pager, new_page_num);
+        return BTREE_ERROR;
+    }
 
     /* Compact original page's cells to remove any garbage value left behind. */
     status = btree_compact_page(pager, original_page, index);
     if (status != BTREE_SUCCESS) {
+        pager_release_page(pager, new_page_num);
         return status;
     }
     
     // Sync with pages' page_data
-    btree_page_sync(pager, original_page);
-    btree_page_sync(pager, &btree_right_page);
+    if (!btree_page_sync(pager, original_page) 
+        || !btree_page_sync(pager, &btree_right_page)) {
+        pager_release_page(pager, new_page_num);
+        return BTREE_ERROR;
+    }
 
     BTreeCellView cell_view = {0};
     status = get_cell(&btree_right_page, 0, &cell_view, index);
     if (status != BTREE_SUCCESS) {
+        pager_release_page(pager, new_page_num);
         return status;
     }
     /* Get separator cell's child pointer and pass it to the rightmost child pointer of
@@ -438,12 +556,17 @@ BTreeStatus btree_internal_node_split(Pager *pager, BTreePage *original_page, BT
     memcpy(&(original_page->type_specific_data.rightmost_child_pointer), cell_view.payload, sizeof(uint32_t));
     status = update_parent_pointers(pager, original_page, index);
     if (status != BTREE_SUCCESS) {
+        pager_release_page(pager, new_page_num);
         return status;
     }
-    btree_page_sync(pager, original_page);
+    if (!btree_page_sync(pager, original_page)) {
+        pager_release_page(pager, new_page_num);
+        return BTREE_ERROR;
+    }
 
-    split_result->separator_key = separator_key_alloc(&cell_view.key);
+    split_result->separator_key = serialized_key_alloc(&cell_view.key);
     if (!split_result->separator_key) {
+        pager_release_page(pager, new_page_num);
         return BTREE_ERROR;
     }
     
@@ -451,14 +574,21 @@ BTreeStatus btree_internal_node_split(Pager *pager, BTreePage *original_page, BT
     if (status != BTREE_SUCCESS) {
         free(split_result->separator_key);
         split_result->separator_key = NULL;
+        pager_release_page(pager, new_page_num);
         return status;
+    }
+
+    if (!btree_page_sync(pager, &btree_right_page)) {
+        free(split_result->separator_key);
+        split_result->separator_key = NULL;
+        pager_release_page(pager, new_page_num);
+        return BTREE_ERROR;
     }
 
     split_result->right_page = btree_right_page.page->page_num;
     split_result->separator_size = cell_view.key.key_size;
     split_result->split = true;
 
-    btree_page_sync(pager, &btree_right_page);
     return BTREE_SUCCESS;
 }
 
@@ -474,6 +604,7 @@ BTreeStatus btree_root_split(BTree *btree, BTreePage *btree_old_root, BTreeSplit
     /* Allocate new root page. */
     uint32_t new_root_page_num = 0;
     if (!pager_allocate_page(btree->pager, &new_root_page_num)) {
+        pager_release_page(btree->pager, new_root_page_num);
         return BTREE_ERROR;
     }
 
@@ -481,6 +612,7 @@ BTreeStatus btree_root_split(BTree *btree, BTreePage *btree_old_root, BTreeSplit
     Page *new_root = pager_get_page(btree->pager, new_root_page_num);
     Page *right_child = pager_get_page(btree->pager, split_result->right_page);
     if (!new_root || !right_child) {
+        pager_release_page(btree->pager, new_root_page_num);
         return BTREE_ERROR;
     }
 
@@ -490,15 +622,20 @@ BTreeStatus btree_root_split(BTree *btree, BTreePage *btree_old_root, BTreeSplit
     btree_page_attach(&btree_new_root, new_root);
     BTreeStatus status = btree_page_init_internal(&btree_new_root, UINT32_MAX);
     if (status != BTREE_SUCCESS) {
+        pager_release_page(btree->pager, new_root_page_num);
         return status;
     }
-    btree_page_sync(btree->pager, &btree_new_root);
+    if (!btree_page_sync(btree->pager, &btree_new_root)) {
+        pager_release_page(btree->pager, new_root_page_num);
+        return BTREE_ERROR;
+    }
     btree_new_root.type_specific_data.rightmost_child_pointer = btree_old_root->page->page_num;
 
     // Create right child page
     BTreePage btree_right_child = {0};
     status = btree_page_attach_load_validate(btree->pager, &btree_right_child, right_child, index);
     if (status != BTREE_SUCCESS) {
+        pager_release_page(btree->pager, new_root_page_num);
         return status;
     }
 
@@ -509,6 +646,7 @@ BTreeStatus btree_root_split(BTree *btree, BTreePage *btree_old_root, BTreeSplit
     cell.keys = (Value **) calloc(cell.num_keys, sizeof(Value *));
     if (!cell.keys) {
         page_free(new_root);
+        pager_release_page(btree->pager, new_root_page_num);
         return BTREE_ERROR;
     }
 
@@ -517,7 +655,7 @@ BTreeStatus btree_root_split(BTree *btree, BTreePage *btree_old_root, BTreeSplit
         cell.keys[i] = value_create(index->column_types[i], (void *) offset);
         if (!cell.keys[i]) {
             value_free_array(cell.keys, cell.num_keys);
-            page_free(new_root);
+            pager_release_page(btree->pager, new_root_page_num);
             return BTREE_ERROR;
         }
 
@@ -532,7 +670,7 @@ BTreeStatus btree_root_split(BTree *btree, BTreePage *btree_old_root, BTreeSplit
     status = btree_node_insert(btree->pager, &btree_new_root, &cell, split_result, index);
     if (status != BTREE_SUCCESS) {
         value_free_array(cell.keys, cell.num_keys);
-        page_free(new_root);
+        pager_release_page(btree->pager, new_root_page_num);
         return status;
     }
 
@@ -553,9 +691,13 @@ BTreeStatus btree_root_split(BTree *btree, BTreePage *btree_old_root, BTreeSplit
     btree_right_child.parent_pointer = btree_new_root.page->page_num;
 
     // Sync with pages' page_data.
-    btree_page_sync(btree->pager, btree_old_root);
-    btree_page_sync(btree->pager, &btree_new_root);
-    btree_page_sync(btree->pager, &btree_right_child);
+    if (!btree_page_sync(btree->pager, btree_old_root)
+        || !btree_page_sync(btree->pager, &btree_new_root)
+        || !btree_page_sync(btree->pager, &btree_right_child)) {
+        value_free_array(cell.keys, cell.num_keys);
+        pager_release_page(btree->pager, new_root_page_num);
+        return BTREE_ERROR;
+    }
 
     value_free_array(cell.keys, cell.num_keys);
     free(split_result->separator_key);
@@ -779,6 +921,7 @@ BTreeStatus btree_find_range_keys(BTree *btree, BTreeIndexSpec *index, BTreeSear
         // and the first cell contents entry there
         status = btree_find_leftmost_page(btree, index, &starting_page);
         if (status != BTREE_SUCCESS) {
+            btree_range_result_free(result);
             return status;
         }
 

@@ -49,6 +49,7 @@ typedef enum btree_status {
     BTREE_FREE_PAGE,
     BTREE_NEEDS_SPLIT,
     BTREE_DUPLICATE_KEY,
+    BTREE_NODE_UNDERFLOW,
     BTREE_SUCCESS,
     BTREE_NOT_FOUND
 } BTreeStatus;
@@ -70,7 +71,7 @@ typedef struct btree_search_result {
     uint16_t result_index;
 } BTreeSearchResult;
 
-/* BTree Split Result after failed insertion. */
+/* BTree Split Result after insertion. */
 typedef struct btree_split_result {
     bool split;
     uint32_t right_page;
@@ -78,6 +79,7 @@ typedef struct btree_split_result {
     void *separator_key;
 } BTreeSplitResult;
 
+/* Direct access to cell keys with pointers and offset. */
 typedef struct btree_key_view {
     void *key;
     uint16_t offset;
@@ -163,6 +165,14 @@ typedef struct btree_range_result {
     uint32_t capacity;
 } BTreeRangeResult;
 
+/* BTree Deletion Result after deletion. */
+typedef struct btree_deletion_result {
+    bool underflow;
+    uint32_t page_num;
+    bool deleted;
+    bool first_key_changed;
+    void *new_first_key;
+} BTreeDeletionResult;
 
 /* Initialize btree_page as an Empty Leaf Node. */
 extern BTreeStatus btree_page_init_empty_leaf(BTreePage *btree_page);
