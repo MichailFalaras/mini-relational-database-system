@@ -283,7 +283,7 @@ BTreeStatus btree_node_insert(Pager *pager, BTreePage *btree_page, BTreeCellCont
      * then it means its the rightmost child pointer.
      * We swap the rightmost child pointer with the payload's child pointer. */
     if (btree_page->type == BTREE_INTERNAL_NODE && search_result.result_index == btree_page->cell_count) {
-       status = swap_internal_rightmost_child_pointer(btree_page, cell_contents);
+        status = swap_internal_rightmost_child_pointer(btree_page, cell_contents);
         if (status != BTREE_SUCCESS) {
             return status;
         }

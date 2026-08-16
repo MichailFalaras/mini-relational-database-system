@@ -610,6 +610,13 @@ BTreeStatus insert_cell(Pager *pager, BTreePage *btree_page, BTreeIndexSpec *ind
     /* Update metadata. */
     btree_page->free_space_offset = offset;
 
+    if (btree_page->type == BTREE_INTERNAL_NODE) {
+        status = update_parent_pointers(pager, btree_page, index);
+        if (status != BTREE_SUCCESS) {
+            return status;
+        }
+    }
+
     if (!page_mark_dirty(btree_page->page) 
         || !page_touch(pager, btree_page->page)) {
         return BTREE_ERROR;
