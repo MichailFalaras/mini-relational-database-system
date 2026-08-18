@@ -68,10 +68,10 @@ extern void index_btree_spec_free(BTreeIndexSpec *spec);
 /* ---------- Miscellaneous  ---------- */
 
 /* Serialized key to Value array conversion. */
-Value **serialized_key_to_values(void *separator_key, BTreeIndexSpec *index);
+Value **serialized_key_to_values(void *separator_key, uint32_t num_keys, BTreeIndexSpec *index);
 
 /* Value array to serialized key stored in heap. */
-void *values_to_serialized_key(Value **key_vals, BTreeIndexSpec *index);
+void *values_to_serialized_key(Value **key_vals, uint32_t num_keys, BTreeIndexSpec *index);
 
 /* Result BTreeSplitResult metadata. */
 void split_result_reset(BTreeSplitResult *split_result);
@@ -94,10 +94,6 @@ BTreeStatus btree_page_has_enough_space(BTreePage *btree_page, BTreeCellContents
 /* Check if less than 25% of usable space is being taken up.
  * Roots are allowed to contain less than underflow. */
 BTreeStatus btree_check_underflow(BTreePage *btree_page);
-
-/* Check if leaf is duplicate by comparing the keys. */
-BTreeStatus check_leaf_duplicate(BTreePage *btree_page, BTreeSearchKey *search_key,
-    BTreeSearchResult *search_result, bool *duplicate);
 
 /* Inserting into an internal node and the binary search's returned
  * index is equal to the page's cell count then:

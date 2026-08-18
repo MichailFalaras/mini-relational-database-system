@@ -308,47 +308,6 @@ BTreeStatus btree_check_underflow(BTreePage *btree_page) {
     return BTREE_SUCCESS;
 }
 
-/* (NOT USED ANYWHERE, just extra helper func) Check if leaf is duplicate by comparing the keys. */
-BTreeStatus check_leaf_duplicate(BTreePage *btree_page, BTreeSearchKey *search_key,
-     BTreeSearchResult *search_result, bool *duplicate) {
-    if (!btree_page || !btree_page->page || !btree_page->data
-        || !search_key || !search_result || !duplicate) {
-        return BTREE_INVALID_ARGUMENTS;
-    }
-    *duplicate = false;
-
-    /* Get BTreeKeyView pointer to where key begins. */
-    BTreeKeyView key = {0};
-    BTreeStatus status = get_key(btree_page, search_result->result_index, &key, search_key->index);
-    if (status != BTREE_SUCCESS) {
-        return status;
-    }
-
-    /* And reconstruct array of values from that BTreeKeyView pointer. */
-    Value **values = NULL;
-    void *key_offset = key.key;
-    for (uint32_t i = 0; i < search_key->num_target_keys; i++) {
-        values[i] = value_create(search_key->index->column_types[i], key_offset);
-
-        key_offset += get_data_type_size(search_key->index->column_types[i]);
-    }
-
-    /* Then compare them. */
-    int result;
-    status = btree_compare(values, &key, search_key, &result);
-    if (status != BTREE_SUCCESS) {
-        return status;
-    }
-
-    /* If they are the same, its a duplicate. */
-    if (result == 0) {
-        *duplicate = true;
-        fprintf(stderr, "btree_leaf_node_insert: Duplicate key found.\n");
-    }
-
-    value_free_array(values, search_key->num_target_keys);
-    return true;
-}
 
 /* Inserting into an internal node and the binary search's returned
  * index is equal to the page's cell count then:
@@ -918,7 +877,7 @@ BTreeStatus btree_traverse_page_recursive(BTree *btree, uint32_t page_num, BTree
 /* Update parent pointers of child pages & root status right after split. */
 BTreeStatus update_children_parent_metadata(Pager *pager, BTreePage *btree_page, BTreeIndexSpec *index) {
     if (!pager || !btree_page || !btree_page->page 
-        || !btree_page->data || index) {
+        || !btree_page->data || !index) {
         return BTREE_INVALID_ARGUMENTS;
     }
 
@@ -1003,7 +962,7 @@ void split_result_reset(BTreeSplitResult *split_result) {
 }
 
 /* Serialized key to Value array conversion. */
-Value **serialized_key_to_values(void *separator_key, BTreeIndexSpec *index) {
+Value **serialized_key_to_values(void *separator_key, uint32_t num_keys, BTreeIndexSpec *index) {
     if (!separator_key || !index) {
         return NULL;
     }
@@ -1014,7 +973,7 @@ Value **serialized_key_to_values(void *separator_key, BTreeIndexSpec *index) {
     }
         
     uint8_t *key_offset = (uint8_t *) separator_key;
-    for (uint32_t i = 0; i < index->index_key->num_columns; i++) {
+    for (uint32_t i = 0; i < num_keys; i++) {
         key_vals[i] = value_create(index->column_types[i], key_offset);
         if (!key_vals[i]) {
             value_free_array(key_vals, index->index_key->num_columns);
@@ -1028,7 +987,7 @@ Value **serialized_key_to_values(void *separator_key, BTreeIndexSpec *index) {
 }
 
 /* Value array to serialized key stored in heap. */
-void *values_to_serialized_key(Value **key_vals, BTreeIndexSpec *index) {
+void *values_to_serialized_key(Value **key_vals, uint32_t num_keys, BTreeIndexSpec *index) {
     if (!key_vals || !index) {
         return NULL;
     }
@@ -1039,7 +998,7 @@ void *values_to_serialized_key(Value **key_vals, BTreeIndexSpec *index) {
     }
 
     uint8_t *offset = (uint8_t *) serialized_key;
-    for (uint32_t i = 0; i < index->index_key->num_columns; i++) {
+    for (uint32_t i = 0; i < num_keys; i++) {
         if (!serialize_value_data(key_vals[i], offset)) {
             free(serialized_key);
             return NULL;
@@ -1059,7 +1018,7 @@ BTreeStatus build_internal_separator_cell(BTreeCellContents *cell_contents, BTre
 
     cell_contents->type = BTREE_INTERNAL_NODE;
     cell_contents->num_keys = index->index_key->num_columns;
-    cell_contents->keys = serialized_key_to_values(split_result->separator_key, index);
+    cell_contents->keys = serialized_key_to_values(split_result->separator_key, cell_contents->num_keys, index);
     if (!cell_contents->keys) {
         return BTREE_ERROR;
     }
@@ -1097,7 +1056,7 @@ BTreeStatus prepare_propagated_separator_cell(BTreePage *insertion_page, BTreeCe
     BTreeSearchKey search_key = {0};
     search_key.index = index;
     search_key.num_target_keys = index->index_key->num_columns;
-    search_key.target_key = values_to_serialized_key(cell_contents->keys, index);
+    search_key.target_key = values_to_serialized_key(cell_contents->keys, search_key.num_target_keys, index);
     if (!search_key.target_key) {
         return BTREE_ERROR;
     }
@@ -1143,7 +1102,7 @@ BTreeStatus choose_split_insertion_page(Pager *pager, Page **insertion_page, BTr
     }
 
     /* Create Values of new separator key. */
-    Value **new_separator_key = serialized_key_to_values(split_result->separator_key, index);
+    Value **new_separator_key = serialized_key_to_values(split_result->separator_key, index->index_key->num_columns, index);
     if (!new_separator_key) {
         return BTREE_ERROR;
     }
@@ -1159,7 +1118,6 @@ BTreeStatus choose_split_insertion_page(Pager *pager, Page **insertion_page, BTr
     uint32_t chosen_page_num = (result == -1) ? split_result->left_page : split_result->right_page;
     *insertion_page = pager_get_page(pager, chosen_page_num);
     if (!(*insertion_page)) {
-        value_free_array(new_separator_key, index->index_key->num_columns);
         return BTREE_ERROR;
     }
 

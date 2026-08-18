@@ -64,7 +64,7 @@ BTreeStatus btree_binary_search(BTreePage *btree_page, BTreeSearchKey *search_ke
 
     /* If there are no cells in the page, return index 0 as insertion position. */
     if (btree_page->cell_count == 0) {
-        fprintf(stderr, "btree_lower_bound_search: Empty node.\n");
+        fprintf(stderr, "btree_binary_search: Empty node.\n");
         search_result->result_index = 0;
 
         return BTREE_SUCCESS;
@@ -93,34 +93,15 @@ BTreeStatus btree_binary_search(BTreePage *btree_page, BTreeSearchKey *search_ke
 
         /* Temporary version of comparison between keys. */
         /* Allocate as much needed space to extract values from the key. */
-        cell_key_vals = (Value **) calloc(search_key->num_target_keys, sizeof(Value *));
+        cell_key_vals = serialized_key_to_values(btree_key.key, search_key->num_target_keys, search_key->index);
         if (!cell_key_vals) {
             return BTREE_ERROR;
         }
 
-        target_key_vals = (Value **) calloc(search_key->num_target_keys, sizeof(Value *));
+        target_key_vals = serialized_key_to_values(search_key->target_key, search_key->num_target_keys, search_key->index);
         if (!target_key_vals) {
             value_free_array(cell_key_vals, search_key->num_target_keys);
             return BTREE_ERROR;
-        }
-
-        uint8_t *cell_key_vals_offset = (uint8_t *) btree_key.key;
-        uint8_t *target_key_offset = (uint8_t *) search_key->target_key;
-        for (uint16_t i = 0; i < search_key->num_target_keys; i++) {
-            cell_key_vals[i] = value_create(search_key->index->column_types[i], cell_key_vals_offset);
-            if (!cell_key_vals) {
-                value_free_array(cell_key_vals, search_key->num_target_keys);
-                value_free_array(target_key_vals, search_key->num_target_keys);
-            }
-
-            target_key_vals[i] = value_create(search_key->index->column_types[i], target_key_offset);
-            if (!target_key_vals[i]) {
-                value_free_array(cell_key_vals, search_key->num_target_keys);
-                value_free_array(target_key_vals, search_key->num_target_keys);
-            }
-
-            cell_key_vals_offset += get_data_type_size(search_key->index->column_types[i]);
-            target_key_offset += get_data_type_size(search_key->index->column_types[i]);
         }
 
         /* Compare values. */
@@ -200,7 +181,7 @@ BTreeStatus btree_root_to_leaf(BTree *btree, BTreeSearchKey *search_key, BTreeSe
     while (btree_page.type != BTREE_LEAF_NODE) {
 
         /* Lower bound binary search to traverse throughout internal nodes. */
-        status = btree_lower_bound_search(&btree_page, search_key, search_result, BTREE_UPPER_BOUND);
+        status = btree_binary_search(&btree_page, search_key, search_result, BTREE_UPPER_BOUND);
         if (status != BTREE_SUCCESS) {
             pager_evict_page(btree->pager, page->page_num);
             return status;
@@ -238,7 +219,7 @@ BTreeStatus btree_root_to_leaf(BTree *btree, BTreeSearchKey *search_key, BTreeSe
 
     /* One last lower bound binary search to find correct cell pointer index
      * within the leaf node. */
-    status = btree_lower_bound_search(&btree_page, search_key, search_result, BTREE_LOWER_BOUND);
+    status = btree_binary_search(&btree_page, search_key, search_result, BTREE_LOWER_BOUND);
     if (status != BTREE_SUCCESS) {
         pager_evict_page(btree->pager, page->page_num);
         return status;
@@ -263,17 +244,22 @@ BTreeStatus btree_node_insert(Pager *pager, BTreePage *btree_page, BTreeCellCont
     /* Initialize temporary BTreeSearchKey & BtreeSearchResult structs. */
     BTreeSearchKey search_key = {0};
     search_key.num_target_keys = cell_contents->num_keys;
-    search_key.target_key = (void *) cell_contents->keys;
+    search_key.target_key = values_to_serialized_key(cell_contents->keys, search_key.num_target_keys, index);
+    if (!search_key.target_key) {
+        return BTREE_ERROR;
+    }
     search_key.index = index;
 
     BTreeSearchResult search_result = {0};
 
     /* Find correct position to insert cell by searching with cell's keys.*/
-    BTreeStatus status = btree_lower_bound_search(btree_page, &search_key, &search_result, BTREE_LOWER_BOUND);
+    BTreeStatus status = btree_binary_search(btree_page, &search_key, &search_result, BTREE_LOWER_BOUND);
     if (status != BTREE_SUCCESS) {
         fprintf(stderr, "btree_leaf_node_insert: Something went wrong.\n");
+        free(search_key.target_key);
         return status;
     }
+    free(search_key.target_key);
     
     /* LEAF NODE SPECIFIC CHECK:
      * If at least one column is PRIMARY_KEY or UNIQUE (Composite Index)
@@ -343,7 +329,7 @@ BTreeStatus btree_node_delete(Pager *pager, BTreePage *btree_page, BTreeSearchKe
 
     /* Find index of exact cell we want to delete.*/
     BTreeSearchResult search_result = {0};
-    BTreeStatus status = btree_lower_bound_search(btree_page, search_key, &search_result, BTREE_LOWER_BOUND);
+    BTreeStatus status = btree_binary_search(btree_page, search_key, &search_result, BTREE_LOWER_BOUND);
     if (status != BTREE_SUCCESS) {
         fprintf(stderr, "btree_node_delete: Something went wrong.\n");
         return status;
@@ -543,7 +529,7 @@ BTreeStatus btree_internal_node_split(Pager *pager, BTreePage *original_page, BT
                                                                 type_specific_data.rightmost_child_pointer;
 
     /* Update right page's connected child nodes' parent pointer metadata. */
-    status = update_parent_pointers(pager, &btree_right_page, index);
+    status = update_children_parent_metadata(pager, &btree_right_page, index);
     if (status != BTREE_SUCCESS) {
         pager_release_page(pager, new_page_num);
         return status;
@@ -578,7 +564,7 @@ BTreeStatus btree_internal_node_split(Pager *pager, BTreePage *original_page, BT
     /* Get separator cell's child pointer and pass it to the rightmost child pointer of
      * the original page. */
     memcpy(&(original_page->type_specific_data.rightmost_child_pointer), cell_view.payload, sizeof(uint32_t));
-    status = update_parent_pointers(pager, original_page, index);
+    status = update_children_parent_metadata(pager, original_page, index);
     if (status != BTREE_SUCCESS) {
         pager_release_page(pager, new_page_num);
         return status;
@@ -668,23 +654,11 @@ BTreeStatus btree_root_split(BTree *btree, BTreePage *btree_old_root, BTreeSplit
     BTreeCellContents cell = {0};
     cell.type = BTREE_INTERNAL_NODE;
     cell.num_keys = index->index_key->num_columns;
-    cell.keys = (Value **) calloc(cell.num_keys, sizeof(Value *));
+    cell.keys = serialized_key_to_values(split_result->separator_key, cell.num_keys, index);
     if (!cell.keys) {
         page_free(new_root);
         pager_release_page(btree->pager, new_root_page_num);
         return BTREE_ERROR;
-    }
-
-    uint8_t *offset = (uint8_t *) split_result->separator_key;
-    for (uint32_t i = 0; i < cell.num_keys; i++) {
-        cell.keys[i] = value_create(index->column_types[i], (void *) offset);
-        if (!cell.keys[i]) {
-            value_free_array(cell.keys, cell.num_keys);
-            pager_release_page(btree->pager, new_root_page_num);
-            return BTREE_ERROR;
-        }
-
-        offset += get_data_type_size(index->column_types[i]);
     }
 
     cell.key_size = split_result->separator_size;
@@ -758,7 +732,6 @@ BTreeStatus btree_traverse_reachable_pages(BTree *btree, BTreePageCollection *vi
     
     return BTREE_SUCCESS;
 }
-
 
 /* Find a unique B+ Tree key */
 BTreeStatus btree_find_exact_key(BTree *btree, BTreeSearchKey *search_key, BTreeSearchResult *search_result,
@@ -857,7 +830,6 @@ BTreeStatus btree_find_exact_key(BTree *btree, BTreeSearchKey *search_key, BTree
 
     return BTREE_SUCCESS;
 }
-
 
 // Find all B+ Tree Key prefixes
 BTreeStatus btree_find_prefix_keys(BTree *btree, BTreeIndexSpec *index, BTreeSearchKey *prefix_key,
@@ -999,36 +971,32 @@ BTreeStatus btree_find_range_keys(BTree *btree, BTreeIndexSpec *index, BTreeSear
             }
 
             // Creating a Value ** structure from the cell view's key 
-            Value **values = (Value **) calloc(index->index_key->num_columns, sizeof(Value *));
+            Value **values = serialized_key_to_values(cell_view.key.key, index->index_key->num_columns, index);
             if (!values) {
                 btree_range_result_free(result);
                 return BTREE_ERROR;
-            }
-
-            uint8_t *key_offset = (uint8_t *) cell_view.key.key;
-
-            for (uint16_t i = 0; i < index->index_key->num_columns; i++) {
-                values[i] = value_create(index->column_types[i], key_offset);
-
-                if (!values[i]) {
-                    value_free_array(values, i);
-                    btree_range_result_free(result);
-                    return BTREE_ERROR;
-                }
-
-                key_offset += get_data_type_size(index->column_types[i]);
             }
 
             // Compare current Key with the lower bound search Key
             if (start_search_key) {
                 int cmp_start = 0;
 
-                status = btree_compare(values, start_search_key, index->index_key->num_columns, &cmp_start);
+                Value **start_search_key_vals = serialized_key_to_values(start_search_key->target_key,
+                                            start_search_key->num_target_keys, start_search_key->index);
+                if (!start_search_key_vals) {
+                    value_free_array(values, index->index_key->num_columns);
+                    btree_range_result_free(result);
+                    return BTREE_ERROR;
+                }
+
+                status = btree_compare(values, start_search_key_vals, start_search_key->num_target_keys, &cmp_start);
                 if (status != BTREE_SUCCESS) {
+                    value_free_array(start_search_key_vals, start_search_key->num_target_keys);
                     value_free_array(values, index->index_key->num_columns);
                     btree_range_result_free(result);
                     return status;
                 }
+                value_free_array(start_search_key_vals, start_search_key->num_target_keys);
 
                 // If current key is less than the lower bound key, 
                 // or, equal to lower bound key but lower bound is not included, skip it
@@ -1043,12 +1011,22 @@ BTreeStatus btree_find_range_keys(BTree *btree, BTreeIndexSpec *index, BTreeSear
             if (end_search_key) {
                 int cmp_end = 0;
 
-                status = btree_compare(values, end_search_key, index->index_key->num_columns, &cmp_end);
+                Value **end_search_key_vals = serialized_key_to_values(end_search_key->target_key,
+                                            end_search_key->num_target_keys, end_search_key->index);
+                if (!end_search_key_vals) {
+                    value_free_array(values, index->index_key->num_columns);
+                    btree_range_result_free(result);
+                    return BTREE_ERROR;
+                }
+
+                status = btree_compare(values, end_search_key_vals, end_search_key->num_target_keys, &cmp_end);
                 if (status != BTREE_SUCCESS) {
+                    value_free_array(end_search_key_vals, end_search_key->num_target_keys);
                     value_free_array(values, index->index_key->num_columns);
                     btree_range_result_free(result);
                     return status;
                 }
+                value_free_array(end_search_key_vals, end_search_key->num_target_keys);
 
                 // If current key is greater than the upper bound key, 
                 // or, equal to upper bound key but upper bound is not included, the range query is complete
@@ -1138,7 +1116,7 @@ BTreeStatus btree_split_propagation(BTree *btree, BTreePage *leaf_node, BTreeCel
     }
 
     Page *insertion_page = NULL;
-    status = choose_split_insertion_page(btree->pager, &insertion_page, &pending_leaf_cell, split_result, index);
+    status = choose_split_insertion_page(btree->pager, &insertion_page, pending_leaf_cell, split_result, index);
     if (status != BTREE_SUCCESS) {
         split_result_reset(split_result);
         return status;
@@ -1250,7 +1228,7 @@ BTreeStatus btree_split_propagation(BTree *btree, BTreePage *leaf_node, BTreeCel
 
             Page *insertion_page = NULL;
             status = choose_split_insertion_page(btree->pager, &insertion_page, &cell_contents,
-                                                &split_result, &index);
+                                                split_result, index);
             if (status != BTREE_SUCCESS) {
                 split_result_reset(split_result);
                 value_free_array(cell_contents.keys, index->index_key->num_columns);
