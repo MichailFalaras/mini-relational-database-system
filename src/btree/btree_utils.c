@@ -234,24 +234,20 @@ BTreeStatus get_key(BTreePage *btree_page, uint16_t cell_index, BTreeKeyView *ke
 }
 
 /* Comparing BTree Internal/Leaf Node Keys. */
-BTreeStatus btree_compare(Value **values, BTreeKeyView *btree_key, BTreeSearchKey *search_key, int *result) {
-    if (!values || !search_key || !result
-        || !search_key->target_key
-        || search_key->num_target_keys == 0
-        || !search_key->index) {
+BTreeStatus btree_compare(Value **left, Value **right, uint32_t num_vals, int *result) {
+    if (!left || !right || !result || num_vals == 0) {
         return BTREE_INVALID_ARGUMENTS;
     }
 
-    Value **target_key = (Value **) search_key->target_key; 
     /* Compare both same index columns. (With upper limit the search keys used, not
     the amount of keys the BTree is organized with) */
-    for (uint32_t i = 0; i < search_key->num_target_keys; i++) {
-        if (!value_compare(values[i], target_key[i], result)) {
+    for (uint32_t i = 0; i < num_vals; i++) {
+        if (!value_compare(left[i], right[i], result)) {
             return BTREE_ERROR;
         }
 
-        // result == -1 for values[i] < key_val
-        // result == 1 for values[i] > key_val
+        // result == -1 for left < right
+        // result == 1 for left > right
         /* If it isn't equal, don't bother comparing other columns. */
         if (*result != 0) {
             break;
@@ -611,7 +607,7 @@ BTreeStatus insert_cell(Pager *pager, BTreePage *btree_page, BTreeIndexSpec *ind
     btree_page->free_space_offset = offset;
 
     if (btree_page->type == BTREE_INTERNAL_NODE) {
-        status = update_parent_pointers(pager, btree_page, index);
+        status = update_children_parent_metadata(pager, btree_page, index);
         if (status != BTREE_SUCCESS) {
             return status;
         }
@@ -919,9 +915,10 @@ BTreeStatus btree_traverse_page_recursive(BTree *btree, uint32_t page_num, BTree
     return btree_traverse_page_recursive(btree, rightmost_child_page_num, visited_pages);
 }
 
-/* Update parent pointers of child pages right after split. */
-BTreeStatus update_parent_pointers(Pager *pager, BTreePage *btree_page, BTreeIndexSpec *index) {
-    if (!btree_page) {
+/* Update parent pointers of child pages & root status right after split. */
+BTreeStatus update_children_parent_metadata(Pager *pager, BTreePage *btree_page, BTreeIndexSpec *index) {
+    if (!pager || !btree_page || !btree_page->page 
+        || !btree_page->data || index) {
         return BTREE_INVALID_ARGUMENTS;
     }
 
@@ -937,6 +934,7 @@ BTreeStatus update_parent_pointers(Pager *pager, BTreePage *btree_page, BTreeInd
     }
 
     rightmost_child.parent_pointer = btree_page->page->page_num;
+    rightmost_child.is_root = false;
     if (!btree_page_sync(pager, &rightmost_child)) {
         return BTREE_ERROR;
     }
@@ -950,7 +948,8 @@ BTreeStatus update_parent_pointers(Pager *pager, BTreePage *btree_page, BTreeInd
             return BTREE_ERROR;
         }
 
-        if (get_parent_pointer(page->page_data) == btree_page->page->page_num) {
+        if (get_parent_pointer(page->page_data) == btree_page->page->page_num
+            && get_root_status(page->page_data) == false) {
             continue;
         }
 
@@ -961,6 +960,7 @@ BTreeStatus update_parent_pointers(Pager *pager, BTreePage *btree_page, BTreeInd
         }
 
         child.parent_pointer = btree_page->page->page_num;
+        child.is_root = false;
         if (!btree_page_sync(pager, &child)) {
             return BTREE_ERROR;
         }
@@ -984,6 +984,186 @@ void *serialized_key_alloc(BTreeKeyView *key_view) {
 
     memcpy(separator_key, key_view->key, key_view->key_size);
     return separator_key;
+}
+
+void split_result_reset(BTreeSplitResult *split_result) {
+    if (!split_result) {
+        return;
+    }
+
+    if (split_result->separator_key) {
+        free(split_result->separator_key);
+    }
+
+    split_result->left_page = UINT32_MAX;
+    split_result->right_page = UINT32_MAX;
+    split_result->separator_key = NULL;
+    split_result->separator_size = 0;
+    split_result->split = false;
+}
+
+/* Serialized key to Value array conversion. */
+Value **serialized_key_to_values(void *separator_key, BTreeIndexSpec *index) {
+    if (!separator_key || !index) {
+        return NULL;
+    }
+
+    Value **key_vals = (Value **) calloc(index->index_key->num_columns, sizeof(Value *));
+    if (!key_vals) {
+        return NULL;
+    }
+        
+    uint8_t *key_offset = (uint8_t *) separator_key;
+    for (uint32_t i = 0; i < index->index_key->num_columns; i++) {
+        key_vals[i] = value_create(index->column_types[i], key_offset);
+        if (!key_vals[i]) {
+            value_free_array(key_vals, index->index_key->num_columns);
+            return NULL;
+        }
+
+        key_offset += get_data_type_size(index->column_types[i]);
+    }
+
+    return key_vals;
+}
+
+/* Value array to serialized key stored in heap. */
+void *values_to_serialized_key(Value **key_vals, BTreeIndexSpec *index) {
+    if (!key_vals || !index) {
+        return NULL;
+    }
+
+    void *serialized_key = malloc(index->key_size);
+    if (!serialized_key) {
+        return NULL;
+    }
+
+    uint8_t *offset = (uint8_t *) serialized_key;
+    for (uint32_t i = 0; i < index->index_key->num_columns; i++) {
+        if (!serialize_value_data(key_vals[i], offset)) {
+            free(serialized_key);
+            return NULL;
+        }
+
+        offset += get_data_type_size(index->column_types[i]);
+    }
+
+    return serialized_key;
+}
+
+/* Build internal node separator cell to promote in split propagation. */
+BTreeStatus build_internal_separator_cell(BTreeCellContents *cell_contents, BTreeSplitResult *split_result, BTreeIndexSpec *index) {
+    if (!cell_contents || !split_result || !index) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    cell_contents->type = BTREE_INTERNAL_NODE;
+    cell_contents->num_keys = index->index_key->num_columns;
+    cell_contents->keys = serialized_key_to_values(split_result->separator_key, index);
+    if (!cell_contents->keys) {
+        return BTREE_ERROR;
+    }
+
+    cell_contents->key_size = split_result->separator_size;
+    cell_contents->cell_size = cell_contents->key_size + sizeof(uint32_t);
+    cell_contents->BTreePayload.child_pointer = split_result->right_page;
+
+    return BTREE_SUCCESS;
+}
+
+/* Handle propagated insertion before actual cell insertion onto page.
+ *
+ * btree_node_insert is not built to handle direct insertion with propagation.
+ * Even from leaf splits, the separator key is the first key of the right child.
+ * Then that separator key points to the LEFT CHILD while having its rightmost
+ * child pointer as the RIGHT CHILD.
+ * 
+ * Therefore, it requires a swap between the splitted pages during insertion
+ * for correct alignment of pages. (Swap for rightmost pointers is already handled) */
+BTreeStatus prepare_propagated_separator_cell(BTreePage *insertion_page, BTreeCellContents *cell_contents, uint32_t pending_left_page,
+    uint32_t pending_right_page, BTreeIndexSpec *index) {
+    if (!insertion_page || !insertion_page->page || !insertion_page->data
+        || !cell_contents || !index
+        || pending_left_page <= SYSTEM_CATALOG_PAGE_NUM || pending_right_page <= SYSTEM_CATALOG_PAGE_NUM
+        || pending_left_page >= MAX_PAGES || pending_right_page >= MAX_PAGES) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    if (insertion_page->type != BTREE_INTERNAL_NODE ||
+        cell_contents->type != BTREE_INTERNAL_NODE) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    BTreeSearchKey search_key = {0};
+    search_key.index = index;
+    search_key.num_target_keys = index->index_key->num_columns;
+    search_key.target_key = values_to_serialized_key(cell_contents->keys, index);
+    if (!search_key.target_key) {
+        return BTREE_ERROR;
+    }
+
+    BTreeSearchResult search_result = {0};
+    BTreeStatus status = btree_binary_search(insertion_page, &search_key, &search_result, BTREE_LOWER_BOUND);
+    if (status != BTREE_SUCCESS) {
+        free(search_key.target_key);
+        return status;
+    }
+    free(search_key.target_key);
+
+    cell_contents->BTreePayload.child_pointer = pending_right_page;
+    if (search_result.result_index != insertion_page->cell_count) {
+        cell_contents->BTreePayload.child_pointer = pending_left_page;
+
+        uint32_t cell_pointer = get_cell_pointer(insertion_page->data, search_result.result_index);
+        uint32_t child_pointer = get_cell_child_pointer(insertion_page->data, get_cell_offset(cell_pointer));
+
+        if (child_pointer != pending_left_page) {
+            return BTREE_CORRUPT_PAGE;
+        }
+
+        set_cell_child_pointer(insertion_page->data, get_cell_offset(cell_pointer), pending_right_page);
+
+    } else if (insertion_page->type_specific_data.rightmost_child_pointer != pending_left_page) {
+        return BTREE_CORRUPT_PAGE;
+    }
+
+    return BTREE_SUCCESS;
+}
+
+/* Handling for when you want to insert a separator cell into a page
+ * that's already full and needs to split. 
+ *
+ * It chooses in which of the new 2 splitted pages the separator key/cell
+ * should be inserted in. */
+BTreeStatus choose_split_insertion_page(Pager *pager, Page **insertion_page, BTreeCellContents *cell_contents,
+    BTreeSplitResult *split_result, BTreeIndexSpec *index) {
+    if (!pager || !insertion_page || !cell_contents
+        || !split_result || !index) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    /* Create Values of new separator key. */
+    Value **new_separator_key = serialized_key_to_values(split_result->separator_key, index);
+    if (!new_separator_key) {
+        return BTREE_ERROR;
+    }
+
+    int result = 0;
+    BTreeStatus status = btree_compare(cell_contents->keys, new_separator_key, index->index_key->num_columns, &result);
+    if (status != BTREE_SUCCESS) {
+        value_free_array(new_separator_key, index->index_key->num_columns);
+        return status;
+    }
+    value_free_array(new_separator_key, index->index_key->num_columns);
+
+    uint32_t chosen_page_num = (result == -1) ? split_result->left_page : split_result->right_page;
+    *insertion_page = pager_get_page(pager, chosen_page_num);
+    if (!(*insertion_page)) {
+        value_free_array(new_separator_key, index->index_key->num_columns);
+        return BTREE_ERROR;
+    }
+
+    return BTREE_SUCCESS;
 }
 
 /* ---------- BTreeRangeResult Helpers ---------- */
