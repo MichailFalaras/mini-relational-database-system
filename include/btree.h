@@ -156,7 +156,7 @@ typedef struct btree_index_spec {
  * about the target key itself. */
 typedef struct btree_search_key {
     BTreeIndexSpec *index;
-    const void *target_key;
+    void *target_key;
 
     /* Amount of keys used to traverse BTree.
      * Can be less than keys organizing the BTree. */

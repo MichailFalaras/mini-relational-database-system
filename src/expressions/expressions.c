@@ -32,7 +32,7 @@ ExpressionNode *expression_node_create(ExpressionType type) {
 
 /* Get operator type from operator token. */
 OperatorType get_operator_type(char *operator_token) {
-    OperatorType type;
+    OperatorType type = OP_ERROR; // placeholder value
 
     if (!strcmp(operator_token, "=")) {
         type = OP_EQ;
@@ -137,13 +137,14 @@ ExpressionNode *expression_node_copy(const ExpressionNode *source) {
 Value *evaluate_expression(const ExpressionNode *expr, const EvaluationContext *context) {
 
     switch (expr->type) {
-        case EXPR_LITERAL: 
+        case EXPR_LITERAL: {
             Value *final = value_copy(expr->expression_data.literal_value.literal);
             if (final == NULL) {
                 return NULL;
             }
 
             return final;
+        }
         case EXPR_COLUMN_REF: {
             int32_t rel_index = expr->expression_data.column_value.relation_index;
             if (rel_index == -1) {
