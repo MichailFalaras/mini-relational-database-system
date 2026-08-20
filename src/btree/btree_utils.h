@@ -4,6 +4,7 @@
 #include "../../include/btree.h"
 #include "../../include/page.h"
 
+typedef struct schema Schema;
 typedef struct index Index;
 typedef struct value Value;
 typedef struct page Page;
@@ -12,10 +13,13 @@ typedef enum btree_shift_direction BTreeShiftDirection;
 typedef struct btree BTree;
 typedef struct btree_page BTreePage;
 typedef struct btree_key_view BTreeKeyView;
+typedef struct btree_cell_view BTreeCellView;
 typedef struct btree_index_spec BTreeIndexSpec;
 typedef struct btree_search_key BTreeSearchKey;
 typedef struct btree_cell_contents BTreeCellContents;
 typedef struct btree_search_result BTreeSearchResult;
+typedef struct btree_split_result BTreeSplitResult;
+typedef struct btree_range_result BTreeRangeResult;
 
 #define MIN_CELL_SIZE 5 // lets suppose key is a bool (uint8_t) and a child pointer (uint32_t)
 
@@ -63,17 +67,26 @@ extern void index_btree_spec_free(BTreeIndexSpec *spec);
 
 /* ---------- Miscellaneous  ---------- */
 
+/* Serialized key to Value array conversion. */
+Value **serialized_key_to_values(void *separator_key, uint32_t num_keys, BTreeIndexSpec *index);
+
+/* Value array to serialized key stored in heap. */
+void *values_to_serialized_key(Value **key_vals, uint32_t num_keys, BTreeIndexSpec *index);
+
+/* Result BTreeSplitResult metadata. */
+void split_result_reset(BTreeSplitResult *split_result);
+
 /* Allocate memory for serialized separator key from key_view. */
 void *serialized_key_alloc(BTreeKeyView *key_view);
 
-/* Update parent pointers of child pages right after split. */
-BTreeStatus update_parent_pointers(Pager *pager, BTreePage *right_page, BTreeIndexSpec *index);
+/* Update parent pointers of child pages & root status right after split. */
+BTreeStatus update_children_parent_metadata(Pager *pager, BTreePage *btree_page, BTreeIndexSpec *index);
 
 /* Get exact offset and size of key and store it in BTreeKeyView. */
 BTreeStatus get_key(BTreePage *btree_page, uint16_t cell_index, BTreeKeyView *key, BTreeIndexSpec *index);
 
 /* Comparing BTree Internal/Leaf Node Keys. */
-BTreeStatus btree_compare(Value **values, BTreeKeyView *btree_key, BTreeSearchKey *search_key, int *result);
+BTreeStatus btree_compare(Value **left, Value **right, uint32_t num_vals, int *result);
 
 /* Check if there's enough space to store a Cell and its Cell Pointer. */
 BTreeStatus btree_page_has_enough_space(BTreePage *btree_page, BTreeCellContents *cell_contents);
@@ -81,10 +94,6 @@ BTreeStatus btree_page_has_enough_space(BTreePage *btree_page, BTreeCellContents
 /* Check if less than 25% of usable space is being taken up.
  * Roots are allowed to contain less than underflow. */
 BTreeStatus btree_check_underflow(BTreePage *btree_page);
-
-/* Check if leaf is duplicate by comparing the keys. */
-BTreeStatus check_leaf_duplicate(BTreePage *btree_page, BTreeSearchKey *search_key,
-    BTreeSearchResult *search_result, bool *duplicate);
 
 /* Inserting into an internal node and the binary search's returned
  * index is equal to the page's cell count then:
@@ -126,6 +135,17 @@ BTreeStatus btree_transfer_cells(BTreePage *src, uint16_t src_idx, BTreePage *de
 /* Remove cell by SHIFTING DOWN cell pointers and contents. */
 BTreeStatus btree_remove_cell(BTreePage *btree_page, uint32_t cell_pointer_index);
 
+/* Build internal node separator cell to promote in split propagation. */
+BTreeStatus build_internal_separator_cell(BTreeCellContents *cell_contents, BTreeSplitResult *split_result, BTreeIndexSpec *index);
+
+/* Handle propagated insertion before actual cell insertion onto page. */
+BTreeStatus prepare_propagated_separator_cell(BTreePage *insertion_page, BTreeCellContents *cell_contents, uint32_t pending_left_page,
+    uint32_t pending_right_page, BTreeIndexSpec *index);
+
+/* It chooses in which of the new 2 splitted pages the separator key/cell
+ * should be inserted in. */
+BTreeStatus choose_split_insertion_page(Pager *pager, Page **insertion_page, BTreeCellContents *cell_contents,
+    BTreeSplitResult *split_result, BTreeIndexSpec *index);
 
 /* ---------- Shift Cell Pointers & Cell Contents ---------- */
 

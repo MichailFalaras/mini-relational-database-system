@@ -5,6 +5,8 @@
 #include <stdbool.h>
 
 /* Forward Declarations. */
+typedef struct value Value;
+typedef struct row Row;
 typedef struct schema Schema;
 typedef struct index Index;
 typedef enum index_type IndexType;
@@ -35,7 +37,6 @@ typedef struct table {
     uint32_t row_count;
 } Table;
 
-
 /* Search-related structures */
 typedef enum table_lookup_status {
     TABLE_LOOKUP_SUCCESS,
@@ -46,13 +47,11 @@ typedef enum table_lookup_status {
 } TableLookupStatus;
 
 #define TABLE_RANGE_INITIAL_CAPACITY 16
-typedef struct row_result {
+typedef struct table_row_result {
     Row **rows;
     uint32_t count;
     uint32_t capacity;
 } TableRowResult;
-
-
 
 /* Table metadata operations */
 extern Table *table_metadata_create(const char *table_name, const Schema *schema);

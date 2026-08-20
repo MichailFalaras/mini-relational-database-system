@@ -17,6 +17,11 @@ typedef enum btree_node_type {
     BTREE_INTERNAL_NODE
 } BTreeNodeType;
 
+typedef enum btree_binary_search_type {
+    BTREE_LOWER_BOUND,
+    BTREE_UPPER_BOUND
+} BTreeBinarySearchType;
+
 typedef enum btree_shift_direction {
     BTREE_SHIFT_INSERT,
     BTREE_SHIFT_DELETE
@@ -74,9 +79,10 @@ typedef struct btree_search_result {
 /* BTree Split Result after insertion. */
 typedef struct btree_split_result {
     bool split;
+    uint32_t left_page;
     uint32_t right_page;
-    uint16_t separator_size;
     void *separator_key;
+    uint16_t separator_size;
 } BTreeSplitResult;
 
 /* Direct access to cell keys with pointers and offset. */
@@ -150,7 +156,7 @@ typedef struct btree_index_spec {
  * about the target key itself. */
 typedef struct btree_search_key {
     BTreeIndexSpec *index;
-    const void *target_key;
+    void *target_key;
 
     /* Amount of keys used to traverse BTree.
      * Can be less than keys organizing the BTree. */
@@ -182,8 +188,8 @@ extern BTreeStatus btree_page_init_internal(BTreePage *btree_page, uint32_t righ
 /* Lower Bound Binary Search with a target key.
  * Used to traverse through the B+Tree and find correct cell position in a page.
  * Return important information in BTreeSearchResult. */
-extern BTreeStatus btree_lower_bound_search(BTreePage *btree_page, BTreeSearchKey *search_key,
-    BTreeSearchResult *search_result);
+BTreeStatus btree_binary_search(BTreePage *btree_page, BTreeSearchKey *search_key,
+    BTreeSearchResult *search_result, BTreeBinarySearchType mode);
 
 /* Root to leaf traversal using a specific key to ultimately reach
  * a cell position to store data.
@@ -225,5 +231,10 @@ extern BTreeStatus btree_find_prefix_keys(BTree *btree, BTreeIndexSpec *index, B
 // Find B+ Tree Range of Keys
 extern BTreeStatus btree_find_range_keys(BTree *btree, BTreeIndexSpec *index, BTreeSearchKey *start_search_key, 
     bool includes_start, BTreeSearchKey *end_search_key, bool includes_end, BTreeRangeResult *result);
+
+/* Receive BTreeSplitResult from leaf node split and update
+ * parent nodes upwards. */
+extern BTreeStatus btree_split_propagation(BTree *btree, BTreePage *leaf_node, BTreeCellContents *pending_leaf_cell,
+    BTreeSplitResult *split_result, BTreeIndexSpec *index);
 
 #endif

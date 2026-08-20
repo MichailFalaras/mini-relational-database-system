@@ -146,16 +146,21 @@ bool cell_contents_init(BTreeCellContents *cell_contents) {
 }
 
 // Search Key initialization
-bool search_key_init(BTreeSearchKey *search_key, BTreeIndexSpec *index_spec, Value ***target_key_vals) {
-    
-    *target_key_vals = (Value **) calloc(index_spec->index_key->num_columns, sizeof(Value *));
-    if (!(*target_key_vals)) {
+bool search_key_init(BTreeSearchKey *search_key, BTreeIndexSpec *index_spec, Value **target_key_vals) {
+    if (!search_key || !index_spec || !target_key_vals) {
         return false;
     }
 
     search_key->index = index_spec;
     search_key->num_target_keys = index_spec->index_key->num_columns;
-    search_key->target_key = (void *) *target_key_vals; 
+    if (search_key->target_key) {
+        free(search_key->target_key);
+        search_key->target_key = NULL;
+    }
+    search_key->target_key = values_to_serialized_key(target_key_vals, index_spec->index_key->num_columns, index_spec); 
+    if (!search_key->target_key) {
+        return false;
+    }
 
     return true;
 }
@@ -406,6 +411,22 @@ void test_btree_free(TestBTree *test_btree, Index **index, Pager **pager) {
     *pager = NULL;
 }
 
+void index_spec_free(BTreeIndexSpec *index_spec) {
+    if (!index_spec) {
+        return;
+    }
+
+    if (index_spec->column_types) {
+        free(index_spec->column_types);
+        index_spec->column_types = NULL;
+    }
+
+    if (index_spec->schema) {
+        free(index_spec->schema);
+        index_spec->schema = NULL;
+    }
+}
+
 /* Initializes Pager, Index, TestBtree and creates a B+Tree.
  * B+Tree contains as many nodes as supported in level given.
  *
@@ -472,25 +493,25 @@ bool verify_page_keys(Page *page, BTreeRangeResult *range_result, BTreeIndexSpec
 
         status = get_key(&btree_page, i, &key_view, index_spec);
         if (status != BTREE_SUCCESS) {
+            value_free_array(page_keys, index_spec->index_key->num_columns);
             return false;
         }
 
         bool equal_key = true;
         uint8_t *offset = (uint8_t *) key_view.key;
         for (uint32_t j = 0; j < index_spec->index_key->num_columns; j++) {
-            if (page_keys[j]) {
-                value_free(page_keys[j]);
-            }
             page_keys[j] = value_create(index_spec->column_types[j], (void *) offset);
 
             offset += get_data_type_size(index_spec->column_types[j]);
 
             if (!value_compare(range_result->cells[*key_counter].keys[j], page_keys[j], &result)) {
+                value_free_array(page_keys, index_spec->index_key->num_columns);
                 return false;
             }
 
             if (result != 0) {
                 equal_key = false;
+                break;
             }
         }
 
@@ -499,6 +520,7 @@ bool verify_page_keys(Page *page, BTreeRangeResult *range_result, BTreeIndexSpec
         }
     }
 
+    value_free_array(page_keys, index_spec->index_key->num_columns);
     return true;
 }
 
@@ -563,8 +585,13 @@ static int test_init_internal() {
     return 0;
 }
 
-/* Empty Root Lower Bound search. */
-static int test_lower_bound_search_empty_root() {
+/* Binary search (with BTREE_LOWER_BOUND) ran on an empty leaf node or 
+ * a leaf node of a 2-level test B+Tree.
+ *
+ * Search for cases with result_index being at the beginning, in the middle,
+ * at the end and an exact match of keys.  */
+static int test_binary_search() {
+    /* ---- SEARCH IN EMPTY ROOT ---- */
     BTreePage btree_page = {0};
     Pager *pager; Page *page;
     // Already existing page empty root leaf node created in TEST[00]
@@ -578,59 +605,54 @@ static int test_lower_bound_search_empty_root() {
     BTreeStatus status = btree_page_attach_load_validate(pager, &btree_page, page, &index_spec);
     ASSERT(status == BTREE_SUCCESS);
 
-    status = btree_lower_bound_search(&btree_page, &search_key, &search_result);
+    status = btree_binary_search(&btree_page, &search_key, &search_result, BTREE_LOWER_BOUND);
     ASSERT(status == BTREE_SUCCESS);
     ASSERT(search_result.found == true);
     ASSERT(search_result.exact_match == false);
     ASSERT(search_result.page == btree_page.page);
     ASSERT(search_result.result_index == 0);
 
-    bool res = pager_close(pager);
-    ASSERT(res == true);
-    return 0;
-}
-
-/* Lower Bound Search ran on a leaf node of a 2-level test B+Tree.
- * Search for cases with result_index being at the beginning, in the middle,
- * at the end and an exact match of keys.  */
-static int test_lower_bound_search() {
+    if (!pager_close(pager)) {
+        return -1;
+    }
+    
+    /* ---- SEARCH IN LEAF NODE WITH CONTENTS ---- */
     TestBTree test_btree = {0};
-    Pager *pager = NULL;
+    pager = NULL;
     Index *index = NULL;
     uint8_t levels = 2;
     char *pathname = "build/database3.db";
     ASSERT(test_btree_full_init(&test_btree, &pager, &index, levels, pathname));
 
     /* ---- SEARCH BEFORE THE FIRST KEY: ---- */
-    BTreeIndexSpec index_spec = {0};
     ASSERT(index_spec_init(&index_spec, index));
 
-    BTreeSearchKey search_key = {0};
-    Value **target_key_vals = NULL;
-    ASSERT(search_key_init(&search_key, &index_spec, &target_key_vals));
+    Value **target_key_vals = (Value **) calloc(index_spec.index_key->num_columns, sizeof(Value *));
+    if (!target_key_vals) {
+        return -1;
+    }
 
-    for (uint32_t i = 0; i < search_key.num_target_keys; i++) {
+    for (uint32_t i = 0; i < index_spec.index_key->num_columns; i++) {
         index_spec.column_types[i] = UNSIGNED_INTEGER;
         
         uint32_t val = i * 9;
         target_key_vals[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
     }
+    ASSERT(search_key_init(&search_key, &index_spec, target_key_vals));
 
-    BTreeSearchResult search_result = {0};
     search_result.page = pager->pages[test_btree.page_nums[1]]; // First leaf node 
 
-    BTreePage btree_page = {0};
     btree_page_attach(&btree_page, pager->pages[test_btree.page_nums[1]]);
     btree_page_load(&btree_page);
 
-    BTreeStatus status = btree_lower_bound_search(&btree_page, &search_key, &search_result);
+    status = btree_binary_search(&btree_page, &search_key, &search_result, BTREE_LOWER_BOUND);
     ASSERT(status == BTREE_SUCCESS);
     ASSERT(search_result.found == true);
     ASSERT(search_result.exact_match == false);
     ASSERT(search_result.result_index == 0);
 
     /* ---- SEARCH AFTER THE LAST KEY: ---- */
-    for (uint32_t i = 0; i < search_key.num_target_keys; i++) {        
+    for (uint32_t i = 0; i < index_spec.index_key->num_columns; i++) {        
         uint32_t val = i + 26;
 
         if (target_key_vals[i]) {
@@ -638,15 +660,16 @@ static int test_lower_bound_search() {
         }
         target_key_vals[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
     }
+    ASSERT(search_key_init(&search_key, &index_spec, target_key_vals));
 
-    status = btree_lower_bound_search(&btree_page, &search_key, &search_result);
+    status = btree_binary_search(&btree_page, &search_key, &search_result, BTREE_LOWER_BOUND);
     ASSERT(status == BTREE_SUCCESS);
     ASSERT(search_result.found == true);
     ASSERT(search_result.exact_match == false);
     ASSERT(search_result.result_index == 3);
 
     /* ---- SEARCH FOR AN EXACT MATCH: ---- */
-    for (uint32_t i = 0; i < search_key.num_target_keys; i++) {        
+    for (uint32_t i = 0; i < index_spec.index_key->num_columns; i++) {        
         uint32_t val = i*10 + 15;
         
         if (target_key_vals[i]) {
@@ -654,15 +677,16 @@ static int test_lower_bound_search() {
         }
         target_key_vals[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
     }
+    ASSERT(search_key_init(&search_key, &index_spec, target_key_vals));
 
-    status = btree_lower_bound_search(&btree_page, &search_key, &search_result);
+    status = btree_binary_search(&btree_page, &search_key, &search_result, BTREE_LOWER_BOUND);
     ASSERT(status == BTREE_SUCCESS);
     ASSERT(search_result.found == true);
     ASSERT(search_result.exact_match == true);
     ASSERT(search_result.result_index == 0);
 
     /* ---- SEARCH BETWEEN KEYS: ---- */
-    for (uint32_t i = 0; i < search_key.num_target_keys; i++) {        
+    for (uint32_t i = 0; i < index_spec.index_key->num_columns; i++) {        
         uint32_t val = i*10 + 16;
 
         if (target_key_vals[i]) {
@@ -670,15 +694,18 @@ static int test_lower_bound_search() {
         }
         target_key_vals[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
     }
+    ASSERT(search_key_init(&search_key, &index_spec, target_key_vals));
 
-    status = btree_lower_bound_search(&btree_page, &search_key, &search_result);
+    status = btree_binary_search(&btree_page, &search_key, &search_result, BTREE_LOWER_BOUND);
     ASSERT(status == BTREE_SUCCESS);
     ASSERT(search_result.found == true);
     ASSERT(search_result.exact_match == false);
     ASSERT(search_result.result_index == 1);
 
+    index_spec_free(&index_spec);
     value_free_array(target_key_vals, index->key->num_columns);
     test_btree_free(&test_btree, &index, &pager);
+    free(search_key.target_key);
     return 0;
 }
 
@@ -695,8 +722,10 @@ static int test_root_to_leaf() {
     ASSERT(index_spec_init(&index_spec, index));
 
     BTreeSearchKey search_key = {0};
-    Value **target_key_vals = NULL;
-    ASSERT(search_key_init(&search_key, &index_spec, &target_key_vals));
+    Value **target_key_vals = (Value **) calloc(index_spec.index_key->num_columns, sizeof(Value *));
+    if (!target_key_vals) {
+        return -1;
+    };
 
     BTreeSearchResult search_result = {0};
 
@@ -705,9 +734,10 @@ static int test_root_to_leaf() {
 
         target_key_vals[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
     }
+    
 
     /* ---- ROOT-TO-LEAF WITH ROOT ONLY: ---- */
-    for (uint32_t i = 0; i < search_key.num_target_keys; i++) {
+    for (uint32_t i = 0; i < index_spec.index_key->num_columns; i++) {
         index_spec.column_types[i] = UNSIGNED_INTEGER;
         
         if (target_key_vals[i]) {
@@ -716,6 +746,7 @@ static int test_root_to_leaf() {
         uint32_t val = i * 9;
         target_key_vals[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
     }
+    ASSERT(search_key_init(&search_key, &index_spec, target_key_vals));
 
     BTreeStatus status = btree_root_to_leaf(test_btree.btree, &search_key, &search_result);
     ASSERT(status == BTREE_SUCCESS);
@@ -745,7 +776,7 @@ static int test_root_to_leaf() {
     ASSERT(test_btree_full_init(&test_btree, &pager, &index, levels, pathname));
     index_spec.index_key = index->key;
 
-    for (uint32_t i = 0; i < search_key.num_target_keys; i++) {        
+    for (uint32_t i = 0; i < index_spec.index_key->num_columns; i++) {        
         uint32_t val = i*10 + 91;
 
         if (target_key_vals[i]) {
@@ -753,6 +784,7 @@ static int test_root_to_leaf() {
         }
         target_key_vals[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
     }
+    ASSERT(search_key_init(&search_key, &index_spec, target_key_vals));
 
     status = btree_root_to_leaf(test_btree.btree, &search_key, &search_result);
     ASSERT(status == BTREE_SUCCESS);
@@ -761,8 +793,10 @@ static int test_root_to_leaf() {
     ASSERT(search_result.page == pager->pages[test_btree.page_nums[6]]);
     ASSERT(search_result.result_index == 1);
 
+    index_spec_free(&index_spec);
     value_free_array(target_key_vals, index->key->num_columns);
     test_btree_free(&test_btree, &index, &pager);
+    free(search_key.target_key);
     return 0;
 }
 
@@ -801,8 +835,10 @@ static int test_node_insert() {
     ASSERT(cell_contents_init(&cell_contents));
     
     BTreeSearchKey search_key = {0};
-    Value **target_key_vals = NULL;
-    ASSERT(search_key_init(&search_key, &index_spec, &target_key_vals));
+    Value **target_key_vals = (Value **) calloc(index_spec.index_key->num_columns, sizeof(Value *));
+    if (!target_key_vals) {
+        return -1;
+    }
 
     BTreeSplitResult split_result = {0}; 
     BTreeSearchResult search_result = {0};
@@ -813,7 +849,8 @@ static int test_node_insert() {
         target_key_vals[i] = cell_contents.keys[i];
         cell_contents.BTreePayload.row->values[i] = value_copy(cell_contents.keys[i]);
     }
-    
+    ASSERT(search_key_init(&search_key, &index_spec, target_key_vals));
+
     /* ---- INSERT INTO EMPTY: ---- */
     uint16_t old_free_space_offset = btree_page.free_space_offset;
     BTreeStatus status = btree_node_insert(pager, &btree_page, &cell_contents, &split_result, &index_spec);
@@ -823,7 +860,7 @@ static int test_node_insert() {
     ASSERT(btree_page.free_space_offset == old_free_space_offset - cell_contents.cell_size);
     ASSERT(split_result.split == false);
 
-    status = btree_lower_bound_search(&btree_page, &search_key, &search_result);
+    status = btree_binary_search(&btree_page, &search_key, &search_result, BTREE_LOWER_BOUND);
     ASSERT(status == BTREE_SUCCESS);
     ASSERT(search_result.found == true);
     ASSERT(search_result.exact_match == true);
@@ -844,6 +881,7 @@ static int test_node_insert() {
         target_key_vals[i] = cell_contents.keys[i];
         cell_contents.BTreePayload.row->values[i] = value_copy(cell_contents.keys[i]);
     }
+    ASSERT(search_key_init(&search_key, &index_spec, target_key_vals));
 
     old_free_space_offset = btree_page.free_space_offset;
 
@@ -855,7 +893,7 @@ static int test_node_insert() {
     ASSERT(btree_page.free_space_offset == old_free_space_offset - cell_contents.cell_size);
     ASSERT(split_result.split == false);
 
-    status = btree_lower_bound_search(&btree_page, &search_key, &search_result);
+    status = btree_binary_search(&btree_page, &search_key, &search_result, BTREE_LOWER_BOUND);
     ASSERT(status == BTREE_SUCCESS);
     ASSERT(search_result.found == true);
     ASSERT(search_result.exact_match == true);
@@ -875,6 +913,7 @@ static int test_node_insert() {
         cell_contents.BTreePayload.row->values[i] = value_copy(cell_contents.keys[i]);
         target_key_vals[i] = cell_contents.keys[i];
     }
+    ASSERT(search_key_init(&search_key, &index_spec, target_key_vals));
 
     old_free_space_offset = btree_page.free_space_offset;
 
@@ -884,7 +923,7 @@ static int test_node_insert() {
     ASSERT(btree_page.free_space_offset == old_free_space_offset - cell_contents.cell_size);
     ASSERT(split_result.split == false);
 
-    status = btree_lower_bound_search(&btree_page, &search_key, &search_result);
+    status = btree_binary_search(&btree_page, &search_key, &search_result, BTREE_LOWER_BOUND);
     ASSERT(status == BTREE_SUCCESS);
     ASSERT(search_result.found == true);
     ASSERT(search_result.exact_match == true);
@@ -914,6 +953,7 @@ static int test_node_insert() {
         cell_contents.BTreePayload.row->values[i] = value_copy(cell_contents.keys[i]);
         target_key_vals[i] = cell_contents.keys[i];
     }
+    ASSERT(search_key_init(&search_key, &index_spec, target_key_vals));
 
     old_free_space_offset = btree_page.free_space_offset;
     status = btree_node_insert(pager, &btree_page, &cell_contents, &split_result, &index_spec);
@@ -922,7 +962,7 @@ static int test_node_insert() {
     ASSERT(btree_page.free_space_offset == old_free_space_offset - cell_contents.cell_size);
     ASSERT(split_result.split == false);
 
-    status = btree_lower_bound_search(&btree_page, &search_key, &search_result);
+    status = btree_binary_search(&btree_page, &search_key, &search_result, BTREE_LOWER_BOUND);
     ASSERT(status == BTREE_SUCCESS);
     ASSERT(search_result.found == true);
     ASSERT(search_result.exact_match == true);
@@ -966,14 +1006,17 @@ static int test_node_insert() {
         cell_contents.BTreePayload.row->values[i] = value_copy(cell_contents.keys[i]);
 
     }
+    ASSERT(search_key_init(&search_key, &index_spec, target_key_vals));
     status = btree_node_insert(pager, &btree_page, &cell_contents, &split_result, &index_spec);
     ASSERT(status == BTREE_DUPLICATE_KEY);
     
+    index_spec_free(&index_spec);
     value_free_array(cell_contents.keys, index->key->num_columns);
     value_free_array(cell_contents.BTreePayload.row->values, index->key->num_columns);
     free(target_key_vals);
     index_free(index);
     pager_close(pager);
+    free(search_key.target_key);
     return 0;
 }
 
@@ -1001,9 +1044,11 @@ static int test_leaf_node_split() {
     BTreeCellContents cell_contents = {0};
     ASSERT(cell_contents_init(&cell_contents));    
 
-    Value **target_key_vals = NULL;
+    Value **target_key_vals = (Value **) calloc(index_spec.index_key->num_columns, sizeof(Value *));
+    if (!target_key_vals) {
+        return -1;
+    }
     BTreeSearchKey search_key = {0};
-    ASSERT(search_key_init(&search_key, &index_spec, &target_key_vals));
 
     /* Since we are opening a database with one full page. */
     BTreeSplitResult split_result = {0};
@@ -1016,7 +1061,8 @@ static int test_leaf_node_split() {
         target_key_vals[i] = cell_contents.keys[i];
         cell_contents.BTreePayload.row->values[i] = value_copy(cell_contents.keys[i]);
     }
-    
+    ASSERT(search_key_init(&search_key, &index_spec, target_key_vals));
+
     /* Check metadata. */
     uint16_t cell_count = btree_page.cell_count;
     BTreeStatus status = btree_leaf_node_split(pager, &btree_page, &index_spec, &split_result);
@@ -1064,6 +1110,7 @@ static int test_leaf_node_split() {
 
         separator_offset += get_data_type_size(UNSIGNED_INTEGER);
     }
+    value_free(split_result_separator_key);
     ASSERT(split_result.separator_size == key_view.key_size);
     ASSERT(split_result.right_page == right_page.page->page_num);
     
@@ -1088,6 +1135,8 @@ static int test_leaf_node_split() {
         }
     }
 
+    index_spec_free(&index_spec);
+    split_result_reset(&split_result);
     value_free_array(cell_contents.keys, index->key->num_columns);
     value_free_array(cell_contents.BTreePayload.row->values, index->key->num_columns);
     value_free_array(original_page_keys, index->key->num_columns);
@@ -1095,6 +1144,7 @@ static int test_leaf_node_split() {
     free(target_key_vals);
     index_free(index);
     pager_close(pager);
+    free(search_key.target_key);
     return 0;
 }
 
@@ -1116,8 +1166,10 @@ static int test_root_node_split() {
     ASSERT(index_spec_init(&index_spec, index));
 
     BTreeSearchKey search_key = {0};
-    Value **target_key_vals = NULL;
-    ASSERT(search_key_init(&search_key, &index_spec, &target_key_vals));
+    Value **target_key_vals = (Value **) calloc(index_spec.index_key->num_columns, sizeof(Value *));
+    if (!target_key_vals) {
+        return -1;
+    }
 
     BTreeCellContents cell_contents = {0};
     ASSERT(cell_contents_init(&cell_contents));
@@ -1145,6 +1197,7 @@ static int test_root_node_split() {
         status = btree_node_insert(pager, &btree_page, &cell_contents, &split_result, &index_spec);
 
     }
+    ASSERT(search_key_init(&search_key, &index_spec, target_key_vals));
     ASSERT(status == BTREE_NEEDS_SPLIT);
     ASSERT(split_result.split == true);
 
@@ -1210,12 +1263,14 @@ static int test_root_node_split() {
         key_view.key += get_data_type_size(index_spec.column_types[i]);
     }
 
+    index_spec_free(&index_spec);
     value_free_array(cell_contents.keys, index->key->num_columns);
     value_free_array(cell_contents.BTreePayload.row->values, index->key->num_columns);
     value_free_array(separator_key, index_spec.index_key->num_columns);
     value_free_array(new_root_keys, index_spec.index_key->num_columns);
     free(target_key_vals);
     test_btree_free(&test_btree, &index, &pager);
+    free(search_key.target_key);
     return 0;
 }
 
@@ -1296,8 +1351,10 @@ static int test_exact_key_lookup() {
     ASSERT(index_spec_init(&index_spec, index));
 
     BTreeSearchKey search_key = {0};
-    Value **target_key_vals = NULL;
-    ASSERT(search_key_init(&search_key, &index_spec, &target_key_vals));
+    Value **target_key_vals = (Value **) calloc(index_spec.index_key->num_columns, sizeof(Value *));
+    if (!target_key_vals) {
+        return -1;
+    }
 
     BTreeCellContents cell_contents = {0};
     BTreeSearchResult search_result = {0};
@@ -1307,6 +1364,7 @@ static int test_exact_key_lookup() {
 
         target_key_vals[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
     }
+    ASSERT(search_key_init(&search_key, &index_spec, target_key_vals));
 
     /* ---- TEST LOOKUP EXISTING KEY + KEY IN THE BEGINNING ---- */
     BTreeStatus status = btree_find_exact_key(test_btree.btree, &search_key, &search_result, &cell_contents);
@@ -1350,6 +1408,7 @@ static int test_exact_key_lookup() {
             value_free(cell_contents.keys[i]);
         }
     }
+    ASSERT(search_key_init(&search_key, &index_spec, target_key_vals));
 
     status = btree_find_exact_key(test_btree.btree, &search_key, &search_result, &cell_contents);
     ASSERT(status == BTREE_SUCCESS);
@@ -1386,6 +1445,7 @@ static int test_exact_key_lookup() {
             value_free(cell_contents.keys[i]);
         }
     }
+    ASSERT(search_key_init(&search_key, &index_spec, target_key_vals));
 
     status = btree_find_exact_key(test_btree.btree, &search_key, &search_result, &cell_contents);
     ASSERT(status == BTREE_NOT_FOUND);
@@ -1420,11 +1480,13 @@ static int test_exact_key_lookup() {
     ASSERT(search_result.page == NULL);
     ASSERT(search_result.result_index == UINT16_MAX);
 
+    index_spec_free(&index_spec);
     free(cell_contents.BTreePayload.row->values);
     free(cell_contents.BTreePayload.row);
     free(cell_contents.keys);
     value_free_array(target_key_vals, index_spec.index_key->num_columns);
     test_btree_free(&test_btree, &index, &pager);
+    free(search_key.target_key);
     return 0;
 }
 
@@ -1440,12 +1502,16 @@ static int test_range_query() {
     ASSERT(index_spec_init(&index_spec, index));
 
     BTreeSearchKey start_search_key = {0};
-    Value **start_key_vals = NULL;
-    ASSERT(search_key_init(&start_search_key, &index_spec, &start_key_vals));
+    Value **start_key_vals = (Value **) calloc(index_spec.index_key->num_columns, sizeof(Value *));
+    if (!start_key_vals) {
+        return -1;
+    }
 
     BTreeSearchKey end_search_key = {0};
-    Value **end_key_vals = NULL;
-    ASSERT(search_key_init(&end_search_key, &index_spec, &end_key_vals));
+    Value **end_key_vals = (Value **) calloc(index_spec.index_key->num_columns, sizeof(Value *));
+    if (!end_key_vals) {
+        return -1;
+    }
 
     BTreeRangeResult range_result = {0};
 
@@ -1457,6 +1523,8 @@ static int test_range_query() {
         val = i * 10 + 55;
         end_key_vals[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
     }
+    ASSERT(search_key_init(&start_search_key, &index_spec, start_key_vals));
+    ASSERT(search_key_init(&end_search_key, &index_spec, end_key_vals));
 
     BTreeStatus status = btree_find_range_keys(test_btree.btree, &index_spec, &start_search_key, true, &end_search_key, true, &range_result);
     ASSERT(status == BTREE_SUCCESS);
@@ -1480,7 +1548,8 @@ static int test_range_query() {
         }
         end_key_vals[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
     }
-
+    ASSERT(search_key_init(&start_search_key, &index_spec, start_key_vals));
+    ASSERT(search_key_init(&end_search_key, &index_spec, end_key_vals));
     status = btree_find_range_keys(test_btree.btree, &index_spec, &start_search_key, false, &end_search_key, false, &range_result);
     ASSERT(status == BTREE_SUCCESS);
     ASSERT(range_result.count == 4);
@@ -1492,6 +1561,8 @@ static int test_range_query() {
 
     /* ---- MIXED INCLUSIVE/EXLUSIVE BOUNDS ---- 
      * ---- UNBOUNDED LOWER RANGE ---- */
+    ASSERT(search_key_init(&start_search_key, &index_spec, start_key_vals));
+    ASSERT(search_key_init(&end_search_key, &index_spec, end_key_vals));
     status = btree_find_range_keys(test_btree.btree, &index_spec, NULL, false, &end_search_key, true, &range_result);
     ASSERT(status == BTREE_SUCCESS);
     ASSERT(range_result.count == 6);
@@ -1527,7 +1598,9 @@ static int test_range_query() {
         }
         end_key_vals[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
     }
-
+    ASSERT(search_key_init(&start_search_key, &index_spec, start_key_vals));
+    ASSERT(search_key_init(&end_search_key, &index_spec, end_key_vals));
+    
     status = btree_find_range_keys(test_btree.btree, &index_spec, &start_search_key, true, &end_search_key, true, &range_result);
     ASSERT(status == BTREE_SUCCESS);
     ASSERT(range_result.count == 0);
@@ -1545,7 +1618,9 @@ static int test_range_query() {
         }
         end_key_vals[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
     }
-
+    ASSERT(search_key_init(&start_search_key, &index_spec, start_key_vals));
+    ASSERT(search_key_init(&end_search_key, &index_spec, end_key_vals));
+    
     status = btree_find_range_keys(test_btree.btree, &index_spec, &start_search_key, true, &end_search_key, true, &range_result);
     ASSERT(status == BTREE_SUCCESS);
     ASSERT(range_result.count == 1);
@@ -1568,7 +1643,9 @@ static int test_range_query() {
         }
         end_key_vals[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
     }
-
+    ASSERT(search_key_init(&start_search_key, &index_spec, start_key_vals));
+    ASSERT(search_key_init(&end_search_key, &index_spec, end_key_vals));
+    
     status = btree_find_range_keys(test_btree.btree, &index_spec, &start_search_key, false, &end_search_key, false, &range_result);
     ASSERT(status == BTREE_SUCCESS);
     ASSERT(range_result.count == 5);
@@ -1592,7 +1669,9 @@ static int test_range_query() {
         }
         end_key_vals[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
     }
-
+    ASSERT(search_key_init(&start_search_key, &index_spec, start_key_vals));
+    ASSERT(search_key_init(&end_search_key, &index_spec, end_key_vals));
+    
     status = btree_find_range_keys(test_btree.btree, &index_spec, &start_search_key, false, &end_search_key, false, &range_result);
     ASSERT(status == BTREE_SUCCESS);
     ASSERT(range_result.count == 2);
@@ -1616,7 +1695,9 @@ static int test_range_query() {
         }
         end_key_vals[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
     }
-
+    ASSERT(search_key_init(&start_search_key, &index_spec, start_key_vals));
+    ASSERT(search_key_init(&end_search_key, &index_spec, end_key_vals));
+    
     set_leaf_next(pager->pages[test_btree.page_nums[3]]->page_data, 50);
     status = btree_find_range_keys(test_btree.btree, &index_spec, &start_search_key, false, &end_search_key, false, &range_result);
     ASSERT(status == BTREE_CORRUPT_PAGE);
@@ -1639,9 +1720,12 @@ static int test_range_query() {
     status = btree_find_range_keys(test_btree.btree, &index_spec, &start_search_key, false, &end_search_key, false, &range_result);
     ASSERT(status == BTREE_CORRUPT_PAGE);
 
+    index_spec_free(&index_spec);
     value_free_array(start_key_vals, index_spec.index_key->num_columns);
     value_free_array(end_key_vals, index_spec.index_key->num_columns);
     test_btree_free(&test_btree, &index, &pager);
+    free(start_search_key.target_key);
+    free(end_search_key.target_key);
     return 0;
 }
 
@@ -1690,24 +1774,22 @@ int main(int argc, char *argv[]) {
     generate_output(result, 0, "test_empty_leaf_init");
     result = test_init_internal();
     generate_output(result, 1, "test_init_internal");
-    result = test_lower_bound_search_empty_root();
-    generate_output(result, 2, "test_lower_bound_search_empty_root");
-    result = test_lower_bound_search();
-    generate_output(result, 3, "test_lower_bound_search");
+    result = test_binary_search();
+    generate_output(result, 2, "test_binary_search");
     result = test_root_to_leaf();
-    generate_output(result, 4, "test_root_to_leaf");
+    generate_output(result, 3, "test_root_to_leaf");
     result = test_node_insert();
-    generate_output(result, 5, "test_node_insert");
+    generate_output(result, 4, "test_node_insert");
     result = test_leaf_node_split();
-    generate_output(result, 6, "test_leaf_node_split");
+    generate_output(result, 5, "test_leaf_node_split");
     result = test_root_node_split();
-    generate_output(result, 7, "test_root_node_split");
+    generate_output(result, 6, "test_root_node_split");
     result = test_reachable_page_traversal();
-    generate_output(result, 8, "test_reachable_page_traversal");
+    generate_output(result, 7, "test_reachable_page_traversal");
     result = test_exact_key_lookup();
-    generate_output(result, 9, "test_exact_key_lookup");
+    generate_output(result, 8, "test_exact_key_lookup");
     result = test_range_query();
-    generate_output(result, 10, "test_range_query");
+    generate_output(result, 9, "test_range_query");
 
     return 0;
 }

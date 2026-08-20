@@ -41,7 +41,8 @@ typedef enum operator_type {
     OP_ADD,
     OP_SUB,
     OP_MUL,
-    OP_DIV
+    OP_DIV,
+    OP_ERROR
 } OperatorType;
 
 /* Literal value in expression, e.g., integer, float, string */
