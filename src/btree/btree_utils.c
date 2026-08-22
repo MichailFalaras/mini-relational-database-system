@@ -1025,7 +1025,7 @@ BTreeStatus build_internal_separator_cell(BTreeCellContents *cell_contents, BTre
 
     cell_contents->key_size = split_result->separator_size;
     cell_contents->cell_size = cell_contents->key_size + sizeof(uint32_t);
-    cell_contents->BTreePayload.child_pointer = split_result->right_page;
+    cell_contents->BTreePayload.child_pointer = split_result->left_page;
 
     return BTREE_SUCCESS;
 }
