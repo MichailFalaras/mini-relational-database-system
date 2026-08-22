@@ -188,14 +188,15 @@ extern BTreeStatus btree_page_init_internal(BTreePage *btree_page, uint32_t righ
 /* Lower Bound Binary Search with a target key.
  * Used to traverse through the B+Tree and find correct cell position in a page.
  * Return important information in BTreeSearchResult. */
-BTreeStatus btree_binary_search(BTreePage *btree_page, BTreeSearchKey *search_key,
+extern BTreeStatus btree_binary_search(BTreePage *btree_page, BTreeSearchKey *search_key,
     BTreeSearchResult *search_result, BTreeBinarySearchType mode);
 
 /* Root to leaf traversal using a specific key to ultimately reach
  * a cell position to store data.
  * Also returns important information in BTreeSearchResult. */
-extern BTreeStatus btree_root_to_leaf(BTree *btree, BTreeSearchKey *search_key, BTreeSearchResult *search_result);
-
+extern BTreeStatus btree_root_to_leaf(BTree *btree, BTreeSearchKey *search_key, BTreeSearchResult *search_result, 
+    BTreeBinarySearchType mode);
+    
 /* BTree Node insert type agnostic function.
  * Content being inserted is stored in BTreeCellContents.
  * Returns BTREE_SUCCESS or BTREE_NEEDS_SPLIT/BTreeSplitResult with split boolean value equal to true. */

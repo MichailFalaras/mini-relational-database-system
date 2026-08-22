@@ -54,6 +54,11 @@ BTreeStatus btree_binary_search(BTreePage *btree_page, BTreeSearchKey *search_ke
     if (!btree_page || !btree_page->page || !btree_page->data) {
         return BTREE_INVALID_ARGUMENTS;
     }
+    
+    if (mode != BTREE_LOWER_BOUND && mode != BTREE_UPPER_BOUND) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
     BTreeStatus status = BTREE_ERROR;
 
     /* Initialize BTreeSearchResult. */
@@ -151,12 +156,23 @@ BTreeStatus btree_binary_search(BTreePage *btree_page, BTreeSearchKey *search_ke
 
 /* Root to leaf traversal using a specific key to ultimately reach
  * a cell position to store data.
- * Also returns important information in BTreeSearchResult. */
-BTreeStatus btree_root_to_leaf(BTree *btree, BTreeSearchKey *search_key, BTreeSearchResult *search_result) {
+ * Also returns important information in BTreeSearchResult.
+ * 
+ * BTreeBinarySearchType flexibility.
+ * - If we are searching a range/prefix of key then you want the first
+ * appearance of that prefix you need to search with BTREE_LOWER_BOUND.
+ * - If you want a full key exact root-to-leaf traversal, choosing the correct
+ * child pointers, you need to search with BTREE_UPPER_BOUND.  */
+BTreeStatus btree_root_to_leaf(BTree *btree, BTreeSearchKey *search_key, BTreeSearchResult *search_result, 
+    BTreeBinarySearchType mode) {
     if (!btree || !btree->pager
         || btree->root_page_num >= btree->pager->num_pages
         || btree->root_page_num == 0 || btree->root_page_num == 1
         || !search_key || !search_result) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    if (mode != BTREE_LOWER_BOUND && mode != BTREE_UPPER_BOUND) {
         return BTREE_INVALID_ARGUMENTS;
     }
 
@@ -181,7 +197,7 @@ BTreeStatus btree_root_to_leaf(BTree *btree, BTreeSearchKey *search_key, BTreeSe
     while (btree_page.type != BTREE_LEAF_NODE) {
 
         /* Lower bound binary search to traverse throughout internal nodes. */
-        status = btree_binary_search(&btree_page, search_key, search_result, BTREE_UPPER_BOUND);
+        status = btree_binary_search(&btree_page, search_key, search_result, mode);
         if (status != BTREE_SUCCESS) {
             pager_evict_page(btree->pager, page->page_num);
             return status;
@@ -516,6 +532,11 @@ BTreeStatus btree_internal_node_split(Pager *pager, BTreePage *original_page, BT
         return status;
     }
     
+    if (!btree_page_sync(pager, &btree_right_page)) {
+        pager_release_page(pager, new_page_num);
+        return BTREE_ERROR;
+    }
+    
     /* Split original page's cells in half and transfers them to the right child of the split. */
     status = btree_split_cells(original_page, &btree_right_page, index);
     if (status != BTREE_SUCCESS) {
@@ -561,6 +582,7 @@ BTreeStatus btree_internal_node_split(Pager *pager, BTreePage *original_page, BT
         pager_release_page(pager, new_page_num);
         return status;
     }
+
     /* Get separator cell's child pointer and pass it to the rightmost child pointer of
      * the original page. */
     memcpy(&(original_page->type_specific_data.rightmost_child_pointer), cell_view.payload, sizeof(uint32_t));
@@ -773,7 +795,7 @@ BTreeStatus btree_find_exact_key(BTree *btree, BTreeSearchKey *search_key, BTree
         .result_index = UINT16_MAX
     };
 
-    BTreeStatus status = btree_root_to_leaf(btree, search_key, search_result);
+    BTreeStatus status = btree_root_to_leaf(btree, search_key, search_result, BTREE_UPPER_BOUND);
     
     // Search operation failed
     if (status != BTREE_SUCCESS) {
@@ -899,7 +921,7 @@ BTreeStatus btree_find_range_keys(BTree *btree, BTreeIndexSpec *index, BTreeSear
     if (start_search_key) {
         BTreeSearchResult start_result = {0};
 
-        BTreeStatus status = btree_root_to_leaf(btree, start_search_key, &start_result);
+        BTreeStatus status = btree_root_to_leaf(btree, start_search_key, &start_result, BTREE_LOWER_BOUND);
         if (status != BTREE_SUCCESS) {
             btree_range_result_free(result);
             return status;
