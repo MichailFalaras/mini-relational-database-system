@@ -180,6 +180,18 @@ typedef struct btree_deletion_result {
     void *new_first_key;
 } BTreeDeletionResult;
 
+/* BTree Insertion Result for insertion orchestration. */
+typedef struct btree_insertion_result {
+    // Refers to leaf node
+    bool inserted;
+    uint32_t insertion_page_num;
+
+    // Refers to split propagation and separator
+    // cell insertions to the parents above
+    bool splitted;
+    uint32_t split_levels;
+} BTreeInsertionResult;
+
 /* Initialize btree_page as an Empty Leaf Node. */
 extern BTreeStatus btree_page_init_empty_leaf(BTreePage *btree_page);
 
@@ -233,9 +245,12 @@ extern BTreeStatus btree_find_prefix_keys(BTree *btree, BTreeIndexSpec *index, B
 extern BTreeStatus btree_find_range_keys(BTree *btree, BTreeIndexSpec *index, BTreeSearchKey *start_search_key, 
     bool includes_start, BTreeSearchKey *end_search_key, bool includes_end, BTreeRangeResult *result);
 
-/* Receive BTreeSplitResult from leaf node split and update
- * parent nodes upwards. */
+/* BTree Insertion Orchestration function. */
+extern BTreeStatus btree_insert(BTree *btree, BTreeCellContents *cell_contents, BTreeInsertionResult *insertion_res,
+    BTreeIndexSpec *index);
+
+/* BTree Split Propagation function. */
 extern BTreeStatus btree_split_propagation(BTree *btree, BTreePage *leaf_node, BTreeCellContents *pending_leaf_cell,
-    BTreeSplitResult *split_result, BTreeIndexSpec *index);
+    BTreeSplitResult *split_result, BTreeIndexSpec *index, BTreeInsertionResult *insertion_res);
 
 #endif

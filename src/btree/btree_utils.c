@@ -945,6 +945,7 @@ void *serialized_key_alloc(BTreeKeyView *key_view) {
     return separator_key;
 }
 
+/* Result BTreeSplitResult metadata. */
 void split_result_reset(BTreeSplitResult *split_result) {
     if (!split_result) {
         return;
@@ -959,6 +960,18 @@ void split_result_reset(BTreeSplitResult *split_result) {
     split_result->separator_key = NULL;
     split_result->separator_size = 0;
     split_result->split = false;
+}
+
+/* Reset insertion orchestration result. */
+void insertion_result_reset(BTreeInsertionResult *insertion_res) {
+    if (!insertion_res) {
+        return;
+    }
+
+    insertion_res->inserted = false;
+    insertion_res->splitted = false;
+    insertion_res->insertion_page_num = UINT32_MAX;
+    insertion_res->split_levels = 0;
 }
 
 /* Serialized key to Value array conversion. */

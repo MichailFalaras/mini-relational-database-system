@@ -67,6 +67,9 @@ extern void index_btree_spec_free(BTreeIndexSpec *spec);
 
 /* ---------- Miscellaneous  ---------- */
 
+/* Reset insertion orchestration result. */
+void insertion_result_reset(BTreeInsertionResult *insertion_res);
+
 /* Serialized key to Value array conversion. */
 Value **serialized_key_to_values(void *separator_key, uint32_t num_keys, BTreeIndexSpec *index);
 
