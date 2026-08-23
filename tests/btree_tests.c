@@ -1290,13 +1290,16 @@ static int test_internal_node_split() {
         uint16_t root_cell_count_before =
             root_before.cell_count;
 
+        BTreeInsertionResult insertion_res = {0};
+        insertion_result_reset(&insertion_res);
         /* Propagate leaf split into parent. */
         status = btree_split_propagation(
             test_btree.btree,
             &leaf_page,
             &cell_contents,
             &split_result,
-            &index_spec
+            &index_spec,
+            &insertion_res
         );
         ASSERT(status == BTREE_SUCCESS);
 
@@ -2566,6 +2569,8 @@ static int test_find_prefix_keys() {
             &index_spec
         );
 
+        BTreeInsertionResult insertion_res = {0};
+        insertion_result_reset(&insertion_res);
         if (status == BTREE_NEEDS_SPLIT) {
             split_count++;
 
@@ -2574,7 +2579,8 @@ static int test_find_prefix_keys() {
                 &leaf_page,
                 &cell_contents,
                 &split_result,
-                &index_spec
+                &index_spec,
+                &insertion_res
             );
             ASSERT(status == BTREE_SUCCESS);
         } else {
@@ -3072,7 +3078,9 @@ static int test_split_propagation() {
     ASSERT(status == BTREE_NEEDS_SPLIT);
     ASSERT(split_result.split == true);
 
-    status = btree_split_propagation(test_btree.btree, &btree_page, &cell_contents, &split_result, &index_spec);
+    BTreeInsertionResult insertion_res = {0};
+    insertion_result_reset(&insertion_res);
+    status = btree_split_propagation(test_btree.btree, &btree_page, &cell_contents, &split_result, &index_spec, &insertion_res);
     ASSERT(status == BTREE_SUCCESS);
     ASSERT(pager->num_pages == 5); // 0, 1 (system pages), 2 (leaf_left), 3(leaf_right), 4 (new root)
     ASSERT(test_btree.btree->root_page_num == pager->pages[4]->page_num);
@@ -3176,7 +3184,7 @@ static int test_split_propagation() {
 
         if (status != BTREE_NEEDS_SPLIT) { return -1; }
 
-        status = btree_split_propagation(test_btree.btree, &btree_page, &cell_contents, &split_result, &index_spec);
+        status = btree_split_propagation(test_btree.btree, &btree_page, &cell_contents, &split_result, &index_spec, &insertion_res);
         if (status != BTREE_SUCCESS) {
             return -1;
         }
@@ -3404,7 +3412,7 @@ static int test_split_propagation() {
 
         if (status != BTREE_NEEDS_SPLIT) { return -1; }
 
-        status = btree_split_propagation(test_btree.btree, &btree_page, &cell_contents, &split_result, &index_spec);
+        status = btree_split_propagation(test_btree.btree, &btree_page, &cell_contents, &split_result, &index_spec, &insertion_res);
         if (status != BTREE_SUCCESS) {
             return -1;
         }
