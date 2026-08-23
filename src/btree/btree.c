@@ -1117,14 +1117,79 @@ BTreeStatus btree_find_range_keys(BTree *btree, BTreeIndexSpec *index, BTreeSear
 
 /* ---- B+Tree handling/orchestration ---- */
 
-/* Receive BTreeSplitResult from leaf node split and update
- * parent nodes upwards. */
+/* BTree Insertion Orchestration function.
+ * Calls split propagation if inserting into leaf node
+ * returns BTREE_NEEDS_SPLIT.
+ *
+ * Returns BTreeInsertionResult which contains valid modifications
+ * only if insertion and splitted flags are true. Otherwise, ignore.
+ * (NOTE: Rollback need to be implemented in case of failure)*/
+BTreeStatus btree_insert(BTree *btree, BTreeCellContents *cell_contents, BTreeInsertionResult *insertion_res, BTreeIndexSpec *index) {
+    if (!btree || btree->root_page_num <= SYSTEM_CATALOG_PAGE_NUM 
+        || btree->root_page_num >= MAX_PAGES || !btree->pager
+        || !cell_contents  || !insertion_res || !index) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+    insertion_result_reset(insertion_res);
+
+    /* Create search key and search result for root-to-leaf traversal. */
+    BTreeSearchResult search_result = {0};
+    BTreeSearchKey search_key = {0};
+    search_key.index = index;
+    search_key.num_target_keys = cell_contents->num_keys;
+    search_key.target_key = values_to_serialized_key(cell_contents->keys, search_key.num_target_keys, index);
+    if (!search_key.target_key) {
+        return BTREE_ERROR;
+    }
+
+    BTreeStatus status = btree_root_to_leaf(btree, &search_key, &search_result, BTREE_UPPER_BOUND); 
+    if (status != BTREE_SUCCESS) {
+        free(search_key.target_key);
+        return status;
+    }
+    free(search_key.target_key);
+    search_key.target_key = NULL;
+
+    BTreePage leaf_node = {0};
+    status = btree_page_attach_load_validate(btree->pager, &leaf_node, search_result.page, index);
+    if (status != BTREE_SUCCESS) {
+        return status;
+    }
+
+    BTreeSplitResult split_result = {0};
+    status = btree_node_insert(btree->pager, &leaf_node, cell_contents, &split_result, index);
+    if (status != BTREE_SUCCESS && status != BTREE_NEEDS_SPLIT) {
+        return status;
+    }
+
+    if (status == BTREE_NEEDS_SPLIT) {
+        status = btree_split_propagation(btree, &leaf_node, cell_contents, &split_result, index, insertion_res);
+        if (status != BTREE_SUCCESS) {
+            insertion_result_reset(insertion_res);
+            return status;
+        }
+
+        insertion_res->splitted = true; // Only if split propagation returned successfully
+    } else {
+        insertion_res->insertion_page_num = leaf_node.page->page_num; // If it was inserted immediately
+    }
+
+    insertion_res->inserted = true; // Only if insertion/split propagation returned successfully
+    return BTREE_SUCCESS;
+}
+
+/* BTree Split Propagation function.
+ *
+ * Begins split propagation from when trying to insert
+ * on a leaf node that's full and returns BTREE_NEEDS_SPLIT.
+ * Receive BTreeSplitResult from leaf node split and update
+ * parent nodes upwards.*/
 BTreeStatus btree_split_propagation(BTree *btree, BTreePage *leaf_node, BTreeCellContents *pending_leaf_cell,
-    BTreeSplitResult *split_result, BTreeIndexSpec *index) {
+    BTreeSplitResult *split_result, BTreeIndexSpec *index, BTreeInsertionResult *insertion_res) {
     if (!btree || btree->root_page_num <= SYSTEM_CATALOG_PAGE_NUM 
         || btree->root_page_num >= MAX_PAGES || !btree->pager
         || !leaf_node || !leaf_node->page || !leaf_node->data 
-        || !pending_leaf_cell ||!split_result || !index) {
+        || !pending_leaf_cell ||!split_result || !index || !insertion_res) {
         return BTREE_INVALID_ARGUMENTS;
     }
 
@@ -1143,6 +1208,7 @@ BTreeStatus btree_split_propagation(BTree *btree, BTreePage *leaf_node, BTreeCel
     if (status != BTREE_SUCCESS) {
         return status;
     }
+    insertion_res->split_levels++;
 
     Page *insertion_page = NULL;
     status = choose_split_insertion_page(btree->pager, &insertion_page, pending_leaf_cell, split_result, index);
@@ -1163,6 +1229,7 @@ BTreeStatus btree_split_propagation(BTree *btree, BTreePage *leaf_node, BTreeCel
         split_result_reset(split_result);
         return status;
     }
+    insertion_res->insertion_page_num = insertion_page->page_num;
 
     if (leaf_node->is_root) {
         status = btree_root_split(btree, leaf_node, split_result, index);
@@ -1263,7 +1330,8 @@ BTreeStatus btree_split_propagation(BTree *btree, BTreePage *leaf_node, BTreeCel
                 value_free_array(cell_contents.keys, index->index_key->num_columns);
                 return status;
             }
-        
+            insertion_res->split_levels++;
+            
             Page *insertion_page = NULL;
             status = choose_split_insertion_page(btree->pager, &insertion_page, &cell_contents,
                                                 split_result, index);
