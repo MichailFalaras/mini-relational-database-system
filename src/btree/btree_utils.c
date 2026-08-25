@@ -1015,6 +1015,20 @@ void insertion_result_reset(BTreeInsertionResult *insertion_res) {
     insertion_res->split_levels = 0;
 }
 
+/* Reset merge result metadata. */
+void merge_result_reset(BTreeMergeResult *merge_result) {
+    if (!merge_result) {
+        return;
+    }
+
+    merge_result->needs_merge = false;
+    merge_result->underflowing_page_num = UINT32_MAX;
+    merge_result->sibling_page_num = UINT32_MAX;
+    merge_result->parent_page_num = UINT32_MAX;
+    merge_result->parent_underflowing_cell_index = UINT32_MAX;
+    merge_result->parent_sibling_cell_index = UINT32_MAX;
+}
+
 /* Serialized key to Value array conversion. */
 Value **serialized_key_to_values(void *separator_key, uint32_t num_keys, BTreeIndexSpec *index) {
     if (!separator_key || !index) {

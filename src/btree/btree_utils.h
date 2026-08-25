@@ -79,6 +79,9 @@ void *values_to_serialized_key(Value **key_vals, uint32_t num_keys, BTreeIndexSp
 /* Result BTreeSplitResult metadata. */
 void split_result_reset(BTreeSplitResult *split_result);
 
+/* Reset merge result metadata. */
+void merge_result_reset(BTreeMergeResult *merge_result);
+
 /* Allocate memory for serialized separator key from key_view. */
 void *serialized_key_alloc(BTreeKeyView *key_view);
 

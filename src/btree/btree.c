@@ -1142,6 +1142,12 @@ BTreeStatus btree_leaf_borrow(Pager *pager, uint32_t parent_cell_pointer_index, 
         return status;
     }
 
+    if (!btree_page_sync(pager, lender)) {
+        value_free_array(target_cell_contents.keys, target_cell_contents.num_keys);
+        row_free(target_cell_contents.BTreePayload.row);
+        return BTREE_ERROR;
+    }
+
     /* Insert it into underflowing page. */
     BTreeSplitResult split_result = {0}; // Will not be used, just initialized for parameter
     status = btree_node_insert(pager, underflowing_page, &target_cell_contents, &split_result, index);
@@ -1315,6 +1321,11 @@ BTreeStatus btree_internal_borrow(Pager *pager, uint32_t parent_cell_pointer_ind
         return status;
     }
 
+    if (!btree_page_sync(pager, lender)) {
+        value_free_array(target_cell_contents.keys, target_cell_contents.num_keys);
+        return BTREE_ERROR;
+    }
+
     /* Get parent's cell that points to underflowing page. */
     BTreeCellContents parent_cell_contents = {0};
     status = get_cell_contents(parent, parent_cell_pointer_index, &parent_cell_contents, index);
@@ -1349,7 +1360,6 @@ BTreeStatus btree_internal_borrow(Pager *pager, uint32_t parent_cell_pointer_ind
     }
     value_free_array(parent_cell_contents.keys, parent_cell_contents.num_keys);
 
-
     /* Update lender's cell parent pointer metadata. */
     status = update_children_parent_metadata(pager, underflowing_page, index);
     if (status != BTREE_SUCCESS) {
@@ -1361,6 +1371,10 @@ BTreeStatus btree_internal_borrow(Pager *pager, uint32_t parent_cell_pointer_ind
         status = swap_rightmost_pointer_with_existing_cell(underflowing_page, underflowing_page->cell_count-1, index);
         if (status != BTREE_SUCCESS) {
             return status;
+        }
+
+        if (!btree_page_sync(pager, underflowing_page)) {
+            return BTREE_ERROR;
         }
     }
     
@@ -1408,17 +1422,23 @@ BTreeStatus btree_node_borrow(Pager *pager, uint32_t parent_cell_pointer_index, 
  * 
  * If underflowing node is surrounded by other underflowing nodes:
  * Returns BTREE_NEEDS_MERGE. */
-BTreeStatus btree_node_redistribution(Pager *pager, BTreePage *underflowing_page, BTreeIndexSpec *index) {
+BTreeStatus btree_node_redistribution(Pager *pager, BTreePage *underflowing_page, BTreeIndexSpec *index, BTreeMergeResult *merge_result) {
     if (!underflowing_page || !underflowing_page->page 
-        || !underflowing_page->data || !pager || !index) {
+        || !underflowing_page->data || !pager || !index || !merge_result) {
         return BTREE_INVALID_ARGUMENTS;
     }
+    merge_result_reset(merge_result);
 
     BTreePage parent_page = {0};
     BTreeStatus status = btree_page_attach_load_validate(pager, &parent_page,
                          pager->pages[underflowing_page->parent_pointer], index);
     if (status != BTREE_SUCCESS) {
         return status;
+    }
+
+    /* If parent only has rightmost, there's no borrowing or merging to be done. */
+    if (parent_page.cell_count == 0) {
+        return BTREE_UNDERFLOW_UNRESOLVED;
     }
 
     /* Locate cell of underflowing page in underflowing page's parent. */
@@ -1448,9 +1468,10 @@ BTreeStatus btree_node_redistribution(Pager *pager, BTreePage *underflowing_page
     /* If cell pointer index is bigger than zero, meaning it allows
      * cell_pointer_index - 1, then you can try borrowing from left sibling. */
     BTreePage btree_left_page = {0};
+    uint32_t left_page_num = UINT32_MAX;
     if (cell_pointer_index > 0) {
         uint32_t cell_pointer = get_cell_pointer(parent_page.data, cell_pointer_index-1);
-        uint32_t left_page_num = get_cell_child_pointer(parent_page.data, get_cell_offset(cell_pointer));
+        left_page_num = get_cell_child_pointer(parent_page.data, get_cell_offset(cell_pointer));
 
         Page *left_page = pager_get_page(pager, left_page_num);
         if (!left_page) {
@@ -1487,10 +1508,10 @@ BTreeStatus btree_node_redistribution(Pager *pager, BTreePage *underflowing_page
      * cell_pointer_index + 1 is possible, then you can try borrowing
      * from right sibling. */
     BTreePage btree_right_page = {0};
+    uint32_t right_page_num = UINT32_MAX;
     if (cell_pointer_index < parent_page.cell_count) {
 
         /* Handling for rightmost borrowing. */
-        uint32_t right_page_num = 0;
         if (cell_pointer_index+1 != parent_page.cell_count) {    
             uint32_t cell_pointer = get_cell_pointer(parent_page.data, cell_pointer_index+1);
             right_page_num = get_cell_child_pointer(parent_page.data, get_cell_offset(cell_pointer));
@@ -1528,7 +1549,20 @@ BTreeStatus btree_node_redistribution(Pager *pager, BTreePage *underflowing_page
         }
     }
 
-    /* If left and right sibling underflow too, needs merging. */
+    /* If there's no left or right pages its a parent issue.
+     * BTree needs correct redistribution from the parent upwards. */
+    if (left_page_num == UINT32_MAX && right_page_num == UINT32_MAX) {
+        merge_result->needs_merge = false;
+        return BTREE_UNDERFLOW_UNRESOLVED;
+    }
+
+    /* If no sibling can lend without underflowing, needs merging. */
+    merge_result->needs_merge = true;
+    merge_result->underflowing_page_num = underflowing_page->page->page_num;
+    merge_result->sibling_page_num = (left_page_num != UINT32_MAX) ? left_page_num : right_page_num;
+    merge_result->parent_page_num = parent_page.page->page_num;
+    merge_result->parent_underflowing_cell_index = cell_pointer_index;
+    merge_result->parent_sibling_cell_index = (left_page_num != UINT32_MAX) ? cell_pointer_index-1 : cell_pointer_index+1;
     return BTREE_NEEDS_MERGE;     
 }
 
