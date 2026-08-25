@@ -8,6 +8,7 @@
 #include "../src/data_types/data_types_utils.h"
 #include "../../include/index.h"
 #include "../../include/schema.h"
+#include "../../include/row.h"
 
 /* Initialize btree_page as an Empty Leaf Node. */
 BTreeStatus btree_page_init_empty_leaf(BTreePage *btree_page) {
@@ -381,7 +382,7 @@ BTreeStatus btree_node_delete(Pager *pager, BTreePage *btree_page, BTreeSearchKe
     }
 
     /* Check if page is underflowing. */
-    status = btree_check_underflow(btree_page);
+    status = btree_check_underflow(btree_page, UINT32_MAX);
     if (status == BTREE_NODE_UNDERFLOW) {
         deletion_result->underflow = true;
         deletion_status = BTREE_NODE_UNDERFLOW;
@@ -1115,7 +1116,443 @@ BTreeStatus btree_find_range_keys(BTree *btree, BTreeIndexSpec *index, BTreeSear
 
 }
 
-/* ---- B+Tree handling/orchestration ---- */
+/* Borrow a leaf cell from a sibling leaf node and
+ * update parent internal node key. */
+BTreeStatus btree_leaf_borrow(Pager *pager, uint32_t parent_cell_pointer_index, BTreePage *underflowing_page, BTreePage *parent, BTreePage *lender,
+    BTreeBorrowDirection borrow_dir, BTreeIndexSpec *index) {
+    if (!pager || !parent || parent_cell_pointer_index >= parent->cell_count
+        || !underflowing_page || !lender || !index) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    if (borrow_dir != BTREE_BORROW_FROM_LEFT
+        && borrow_dir != BTREE_BORROW_FROM_RIGHT) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    /* Adjust target cell pointer index according to borrow direction. */
+    uint32_t target_cell_pointer_index = 0;
+    if (borrow_dir == BTREE_BORROW_FROM_LEFT) {
+        target_cell_pointer_index = lender->cell_count-1;
+    } else if (borrow_dir == BTREE_BORROW_FROM_RIGHT) {
+        target_cell_pointer_index = 0;
+    } else {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    /* Get target cell from lender. */
+    BTreeCellContents target_cell_contents = {0};
+    BTreeStatus status = get_cell_contents(lender, target_cell_pointer_index, &target_cell_contents, index);
+    if (status != BTREE_SUCCESS) {
+        value_free_array(target_cell_contents.keys, target_cell_contents.num_keys);
+        row_free(target_cell_contents.BTreePayload.row);
+        return status;
+    }
+
+    /* Remove it from lender. */
+    status = btree_remove_cell(lender, target_cell_pointer_index);
+    if (status != BTREE_SUCCESS) {
+        value_free_array(target_cell_contents.keys, target_cell_contents.num_keys);
+        row_free(target_cell_contents.BTreePayload.row);
+        return status;
+    }
+
+    /* Insert it into underflowing page. */
+    BTreeSplitResult split_result = {0}; // Will not be used, just initialized for parameter
+    status = btree_node_insert(pager, underflowing_page, &target_cell_contents, &split_result, index);
+    if (status != BTREE_SUCCESS) {
+        value_free_array(target_cell_contents.keys, target_cell_contents.num_keys);
+        row_free(target_cell_contents.BTreePayload.row);
+        return status;
+    }
+
+    if (borrow_dir == BTREE_BORROW_FROM_LEFT) {
+
+        /* Find underflowing page's cell in parent page and update its keys
+         * because borrowed cell from left is smaller than underflowing page's first key.*/
+        BTreeCellContents new_parent_cell = {0};
+        status = get_cell_contents(parent, parent_cell_pointer_index, &new_parent_cell, index);
+        if (status != BTREE_SUCCESS) {
+            value_free_array(target_cell_contents.keys, target_cell_contents.num_keys);
+            row_free(target_cell_contents.BTreePayload.row);
+            value_free_array(new_parent_cell.keys, new_parent_cell.num_keys);
+            return status;
+        }
+
+        Value **old_parent_cell_keys = new_parent_cell.keys;
+        uint32_t num_keys = new_parent_cell.num_keys;
+        new_parent_cell.keys = value_array_copy(target_cell_contents.keys, target_cell_contents.num_keys);
+        if (!new_parent_cell.keys) {
+            value_free_array(target_cell_contents.keys, target_cell_contents.num_keys);
+            row_free(target_cell_contents.BTreePayload.row);
+            value_free_array(old_parent_cell_keys, num_keys);
+            return BTREE_ERROR;
+        }
+        value_free_array(old_parent_cell_keys, num_keys);
+        new_parent_cell.num_keys = target_cell_contents.num_keys;
+        new_parent_cell.key_size = target_cell_contents.key_size;
+        new_parent_cell.cell_size = new_parent_cell.key_size + sizeof(uint32_t);
+
+        value_free_array(target_cell_contents.keys, target_cell_contents.num_keys);
+        row_free(target_cell_contents.BTreePayload.row);
+
+        status = btree_replace_cell(pager, parent, parent_cell_pointer_index, &new_parent_cell, index);
+        if (status != BTREE_SUCCESS) {
+            value_free_array(new_parent_cell.keys, new_parent_cell.num_keys);
+            return status;
+        }
+
+        value_free_array(new_parent_cell.keys, new_parent_cell.num_keys);
+    } else {
+        value_free_array(target_cell_contents.keys, target_cell_contents.num_keys);
+        row_free(target_cell_contents.BTreePayload.row);
+
+        /* Get lender's cell. */
+        BTreeCellContents new_lender_first_cell = {0};
+        status = get_cell_contents(lender, 0, &new_lender_first_cell, index);
+        if (status != BTREE_SUCCESS) {
+            value_free_array(new_lender_first_cell.keys, new_lender_first_cell.num_keys);
+            row_free(new_lender_first_cell.BTreePayload.row);
+            return status;
+        }
+
+        /* Find out parent's cell that points to lender. */
+        bool found = false;
+        uint32_t parent_lender_cell_index = 0;
+        for (uint32_t i = 0; i < parent->cell_count+1; i++) {
+            uint32_t cell_pointer = 0;
+            uint32_t child_pointer = 0;
+            if (i == parent->cell_count) {
+                cell_pointer = get_cell_pointer(parent->data, i-1);
+                child_pointer = parent->type_specific_data.rightmost_child_pointer;
+            } else {
+                cell_pointer = get_cell_pointer(parent->data, i);
+                child_pointer = get_cell_child_pointer(parent->data, get_cell_offset(cell_pointer));
+            }
+        
+            if (child_pointer == lender->page->page_num) {
+                found = true;
+                if (i == parent->cell_count) {
+                    i--;
+                }
+                parent_lender_cell_index = i;
+                break;
+            }
+        }
+        
+        if (!found) {
+            value_free_array(new_lender_first_cell.keys, new_lender_first_cell.num_keys);
+            row_free(new_lender_first_cell.BTreePayload.row);
+            return BTREE_CORRUPT_PAGE;
+        }
+
+        /* Since lender's first key is being removed from lender, then we need
+         * to update parent's keys that point to lender. */
+        BTreeCellContents parent_lender_cell = {0};
+        status = get_cell_contents(parent, parent_lender_cell_index, &parent_lender_cell, index);
+        if (status != BTREE_SUCCESS) {
+            value_free_array(new_lender_first_cell.keys, new_lender_first_cell.num_keys);
+            row_free(new_lender_first_cell.BTreePayload.row);
+            return status;
+        }
+
+        Value **old_parent_cell_keys = parent_lender_cell.keys;
+        uint32_t num_keys = parent_lender_cell.num_keys;
+        parent_lender_cell.keys = value_array_copy(new_lender_first_cell.keys, new_lender_first_cell.num_keys);
+        if (!parent_lender_cell.keys) {
+            value_free_array(new_lender_first_cell.keys, new_lender_first_cell.num_keys);
+            row_free(new_lender_first_cell.BTreePayload.row);
+            value_free_array(old_parent_cell_keys, num_keys);
+            return BTREE_ERROR;
+        }
+        value_free_array(old_parent_cell_keys, num_keys);
+        parent_lender_cell.num_keys = new_lender_first_cell.num_keys;
+        parent_lender_cell.key_size = new_lender_first_cell.key_size;
+        parent_lender_cell.cell_size = parent_lender_cell.key_size + sizeof(uint32_t);
+
+        value_free_array(new_lender_first_cell.keys, new_lender_first_cell.num_keys);
+        row_free(new_lender_first_cell.BTreePayload.row);
+        status = btree_replace_cell(pager, parent, parent_lender_cell_index, &parent_lender_cell, index);
+        if (status != BTREE_SUCCESS) {
+            value_free_array(parent_lender_cell.keys, parent_lender_cell.num_keys);
+            return status;
+        }
+
+        value_free_array(parent_lender_cell.keys, parent_lender_cell.num_keys);
+    }
+    
+    return BTREE_SUCCESS;
+}
+
+/* Borrow an internal cell from a parent and promote
+ * lender's internal cell upwards. */
+BTreeStatus btree_internal_borrow(Pager *pager, uint32_t parent_cell_pointer_index, BTreePage *underflowing_page, BTreePage *parent, BTreePage *lender,
+    BTreeBorrowDirection borrow_dir, BTreeIndexSpec *index) {
+    if (!pager || !parent || !parent_cell_pointer_index >= parent->cell_count
+        || !underflowing_page || !lender || !index) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    if (borrow_dir != BTREE_BORROW_FROM_LEFT 
+        && borrow_dir != BTREE_BORROW_FROM_RIGHT) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    /* Adjust target cell pointer index according to
+     * borrow direction. */
+    uint32_t target_cell_pointer_index = 0;
+    if (borrow_dir == BTREE_BORROW_FROM_LEFT) {
+        target_cell_pointer_index = lender->cell_count-1;
+
+        BTreeStatus status = swap_rightmost_pointer_with_existing_cell(lender, target_cell_pointer_index, index);
+        if (status != BTREE_SUCCESS) {
+            return status;
+        }
+
+    } else if (borrow_dir == BTREE_BORROW_FROM_RIGHT) {
+        target_cell_pointer_index = 0;
+    } else {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    /* Get lender's target cell and its contents. */
+    BTreeCellContents target_cell_contents = {0};
+    BTreeStatus status = get_cell_contents(lender, target_cell_pointer_index, &target_cell_contents, index);
+    if (status != BTREE_SUCCESS) {
+        value_free_array(target_cell_contents.keys, target_cell_contents.num_keys);
+        return status;
+    }
+
+    /* Remove it from lender. */
+    status = btree_remove_cell(lender, target_cell_pointer_index);
+    if (status != BTREE_SUCCESS) {
+        value_free_array(target_cell_contents.keys, target_cell_contents.num_keys);
+        return status;
+    }
+
+    /* Get parent's cell that points to underflowing page. */
+    BTreeCellContents parent_cell_contents = {0};
+    status = get_cell_contents(parent, parent_cell_pointer_index, &parent_cell_contents, index);
+    if (status != BTREE_SUCCESS) {
+        value_free_array(target_cell_contents.keys, target_cell_contents.num_keys);
+        value_free_array(parent_cell_contents.keys, parent_cell_contents.num_keys);
+        return status;
+    }
+
+    /* Lender's cell that gets promoted should always point to where the
+     * parent's cell that gets demoted pointed to. */
+    uint32_t temp = target_cell_contents.BTreePayload.child_pointer;
+    target_cell_contents.BTreePayload.child_pointer = parent_cell_contents.BTreePayload.child_pointer;
+    parent_cell_contents.BTreePayload.child_pointer = temp;
+
+    /* Remove it from parent. */
+    status = btree_remove_cell(parent, parent_cell_pointer_index);
+    if (status != BTREE_SUCCESS) {
+        value_free_array(target_cell_contents.keys, target_cell_contents.num_keys);
+        value_free_array(parent_cell_contents.keys, parent_cell_contents.num_keys);
+        return status;
+    }
+
+    /* Insert lender's cell up onto parent node. */
+    BTreeSplitResult split_result = {0}; // Will not be used, just initialized for parameter
+    status = btree_node_insert(pager, parent, &target_cell_contents, &split_result, index);
+    if (status != BTREE_SUCCESS) {
+        value_free_array(target_cell_contents.keys, target_cell_contents.num_keys);
+        value_free_array(parent_cell_contents.keys, parent_cell_contents.num_keys);
+        return status;
+    }
+    value_free_array(target_cell_contents.keys, target_cell_contents.num_keys);
+
+    /* Insert parent node onto underflowing page. */
+    status = btree_node_insert(pager, underflowing_page, &parent_cell_contents, &split_result, index);
+    if (status != BTREE_SUCCESS) {
+        value_free_array(parent_cell_contents.keys, parent_cell_contents.num_keys);
+        return status;
+    }
+    value_free_array(parent_cell_contents.keys, parent_cell_contents.num_keys);
+
+
+    /* Update lender's cell parent pointer metadata. */
+    status = update_children_parent_metadata(pager, underflowing_page, index);
+    if (status != BTREE_SUCCESS) {
+        return status;
+    }
+
+    /* If borrowed from right, because parent key is bigger than all of underflowing page's cells. */
+    if (borrow_dir == BTREE_BORROW_FROM_RIGHT) {
+        status = swap_rightmost_pointer_with_existing_cell(underflowing_page, underflowing_page->cell_count-1, index);
+        if (status != BTREE_SUCCESS) {
+            return status;
+        }
+    }
+    
+    return BTREE_SUCCESS;
+}
+
+/* B+Tree borrow wrapper function.  */
+BTreeStatus btree_node_borrow(Pager *pager, uint32_t parent_cell_pointer_index, BTreePage *underflowing_page, BTreePage *parent, 
+    BTreePage *lender, BTreeBorrowDirection borrow_dir, BTreeIndexSpec *index) {
+    if (!underflowing_page || !underflowing_page->page || !underflowing_page->data
+        || !parent || !parent->page || !parent->data 
+        || !lender || !lender->page || !lender->data
+        || !pager || !index) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    if (borrow_dir != BTREE_BORROW_FROM_LEFT
+        && borrow_dir != BTREE_BORROW_FROM_RIGHT) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    BTreeStatus status = BTREE_SUCCESS;
+    switch (underflowing_page->type) {
+        case BTREE_LEAF_NODE:
+            status = btree_leaf_borrow(pager, parent_cell_pointer_index, underflowing_page, parent, lender, borrow_dir, index);
+            break;
+        case BTREE_INTERNAL_NODE:
+            status = btree_internal_borrow(pager, parent_cell_pointer_index, underflowing_page, parent, lender, borrow_dir, index);
+            break;
+        default:
+            fprintf(stderr, "btree_node_borrow: Underflowing page type does not match.\n");
+            return BTREE_CORRUPT_PAGE;
+    }
+
+    return status;
+}
+
+
+/* ---- B+Tree orchestration ---- */
+
+/* BTree cell redistribution in case of underflowing nodes. 
+ *
+ * Tries to borrow from left sibling first and then from
+ * right sibling if borrowing from the left one wasn't possible.
+ * 
+ * If underflowing node is surrounded by other underflowing nodes:
+ * Returns BTREE_NEEDS_MERGE. */
+BTreeStatus btree_node_redistribution(Pager *pager, BTreePage *underflowing_page, BTreeIndexSpec *index) {
+    if (!underflowing_page || !underflowing_page->page 
+        || !underflowing_page->data || !pager || !index) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    BTreePage parent_page = {0};
+    BTreeStatus status = btree_page_attach_load_validate(pager, &parent_page,
+                         pager->pages[underflowing_page->parent_pointer], index);
+    if (status != BTREE_SUCCESS) {
+        return status;
+    }
+
+    /* Locate cell of underflowing page in underflowing page's parent. */
+    bool found = false;
+    uint32_t cell_pointer_index = 0;
+    for (uint32_t i = 0; i < parent_page.cell_count+1; i++) {
+        uint32_t cell_pointer = 0;
+        uint32_t child_pointer = 0;
+        if (i == parent_page.cell_count) {
+            child_pointer = parent_page.type_specific_data.rightmost_child_pointer;
+        } else {
+            cell_pointer = get_cell_pointer(parent_page.data, i);
+            child_pointer = get_cell_child_pointer(parent_page.data, get_cell_offset(cell_pointer));
+        }
+        
+        if (child_pointer == underflowing_page->page->page_num) {
+            found = true;
+            cell_pointer_index = i;
+            break;
+        }
+    }
+
+    if (!found) {
+        return BTREE_CORRUPT_PAGE;
+    }
+
+    /* If cell pointer index is bigger than zero, meaning it allows
+     * cell_pointer_index - 1, then you can try borrowing from left sibling. */
+    BTreePage btree_left_page = {0};
+    if (cell_pointer_index > 0) {
+        uint32_t cell_pointer = get_cell_pointer(parent_page.data, cell_pointer_index-1);
+        uint32_t left_page_num = get_cell_child_pointer(parent_page.data, get_cell_offset(cell_pointer));
+
+        Page *left_page = pager_get_page(pager, left_page_num);
+        if (!left_page) {
+            return BTREE_ERROR;
+        }
+
+        status = btree_page_attach_load_validate(pager, &btree_left_page, left_page, index);
+        if (status != BTREE_SUCCESS) {
+            return status;
+        }
+
+        if (btree_left_page.cell_count == 0) {
+            return BTREE_CORRUPT_PAGE;
+        }
+
+        /* Check if removal of cell that's going to be lended is going to cause
+         * the lender to underflow too. */
+        status = btree_node_can_lend(&btree_left_page, btree_left_page.cell_count-1, index);
+        if (status != BTREE_SUCCESS && status != BTREE_NODE_UNDERFLOW) {
+            return status;
+        }
+
+        /* If it won't underflow, try borrowing. */
+        if (status != BTREE_NODE_UNDERFLOW) {
+            uint32_t parent_cell_pointer_index = (cell_pointer_index == parent_page.cell_count) ? cell_pointer_index-1 : cell_pointer_index;
+            status = btree_node_borrow(pager, parent_cell_pointer_index, underflowing_page, &parent_page,
+                 &btree_left_page, BTREE_BORROW_FROM_LEFT, index);
+            
+            return status;
+        }
+    }
+
+    /* If cell pointer index is smaller than parent's cell count, meaning
+     * cell_pointer_index + 1 is possible, then you can try borrowing
+     * from right sibling. */
+    BTreePage btree_right_page = {0};
+    if (cell_pointer_index < parent_page.cell_count) {
+
+        /* Handling for rightmost borrowing. */
+        uint32_t right_page_num = 0;
+        if (cell_pointer_index+1 != parent_page.cell_count) {    
+            uint32_t cell_pointer = get_cell_pointer(parent_page.data, cell_pointer_index+1);
+            right_page_num = get_cell_child_pointer(parent_page.data, get_cell_offset(cell_pointer));
+        } else {
+            right_page_num = parent_page.type_specific_data.rightmost_child_pointer;
+        }
+        
+        Page *right_page = pager_get_page(pager, right_page_num);
+        if (!right_page) {
+            return BTREE_ERROR;
+        }
+
+        status = btree_page_attach_load_validate(pager, &btree_right_page, right_page, index);
+        if (status != BTREE_SUCCESS) {
+            return status;
+        }
+
+        if (btree_right_page.cell_count == 0) {
+            return BTREE_CORRUPT_PAGE;
+        }
+
+        /* Check if removal of cell that's going to be lended is going to cause
+         * the lender to underflow too. */
+        status = btree_node_can_lend(&btree_right_page, 0, index);
+        if (status != BTREE_SUCCESS && status != BTREE_NODE_UNDERFLOW) {
+            return status;
+        }
+
+        /* If it won't underflow, try borrowing. */
+        if (status != BTREE_NODE_UNDERFLOW) {
+            status = btree_node_borrow(pager, cell_pointer_index, underflowing_page, &parent_page,
+                 &btree_right_page, BTREE_BORROW_FROM_RIGHT, index);
+
+            return status;
+        }
+    }
+
+    /* If left and right sibling underflow too, needs merging. */
+    return BTREE_NEEDS_MERGE;     
+}
 
 /* BTree Insertion Orchestration function.
  * Calls split propagation if inserting into leaf node
