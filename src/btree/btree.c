@@ -830,25 +830,10 @@ BTreeStatus btree_find_exact_key(BTree *btree, BTreeSearchKey *search_key, BTree
         return BTREE_CORRUPT_PAGE;
     }
 
-    BTreeCellView cell_view = {0};
-
-    // Get cell view 
-    status = get_cell(&leaf, search_result->result_index, &cell_view, search_key->index);
+    // Get cell contents
+    status = get_cell_contents(&leaf, search_result->result_index, cell_contents, search_key->index);
     if (status != BTREE_SUCCESS) {
         return status;
-    }
-
-    // Deserialize the exact-matching cell contents. 
-    // If the process fails, the page is corrupt
-    if (!deserialize_cell_contents(
-        search_key->index->schema, 
-        leaf.data,
-        &leaf,
-        &cell_view,
-        cell_contents,
-        search_key->index)) {
-        
-        return BTREE_CORRUPT_PAGE;
     }
 
     return BTREE_SUCCESS;
@@ -1345,17 +1330,9 @@ BTreeStatus btree_internal_borrow(Pager *pager, uint32_t parent_cell_pointer_ind
     target_cell_contents.BTreePayload.child_pointer = parent_cell_contents.BTreePayload.child_pointer;
     parent_cell_contents.BTreePayload.child_pointer = temp;
 
-    /* Remove it from parent. */
-    status = btree_remove_cell(parent, parent_cell_pointer_index);
-    if (status != BTREE_SUCCESS) {
-        value_free_array(target_cell_contents.keys, target_cell_contents.num_keys);
-        value_free_array(parent_cell_contents.keys, parent_cell_contents.num_keys);
-        return status;
-    }
-
-    /* Insert lender's cell up onto parent node. */
-    BTreeSplitResult split_result = {0}; // Will not be used, just initialized for parameter
-    status = btree_node_insert(pager, parent, &target_cell_contents, &split_result, index);
+    /* Remove it from parent. 
+     * Insert lender's cell up onto parent node. */
+    status = btree_replace_cell(pager, parent, parent_cell_pointer_index, &target_cell_contents, index);
     if (status != BTREE_SUCCESS) {
         value_free_array(target_cell_contents.keys, target_cell_contents.num_keys);
         value_free_array(parent_cell_contents.keys, parent_cell_contents.num_keys);
@@ -1364,6 +1341,7 @@ BTreeStatus btree_internal_borrow(Pager *pager, uint32_t parent_cell_pointer_ind
     value_free_array(target_cell_contents.keys, target_cell_contents.num_keys);
 
     /* Insert parent node onto underflowing page. */
+    BTreeSplitResult split_result = {0};
     status = btree_node_insert(pager, underflowing_page, &parent_cell_contents, &split_result, index);
     if (status != BTREE_SUCCESS) {
         value_free_array(parent_cell_contents.keys, parent_cell_contents.num_keys);
