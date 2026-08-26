@@ -284,7 +284,7 @@ BTreeStatus btree_page_has_enough_space(BTreePage *btree_page, BTreeCellContents
 /* Check if less than 25% of usable space is being taken up.
  *
  * Roots are allowed to contain less than underflow. */
-BTreeStatus btree_check_underflow(BTreePage *btree_page) {
+BTreeStatus btree_check_underflow(BTreePage *btree_page, uint32_t used_space) {
     if (!btree_page || !btree_page->page || !btree_page->data) {
         return BTREE_INVALID_ARGUMENTS;
     }
@@ -296,8 +296,20 @@ BTreeStatus btree_check_underflow(BTreePage *btree_page) {
 
     uint16_t header_size = get_header_size(btree_page->type);
     uint16_t usable_bytes = PAGE_SIZE - header_size;
-    uint16_t used_bytes = (btree_page->cell_count * sizeof(uint32_t)) +
+    uint16_t used_bytes = 0;
+
+    /* If used_space is given UINT32_MAX, it means that it will
+     * check for actual page's used bytes.
+     *
+     * If used_space has a normal value, then just use it.
+     * Used to find out if a page IS GOING TO BE UNDERFLOWING
+     * with a removal of cell. */
+    if (used_space == UINT32_MAX) {
+        used_bytes = (btree_page->cell_count * sizeof(uint32_t)) +
                             (PAGE_SIZE - btree_page->free_space_offset);
+    } else {
+        used_bytes = used_space;
+    }
     
     /* If used bytes are less than 25% of usable page space
      * it means the page is underflowing. */
@@ -313,7 +325,7 @@ BTreeStatus btree_check_underflow(BTreePage *btree_page) {
  * index is equal to the page's cell count then:
  * swap rightmost child pointer with the child pointer contained in
  * the payload*/
-BTreeStatus swap_internal_rightmost_child_pointer(BTreePage *btree_page, BTreeCellContents *cell_contents) {
+BTreeStatus swap_rightmost_pointer_with_inserting_cell(BTreePage *btree_page, BTreeCellContents *cell_contents) {
     if (!btree_page || !btree_page->type 
         || !btree_page->data || !cell_contents) {
         return BTREE_INVALID_ARGUMENTS;
@@ -323,6 +335,35 @@ BTreeStatus swap_internal_rightmost_child_pointer(BTreePage *btree_page, BTreeCe
     btree_page->type_specific_data.rightmost_child_pointer = cell_contents->BTreePayload.child_pointer;
     cell_contents->BTreePayload.child_pointer = old_rightmost_child_pointer;
 
+    return BTREE_SUCCESS;
+}
+
+/* Swap rightmost child pointers with already existing cell's
+ * child pointer and serialize that change back onto the page. */
+BTreeStatus swap_rightmost_pointer_with_existing_cell(BTreePage *btree_page, uint32_t cell_pointer_index, BTreeIndexSpec *index) {
+    if (!btree_page || !btree_page->page || !btree_page->data 
+        || cell_pointer_index >= btree_page->cell_count || !index) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+    
+    BTreeCellContents cell_contents = {0};
+    BTreeStatus status = get_cell_contents(btree_page, cell_pointer_index, &cell_contents, index);
+    if (status != BTREE_SUCCESS) {
+        return status;
+    }
+
+    uint32_t old_rightmost_child_pointer = btree_page->type_specific_data.rightmost_child_pointer;
+    btree_page->type_specific_data.rightmost_child_pointer = cell_contents.BTreePayload.child_pointer;
+    cell_contents.BTreePayload.child_pointer = old_rightmost_child_pointer;
+
+    uint32_t cell_pointer = get_cell_pointer(btree_page->data, cell_pointer_index);
+    uint8_t *write_offset = btree_page->data + get_cell_offset(cell_pointer);
+    if (!serialize_cell_contents(write_offset, btree_page, &cell_contents)) {
+        value_free_array(cell_contents.keys, cell_contents.num_keys);
+        return BTREE_ERROR;
+    }
+
+    value_free_array(cell_contents.keys, cell_contents.num_keys);
     return BTREE_SUCCESS;
 }
 
@@ -974,6 +1015,20 @@ void insertion_result_reset(BTreeInsertionResult *insertion_res) {
     insertion_res->split_levels = 0;
 }
 
+/* Reset merge result metadata. */
+void merge_result_reset(BTreeMergeResult *merge_result) {
+    if (!merge_result) {
+        return;
+    }
+
+    merge_result->needs_merge = false;
+    merge_result->underflowing_page_num = UINT32_MAX;
+    merge_result->sibling_page_num = UINT32_MAX;
+    merge_result->parent_page_num = UINT32_MAX;
+    merge_result->parent_underflowing_cell_index = UINT32_MAX;
+    merge_result->parent_sibling_cell_index = UINT32_MAX;
+}
+
 /* Serialized key to Value array conversion. */
 Value **serialized_key_to_values(void *separator_key, uint32_t num_keys, BTreeIndexSpec *index) {
     if (!separator_key || !index) {
@@ -1135,6 +1190,77 @@ BTreeStatus choose_split_insertion_page(Pager *pager, Page **insertion_page, BTr
     }
 
     return BTREE_SUCCESS;
+}
+
+/* Get cell contents by firstly getting the cell view 
+ * and deserializing needed information. */
+BTreeStatus get_cell_contents(BTreePage *btree_page, uint32_t cell_pointer_index, BTreeCellContents *dest, BTreeIndexSpec *index) {
+    if (!btree_page || !btree_page->page || !btree_page->data
+        || cell_pointer_index >= btree_page->cell_count
+        || !dest || !index) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    BTreeCellView cell_view = {0};
+    BTreeStatus status = get_cell(btree_page, cell_pointer_index, &cell_view, index);
+    if (status != BTREE_SUCCESS) {
+        return status;
+    }
+
+    dest->type = btree_page->type;
+    dest->num_keys = index->index_key->num_columns;
+    dest->key_size = cell_view.key.key_size;
+    dest->cell_size = dest->key_size + cell_view.payload_size;
+
+    if (!deserialize_cell_contents(index->schema, btree_page->data, btree_page, &cell_view, dest, index)) {
+        return BTREE_ERROR;
+    }
+
+    return BTREE_SUCCESS;
+}
+
+/* Check if node can lend a cell to a close by underflowing node
+ * without underflowing itself. */
+BTreeStatus btree_node_can_lend(BTreePage *lender, uint32_t cell_pointer_index, BTreeIndexSpec *index) {
+    if (!lender || cell_pointer_index >= lender->cell_count || !index) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    BTreeCellContents cell_to_be_lended = {0};
+    BTreeStatus status = get_cell_contents(lender, cell_pointer_index, &cell_to_be_lended, index);
+    if (status != BTREE_SUCCESS) {
+        return status;
+    }
+
+    uint32_t used_space = (lender->cell_count-1) * sizeof(uint32_t) +
+                        (PAGE_SIZE - lender->free_space_offset - cell_to_be_lended.cell_size);
+
+    status = btree_check_underflow(lender, used_space);
+
+    value_free_array(cell_to_be_lended.keys, cell_to_be_lended.num_keys);
+    if (cell_to_be_lended.type == BTREE_LEAF_NODE) {
+        row_free(cell_to_be_lended.BTreePayload.row);
+    }
+    return status;
+}
+
+/* Replace cell by removing what was in its position and inserting another one. */
+BTreeStatus btree_replace_cell(Pager *pager, BTreePage *btree_page, uint32_t cell_pointer_index, BTreeCellContents *replacement, BTreeIndexSpec *index) {
+    if (!pager || !btree_page || !btree_page->page || !btree_page->data
+        || cell_pointer_index >= btree_page->cell_count
+        || !replacement || !index) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    BTreeStatus status = btree_remove_cell(btree_page, cell_pointer_index);
+    if (status != BTREE_SUCCESS) {
+        return status;
+    }
+
+    BTreeSplitResult split_result = {0};
+    status = btree_node_insert(pager, btree_page, replacement, &split_result, index);
+
+    return status;
 }
 
 /* ---------- BTreeRangeResult Helpers ---------- */

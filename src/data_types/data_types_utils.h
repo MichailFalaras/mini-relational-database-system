@@ -9,7 +9,8 @@ char *duplicate_string(const char *str);
 // Deallocation helper also used in value_assign for the temporary copy
 void value_free_internal(Value *value);
 
-//Deallocation helper
+// Value array helper functions
+Value **value_array_copy(Value **array, uint32_t num_values);
 void value_free_array(Value **values, uint32_t num_values);
 
 // Comparison Utilities

@@ -27,6 +27,11 @@ typedef enum btree_shift_direction {
     BTREE_SHIFT_DELETE
 } BTreeShiftDirection;
 
+typedef enum btree_borrow_direction {
+    BTREE_BORROW_FROM_LEFT,
+    BTREE_BORROW_FROM_RIGHT
+} BTreeBorrowDirection;
+
 /* Enum for all types of needed offsets. */
 typedef enum btree_offsets {
     BTREE_NODE_TYPE_OFFSET = 0,
@@ -55,6 +60,8 @@ typedef enum btree_status {
     BTREE_NEEDS_SPLIT,
     BTREE_DUPLICATE_KEY,
     BTREE_NODE_UNDERFLOW,
+    BTREE_UNDERFLOW_UNRESOLVED,
+    BTREE_NEEDS_MERGE,
     BTREE_SUCCESS,
     BTREE_NOT_FOUND
 } BTreeStatus;
@@ -192,6 +199,21 @@ typedef struct btree_insertion_result {
     uint32_t split_levels;
 } BTreeInsertionResult;
 
+/* BTree Merge Result for merging underflowing pages that
+ * cannot have their cells redistributed. */
+typedef struct btree_merge_result {
+    bool needs_merge; // Flag to make sure merge is needed
+
+    // Merging always right to left
+    uint32_t underflowing_page_num;
+    uint32_t sibling_page_num;
+
+    // Parent page num and parent cell index references
+    uint32_t parent_page_num;
+    uint32_t parent_underflowing_cell_index;
+    uint32_t parent_sibling_cell_index;
+} BTreeMergeResult;
+
 /* Initialize btree_page as an Empty Leaf Node. */
 extern BTreeStatus btree_page_init_empty_leaf(BTreePage *btree_page);
 
@@ -244,6 +266,26 @@ extern BTreeStatus btree_find_prefix_keys(BTree *btree, BTreeIndexSpec *index, B
 // Find B+ Tree Range of Keys
 extern BTreeStatus btree_find_range_keys(BTree *btree, BTreeIndexSpec *index, BTreeSearchKey *start_search_key, 
     bool includes_start, BTreeSearchKey *end_search_key, bool includes_end, BTreeRangeResult *result);
+
+/* Borrow a leaf cell from a sibling leaf node and
+ * update parent internal node key. */
+extern BTreeStatus btree_leaf_borrow(Pager *pager, uint32_t parent_cell_pointer_index, BTreePage *underflowing_page, BTreePage *parent, BTreePage *lender,
+    BTreeBorrowDirection borrow_dir, BTreeIndexSpec *index);
+  
+/* Borrow an internal cell from a parent and promote
+ * lender's internal cell upwards. */
+extern BTreeStatus btree_internal_borrow(Pager *pager, uint32_t parent_cell_pointer_index, BTreePage *underflowing_page, BTreePage *parent, BTreePage *lender,
+    BTreeBorrowDirection borrow_dir, BTreeIndexSpec *index);
+
+/* B+Tree borrow wrapper function.  */
+extern BTreeStatus btree_node_borrow(Pager *pager, uint32_t parent_cell_pointer_index, BTreePage *underflowing_page, BTreePage *parent, 
+    BTreePage *lender, BTreeBorrowDirection borrow_dir, BTreeIndexSpec *index);
+
+/* ---- B+Tree orchestration ---- */
+
+/* BTree cell redistribution in case of underflowing nodes. */
+extern BTreeStatus btree_node_redistribution(Pager *pager, BTreePage *underflowing_page, BTreeIndexSpec *index,
+    BTreeMergeResult *merge_result);
 
 /* BTree Insertion Orchestration function. */
 extern BTreeStatus btree_insert(BTree *btree, BTreeCellContents *cell_contents, BTreeInsertionResult *insertion_res,

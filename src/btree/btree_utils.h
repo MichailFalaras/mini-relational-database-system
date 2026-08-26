@@ -79,6 +79,9 @@ void *values_to_serialized_key(Value **key_vals, uint32_t num_keys, BTreeIndexSp
 /* Result BTreeSplitResult metadata. */
 void split_result_reset(BTreeSplitResult *split_result);
 
+/* Reset merge result metadata. */
+void merge_result_reset(BTreeMergeResult *merge_result);
+
 /* Allocate memory for serialized separator key from key_view. */
 void *serialized_key_alloc(BTreeKeyView *key_view);
 
@@ -96,13 +99,18 @@ BTreeStatus btree_page_has_enough_space(BTreePage *btree_page, BTreeCellContents
 
 /* Check if less than 25% of usable space is being taken up.
  * Roots are allowed to contain less than underflow. */
-BTreeStatus btree_check_underflow(BTreePage *btree_page);
+BTreeStatus btree_check_underflow(BTreePage *btree_page, uint32_t used_space);
 
 /* Inserting into an internal node and the binary search's returned
  * index is equal to the page's cell count then:
  * swap rightmost child pointer with the child pointer contained in
  * the payload*/
-BTreeStatus swap_internal_rightmost_child_pointer(BTreePage *btree_page, BTreeCellContents *cell_contents);
+BTreeStatus swap_rightmost_pointer_with_inserting_cell(BTreePage *btree_page, BTreeCellContents *cell_contents);
+
+/* Swap rightmost child pointers with already existing cell's
+ * child pointer and serialize that change back onto the page. */
+BTreeStatus swap_rightmost_pointer_with_existing_cell(BTreePage *btree_page, uint32_t cell_pointer_index,
+     BTreeIndexSpec *index);
 
 /* Remove garbage cell pointers and contents by creating a new page and transfering
  * ONLY the valid metadata there. */
@@ -149,6 +157,19 @@ BTreeStatus prepare_propagated_separator_cell(BTreePage *insertion_page, BTreeCe
  * should be inserted in. */
 BTreeStatus choose_split_insertion_page(Pager *pager, Page **insertion_page, BTreeCellContents *cell_contents,
     BTreeSplitResult *split_result, BTreeIndexSpec *index);
+
+/* Get cell contents by firstly getting the cell view 
+ * and deserializing needed information. */
+BTreeStatus get_cell_contents(BTreePage *btree_page, uint32_t cell_pointer_index, BTreeCellContents *dest, BTreeIndexSpec *index);
+
+/* Check if node can lend a cell to a close by underflowing node
+ * without underflowing itself. */
+BTreeStatus btree_node_can_lend(BTreePage *lender, uint32_t cell_pointer_index, BTreeIndexSpec *index);
+
+/* Replace cell by removing what was in its position and inserting another one. */
+BTreeStatus btree_replace_cell(Pager *pager, BTreePage *btree_page, uint32_t cell_pointer_index,
+    BTreeCellContents *replacement, BTreeIndexSpec *index);
+ 
 
 /* ---------- Shift Cell Pointers & Cell Contents ---------- */
 

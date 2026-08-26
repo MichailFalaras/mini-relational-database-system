@@ -64,6 +64,28 @@ void value_free_internal(Value *value) {
     memset(&value->value, 0, sizeof(value->value));
 }
 
+// Deep-copy whole value array.
+Value **value_array_copy(Value **array, uint32_t num_values) {
+    if (!array || num_values == 0) {
+        return NULL;
+    }
+
+    Value **copy = (Value **) calloc(num_values, sizeof(Value *));
+    if (!copy) {
+        return NULL;
+    }
+
+    for (uint32_t i = 0; i < num_values; i++) {
+        copy[i] = value_copy(array[i]);
+        if (!copy[i]) {
+            value_free_array(copy, i);
+            return NULL;
+        }
+    }
+
+    return copy;
+}
+
 // Deallocation helper
 void value_free_array(Value **values, uint32_t num_values) {
     if (values) {
