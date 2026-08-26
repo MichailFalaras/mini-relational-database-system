@@ -95,7 +95,7 @@ BTreeStatus get_key(BTreePage *btree_page, uint16_t cell_index, BTreeKeyView *ke
 BTreeStatus btree_compare(Value **left, Value **right, uint32_t num_vals, int *result);
 
 /* Check if there's enough space to store a Cell and its Cell Pointer. */
-BTreeStatus btree_page_has_enough_space(BTreePage *btree_page, BTreeCellContents *cell_contents);
+BTreeStatus btree_page_has_enough_space(BTreePage *btree_page, uint32_t cell_size);
 
 /* Check if less than 25% of usable space is being taken up.
  * Roots are allowed to contain less than underflow. */

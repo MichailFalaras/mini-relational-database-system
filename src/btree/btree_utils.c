@@ -258,9 +258,9 @@ BTreeStatus btree_compare(Value **left, Value **right, uint32_t num_vals, int *r
 }
 
 /* Check if there's enough space to store a Cell and its Cell Pointer. */
-BTreeStatus btree_page_has_enough_space(BTreePage *btree_page, BTreeCellContents *cell_contents) {
+BTreeStatus btree_page_has_enough_space(BTreePage *btree_page, uint32_t cell_size) {
     if (!btree_page || !btree_page->page
-         || !btree_page->data || !cell_contents) {
+         || !btree_page->data || cell_size == 0) {
         return BTREE_INVALID_ARGUMENTS;
     }
     uint16_t reserved_space = 0;
@@ -272,7 +272,7 @@ BTreeStatus btree_page_has_enough_space(BTreePage *btree_page, BTreeCellContents
     uint16_t available_space = btree_page->free_space_offset - reserved_space;
 
     // +2 for the cell pointer.
-    uint16_t needed_space = cell_contents->cell_size + sizeof(uint32_t);
+    uint16_t needed_space = cell_size + sizeof(uint32_t);
 
     if (available_space < needed_space) {
         return BTREE_NEEDS_SPLIT;
