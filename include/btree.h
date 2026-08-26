@@ -281,6 +281,17 @@ extern BTreeStatus btree_internal_borrow(Pager *pager, uint32_t parent_cell_poin
 extern BTreeStatus btree_node_borrow(Pager *pager, uint32_t parent_cell_pointer_index, BTreePage *underflowing_page, BTreePage *parent, 
     BTreePage *lender, BTreeBorrowDirection borrow_dir, BTreeIndexSpec *index);
 
+/* Merge 2 leaf nodes. */
+extern BTreeStatus btree_leaf_merge(Pager *pager, BTreePage *left, BTreePage *right, BTreePage *parent_page,
+    uint32_t separator_cell_index, BTreeIndexSpec *index);
+
+/* Merge 2 internal nodes. */
+extern BTreeStatus btree_internal_merge(Pager *pager, BTreePage *left, BTreePage *right, BTreePage *parent_page,
+    uint32_t separator_cell_index, BTreeIndexSpec *index);
+    
+/* B+Tree merge wrapper function. */
+extern BTreeStatus btree_node_merge(Pager *pager, BTreeMergeResult *merge_result, BTreeIndexSpec *index);
+
 /* ---- B+Tree orchestration ---- */
 
 /* BTree cell redistribution in case of underflowing nodes. */
