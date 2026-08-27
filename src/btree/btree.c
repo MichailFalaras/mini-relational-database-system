@@ -1450,8 +1450,8 @@ BTreeStatus btree_leaf_merge(Pager *pager, BTreePage *left, BTreePage *right, BT
             return status;
         }
 
-        cell_size += cell_contents.cell_size + i*sizeof(uint32_t);
-        status = btree_page_has_enough_space(left, cell_size);
+        cell_size += cell_contents.cell_size;
+        status = btree_page_has_enough_space(left, cell_size + i*sizeof(uint32_t));
         if (status != BTREE_SUCCESS) {
             if (status == BTREE_NEEDS_SPLIT) {
                 status = BTREE_ERROR;
@@ -1564,8 +1564,8 @@ BTreeStatus btree_internal_merge(Pager *pager, BTreePage *left, BTreePage *right
             return status;
         }
 
-        cell_size += cell_contents.cell_size + i*sizeof(uint32_t);
-        status = btree_page_has_enough_space(left, cell_size);
+        cell_size += cell_contents.cell_size;
+        status = btree_page_has_enough_space(left, cell_size + i*sizeof(uint32_t));
         if (status != BTREE_SUCCESS) {
             if (status == BTREE_NEEDS_SPLIT) {
                 status = BTREE_ERROR;
