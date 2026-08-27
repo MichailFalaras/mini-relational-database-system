@@ -1712,6 +1712,66 @@ BTreeStatus btree_node_merge(Pager *pager, BTreeMergeResult *merge_result, BTree
     return status;
 }
 
+/* B+Tree root *internal* node collapse after merging children. 
+ * (cell_count: 0, child_pointers: 1)
+ * 
+ * Promotes rightmost child pointer as the new root since internal root node
+ * with zero cells/keys (loses separator key after merge) is a temporary state.
+ * 
+ * (NOTE: Update Index's new root page num). */
+BTreeStatus btree_root_collapse(BTree *btree, BTreePage *old_root, BTreeIndexSpec *index) {
+    if (!btree || !btree->pager || !old_root
+        || !old_root->page || !old_root->data || !index) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    /* (NOTE: This should be also checked before calling this function) */
+    if (!old_root->is_root || old_root->cell_count != 0) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    /* If root is an *empty leaf node*, its a valid state. */
+    if (old_root->type == BTREE_LEAF_NODE) {
+        return BTREE_SUCCESS;
+    }
+
+    /* If old root doesn't have a rightmost, corrupt page. */
+    if (old_root->type_specific_data.rightmost_child_pointer == UINT32_MAX) {
+        return BTREE_CORRUPT_PAGE;
+    }
+
+    uint32_t new_root_page_num = old_root->type_specific_data.rightmost_child_pointer;
+    Page *new_root_page = pager_get_page(btree->pager, new_root_page_num);
+    if (!new_root_page) {
+        return BTREE_ERROR;
+    }
+
+    BTreePage btree_new_root = {0};
+    BTreeStatus status = btree_page_attach_load_validate(btree->pager, &btree_new_root, new_root_page, index);
+    if (status != BTREE_SUCCESS) {
+        return status;
+    }
+
+    /* Update new root's metadata. */
+    btree_new_root.is_root = true;
+    btree_new_root.parent_pointer = UINT32_MAX;
+
+    if (!btree_page_sync(btree->pager, &btree_new_root)) {
+        return BTREE_ERROR;
+    }
+
+    /* Update B+Tree root page num.
+     * This should also be passed to Index. */
+    btree->root_page_num = new_root_page_num;
+
+    /* Release / Free old root. */
+    if (!pager_release_page(btree->pager, old_root->page->page_num)) {
+        return BTREE_ERROR;
+    }
+
+    return BTREE_SUCCESS;
+}
+
 /* ---- B+Tree orchestration ---- */
 
 /* BTree cell redistribution in case of underflowing nodes. 
