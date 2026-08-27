@@ -294,7 +294,7 @@ BTreeStatus btree_node_insert(Pager *pager, BTreePage *btree_page, BTreeCellCont
 
     /* First check if what's going to be inserted is a duplicate,
      * then check if there's enough space, update split flag and return BTREE_NEEDS_SPLIT. */
-    status = btree_page_has_enough_space(btree_page, cell_contents);
+    status = btree_page_has_enough_space(btree_page, cell_contents->cell_size);
     if (status != BTREE_SUCCESS) {
         if (status == BTREE_NEEDS_SPLIT) {
             split_result->split = true;
@@ -1412,6 +1412,305 @@ BTreeStatus btree_node_borrow(Pager *pager, uint32_t parent_cell_pointer_index, 
     return status;
 }
 
+/* Merge 2 leaf nodes. */
+BTreeStatus btree_leaf_merge(Pager *pager, BTreePage *left, BTreePage *right, BTreePage *parent_page,
+    uint32_t separator_cell_index, BTreeIndexSpec *index) {
+    if (!pager || !left || !right || !parent_page
+        || separator_cell_index >= parent_page->cell_count
+        || !index) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+    BTreeStatus status = BTREE_SUCCESS;
+    
+    /* If right page has a pointer to the next sibling, store it in order
+     * to update the leaf page sibling metadata after right page's deletion. */
+    Page *next_sibling_page = NULL;
+    BTreePage btree_next_sibling_page = {0};
+    uint32_t right_page_next_sibling = right->type_specific_data.siblings.next_leaf_pointer;
+    if (right_page_next_sibling != UINT32_MAX) {
+        next_sibling_page = pager_get_page(pager, right_page_next_sibling);
+        if (!next_sibling_page) {
+            return BTREE_ERROR;
+        }
+
+        status = btree_page_attach_load_validate(pager, &btree_next_sibling_page, next_sibling_page, index);
+        if (status != BTREE_SUCCESS) {
+            return status;
+        }
+    }
+    
+    /* Check if all cells fit without need for split. */
+    uint32_t cell_size = 0;
+    for (uint32_t i = 0; i < right->cell_count; i++) {
+        BTreeCellContents cell_contents = {0};
+        status = get_cell_contents(right, i, &cell_contents, index);
+        if (status != BTREE_SUCCESS) {
+            value_free_array(cell_contents.keys, cell_contents.num_keys);
+            row_free(cell_contents.BTreePayload.row);
+            return status;
+        }
+
+        cell_size += cell_contents.cell_size;
+        status = btree_page_has_enough_space(left, cell_size + i*sizeof(uint32_t));
+        if (status != BTREE_SUCCESS) {
+            if (status == BTREE_NEEDS_SPLIT) {
+                status = BTREE_ERROR;
+            }
+
+            value_free_array(cell_contents.keys, cell_contents.num_keys);
+            row_free(cell_contents.BTreePayload.row);
+            return status;
+        }
+
+        value_free_array(cell_contents.keys, cell_contents.num_keys);
+        row_free(cell_contents.BTreePayload.row);
+    }
+
+    /* Transfer LEFT <- RIGHT. */
+    for (uint32_t i = 0; i < right->cell_count; i++) {
+        status = btree_transfer_cells(right, i, left, left->cell_count+i, index);
+        if (status != BTREE_SUCCESS) {
+            return status;
+        }
+    }
+    left->cell_count += right->cell_count;
+
+    /* Remove parent cell that references right page. */
+    status = btree_remove_cell(parent_page, separator_cell_index);
+    if (status != BTREE_SUCCESS) {
+        return status;
+    }
+
+    /* Update left page's and right page's next sibling's metadata. */
+    if (right_page_next_sibling != UINT32_MAX) {
+        btree_next_sibling_page.type_specific_data.siblings.previous_leaf_pointer = left->page->page_num;
+
+        if (!btree_page_sync(pager, &btree_next_sibling_page)) {
+            return BTREE_ERROR;
+        }
+    }
+    left->type_specific_data.siblings.next_leaf_pointer = right_page_next_sibling;
+
+    if (!btree_page_sync(pager, left)
+        || !btree_page_sync(pager, parent_page)) {
+        return BTREE_ERROR;
+    }
+
+    /* Release / Free right page. */
+    if (!pager_release_page(pager, right->page->page_num)) {
+        return BTREE_ERROR;
+    }
+
+    /* If parent is root needs special handling if it underflows or has 0 cells. */
+
+    /* Continue "underflow propagation" with parent page as current page. */
+    status = btree_check_underflow(parent_page, UINT32_MAX);
+    if (status != BTREE_SUCCESS) {
+        return status;
+    }
+
+    return BTREE_SUCCESS;
+}
+
+/* Merge 2 internal nodes. */
+BTreeStatus btree_internal_merge(Pager *pager, BTreePage *left, BTreePage *right, BTreePage *parent_page,
+    uint32_t separator_cell_index, BTreeIndexSpec *index) {
+    if (!pager || !left || !right || !parent_page
+        || separator_cell_index >= parent_page->cell_count
+        || !index) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+    
+    /* Get parent's separator cell between left & right. */
+    BTreeCellContents parent_cell_contents = {0};
+    BTreeStatus status = get_cell_contents(parent_page, separator_cell_index, &parent_cell_contents, index);
+    if (status != BTREE_SUCCESS) {
+        value_free_array(parent_cell_contents.keys, parent_cell_contents.num_keys);
+        return status;
+    }
+    /* "Combine" it with left page's rightmost pointer. */
+    parent_cell_contents.BTreePayload.child_pointer = left->type_specific_data.rightmost_child_pointer;
+
+
+    status = btree_page_has_enough_space(left, parent_cell_contents.cell_size);
+    if (status != BTREE_SUCCESS) {
+        if (status == BTREE_NEEDS_SPLIT) {
+            status = BTREE_ERROR;
+        }
+        value_free_array(parent_cell_contents.keys, parent_cell_contents.num_keys);
+        return status;
+    }
+
+    /* Insert it onto left page. */
+    BTreeSplitResult split_result = {0};
+    status = btree_node_insert(pager, left, &parent_cell_contents, &split_result, index);
+    if (status != BTREE_SUCCESS) {
+        if (status == BTREE_NEEDS_SPLIT) {
+            status = BTREE_ERROR;
+        }
+        value_free_array(parent_cell_contents.keys, parent_cell_contents.num_keys);
+        return status;
+    }
+    value_free_array(parent_cell_contents.keys, parent_cell_contents.num_keys);
+
+    /* Check if all cells fit without need for split. */
+    uint32_t cell_size = 0;
+    for (uint32_t i = 0; i < right->cell_count; i++) {
+        BTreeCellContents cell_contents = {0};
+        status = get_cell_contents(right, i, &cell_contents, index);
+        if (status != BTREE_SUCCESS) {
+            value_free_array(cell_contents.keys, cell_contents.num_keys);
+            row_free(cell_contents.BTreePayload.row);
+            return status;
+        }
+
+        cell_size += cell_contents.cell_size;
+        status = btree_page_has_enough_space(left, cell_size + i*sizeof(uint32_t));
+        if (status != BTREE_SUCCESS) {
+            if (status == BTREE_NEEDS_SPLIT) {
+                status = BTREE_ERROR;
+            }
+
+            value_free_array(cell_contents.keys, cell_contents.num_keys);
+            row_free(cell_contents.BTreePayload.row);
+            return status;
+        }
+
+        value_free_array(cell_contents.keys, cell_contents.num_keys);
+        row_free(cell_contents.BTreePayload.row);
+    }
+
+    /* Transfer LEFT <- RIGHT. */
+    for (uint32_t i = 0; i < right->cell_count; i++) {
+        status = btree_transfer_cells(right, i, left, left->cell_count+i, index);
+        if (status != BTREE_SUCCESS) {
+            return status;
+        }
+    }
+    left->type_specific_data.rightmost_child_pointer = right->type_specific_data.rightmost_child_pointer;
+    left->cell_count += right->cell_count;
+
+    /* Remove separator cell from parent. */
+    status = btree_remove_cell(parent_page, separator_cell_index);
+    if (status != BTREE_SUCCESS) {
+        return status;
+    }
+
+    /* Update children parent metadata. */
+    status = update_children_parent_metadata(pager, left, index);
+    if (status != BTREE_SUCCESS) {
+        return status;
+    }
+
+    if (!btree_page_sync(pager, left)
+        || !btree_page_sync(pager, parent_page)) {
+        return BTREE_ERROR;
+    }
+
+    /* Release / Free right page. */
+    if (!pager_release_page(pager, right->page->page_num)) {
+        return BTREE_ERROR;
+    }
+
+    /* If parent is root needs special handling if it underflows or has 0 cells. */
+
+    /* Continue "underflow propagation" with parent page as current page. */
+    status = btree_check_underflow(parent_page, UINT32_MAX);
+    if (status != BTREE_SUCCESS) {
+        return status;
+    }
+
+    return BTREE_SUCCESS;
+}
+
+/* B+Tree merge wrapper function. */
+BTreeStatus btree_node_merge(Pager *pager, BTreeMergeResult *merge_result, BTreeIndexSpec *index) {
+    if (!pager || !merge_result || !index) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    if (!merge_result->needs_merge) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    BTreePage btree_underflowing_page = {0};
+    BTreePage btree_sibling_page = {0};
+    BTreePage btree_parent_page = {0};
+
+    Page *underflowing_page = pager_get_page(pager, merge_result->underflowing_page_num);
+    if (!underflowing_page) {
+        return BTREE_ERROR;
+    }
+
+    Page *sibling_page = pager_get_page(pager, merge_result->sibling_page_num);
+    if (!sibling_page) {
+        return BTREE_ERROR;
+    }
+
+    Page *parent_page = pager_get_page(pager, merge_result->parent_page_num);
+    if (!parent_page) {
+        return BTREE_ERROR;
+    } 
+
+    BTreeStatus status = btree_page_attach_load_validate(pager, &btree_underflowing_page, underflowing_page, index);
+    if (status != BTREE_SUCCESS) {
+        return status;
+    }
+
+    status = btree_page_attach_load_validate(pager, &btree_sibling_page, sibling_page, index);
+    if (status != BTREE_SUCCESS) {
+        return status;
+    }
+
+    status = btree_page_attach_load_validate(pager, &btree_parent_page, parent_page, index);
+    if (status != BTREE_SUCCESS) {
+        return status;
+    }
+
+     /* Figure out which page is left and which is right. */
+    uint32_t separator_cell_index = 0;
+    BTreePage *left = NULL, *right = NULL;
+    if (merge_result->parent_underflowing_cell_index < merge_result->parent_sibling_cell_index) {
+        right = &btree_sibling_page;
+        left = &btree_underflowing_page;
+        separator_cell_index = merge_result->parent_sibling_cell_index;
+    } else {
+        right = &btree_underflowing_page;
+        left = &btree_sibling_page;
+        separator_cell_index = merge_result->parent_underflowing_cell_index;
+    }
+
+    if (btree_underflowing_page.type != btree_sibling_page.type) {
+        return BTREE_CORRUPT_PAGE;
+    }
+
+    if (separator_cell_index > btree_parent_page.cell_count) {
+        return BTREE_CORRUPT_PAGE;
+    }
+
+    /* If separator cell refers to rightmost pointer, then we decrease cell_index
+     * by one. */
+    if (separator_cell_index == btree_parent_page.cell_count) {
+        separator_cell_index--;
+        btree_parent_page.type_specific_data.rightmost_child_pointer = left->page->page_num;
+    }
+
+    switch (btree_underflowing_page.type) {
+        case BTREE_LEAF_NODE:
+            status = btree_leaf_merge(pager, left, right, &btree_parent_page,
+                separator_cell_index, index);
+            break;
+        case BTREE_INTERNAL_NODE:
+            status = btree_internal_merge(pager, left, right, &btree_parent_page,
+                separator_cell_index, index);
+            break;
+        default:
+            fprintf(stderr, "btree_node_merge: Underflowing page type does not exist.\n");
+            return BTREE_CORRUPT_PAGE;
+    }
+
+    return status;
+}
 
 /* ---- B+Tree orchestration ---- */
 
@@ -1734,7 +2033,7 @@ BTreeStatus btree_split_propagation(BTree *btree, BTreePage *leaf_node, BTreeCel
             return status;
         }
 
-        status = btree_page_has_enough_space(&btree_parent, &cell_contents);
+        status = btree_page_has_enough_space(&btree_parent, cell_contents.cell_size);
         if (status != BTREE_SUCCESS && status != BTREE_NEEDS_SPLIT) {
             split_result_reset(split_result);
             value_free_array(cell_contents.keys, index->index_key->num_columns);
@@ -1798,7 +2097,7 @@ BTreeStatus btree_split_propagation(BTree *btree, BTreePage *leaf_node, BTreeCel
                 return status;
             }
 
-            status = btree_page_has_enough_space(&btree_insertion_page, &cell_contents);
+            status = btree_page_has_enough_space(&btree_insertion_page, cell_contents.cell_size);
             if (status == BTREE_NEEDS_SPLIT) {
                 split_result_reset(split_result);
                 value_free_array(cell_contents.keys, index->index_key->num_columns);

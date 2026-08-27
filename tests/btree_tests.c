@@ -1530,13 +1530,13 @@ static int test_internal_node_split() {
 
     status = btree_page_has_enough_space(
         &left_internal,
-        &internal_cell
+        internal_cell.cell_size
     );
     ASSERT(status == BTREE_SUCCESS);
 
     status = btree_page_has_enough_space(
         &right_internal,
-        &internal_cell
+        internal_cell.cell_size
     );
     ASSERT(status == BTREE_SUCCESS);
 
