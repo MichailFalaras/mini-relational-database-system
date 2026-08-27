@@ -292,6 +292,10 @@ extern BTreeStatus btree_internal_merge(Pager *pager, BTreePage *left, BTreePage
 /* B+Tree merge wrapper function. */
 extern BTreeStatus btree_node_merge(Pager *pager, BTreeMergeResult *merge_result, BTreeIndexSpec *index);
 
+/* B+Tree root *internal* node collapse after merging children. 
+ * (NOTE: Update Index's new root page num). */
+BTreeStatus btree_root_collapse(BTree *btree, BTreePage *old_root, BTreeIndexSpec *index);
+
 /* ---- B+Tree orchestration ---- */
 
 /* BTree cell redistribution in case of underflowing nodes. */
