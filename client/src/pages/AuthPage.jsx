@@ -68,7 +68,6 @@ function AuthPage() {
 
 		if (!confirmPassword.trim()) { setRegisterError("Confirmation password is required."); return; }
 		
-		console.log(password, confirmPassword);
 		if (password !== confirmPassword) { setRegisterError("Passwords don't match."); return; }
 
 		setRegisterLoading(true);
@@ -172,7 +171,7 @@ function AuthPage() {
 							{/* Login error */}
 							{loginError && (
 								<div className="error-msg">
-									<AlertCircle style={{ width: "1rem", height: "1rem", flexShrink: 0, color: "#DC02626"}} />
+									<AlertCircle style={{ width: "1rem", height: "1rem", flexShrink: 0, color: "#DC2626"}} />
 									<span>{loginError}</span>
 								</div>
 							)}
@@ -207,6 +206,7 @@ function AuthPage() {
 							</div>
 							
 							<button 
+								type="button"
 								id="guest-login-btn"
 								onClick={handleGuestLogin}
 							>
@@ -297,13 +297,13 @@ function AuthPage() {
 								disabled={registerLoading}	
 							>
 								{registerLoading
-									? <><Loader2 className="loader-icon"/>Signing in</>
+									? <><Loader2 className="loader-icon"/>Creating account...</>
 									: <>Create account <ArrowRight /></>
 								}
 							</button>
 
 							<p className="footer-msg">
-								{"Don't have an account "} 
+								{"Already have an account? "} 
 								<button
 									type="button"
 									onClick={() => setMode("login")}
