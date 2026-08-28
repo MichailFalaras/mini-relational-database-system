@@ -134,10 +134,6 @@ BTreeStatus propagate_first_key_to_parents(Pager *pager, BTreePage *btree_page, 
  * DOESNT update the Page Data, just for cell viewing and accesibility. */
 BTreeStatus get_cell(BTreePage *btree_page, uint16_t cell_index, BTreeCellView *cell, BTreeIndexSpec *index);
 
-// Updates Cell Pointer with new [ offset + size ]
-BTreeStatus set_cell(BTree *btree, BTreePage *btree_page, BTreeIndexSpec *index, BTreeSearchResult *search_result,
-                    BTreeCellContents *cell_contents);
-
 /* Insert new cell's Cell Pointer and its contents onto a BTreePage AFTER BINARY SEARCH. */
 BTreeStatus insert_cell(Pager *pager, BTreePage *btree_page, BTreeIndexSpec *index, BTreeSearchResult *search_result,
     BTreeCellContents *cell_contents);
