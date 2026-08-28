@@ -125,6 +125,8 @@ BTreeStatus connect_sibling_leaf_nodes(Pager *pager, BTreePage *btree_page1, BTr
 /* Find the leftmost leaf page */
 BTreeStatus btree_find_leftmost_page(BTree *btree, BTreeIndexSpec *index, Page **res_page);
 
+/* Propagate first key change to parents. */
+BTreeStatus propagate_first_key_to_parents(Pager *pager, BTreePage *btree_page, BTreeCellContents *first_cell, BTreeIndexSpec *index);
 
 /* ---------- Cell Operations/Interface ---------- */
 

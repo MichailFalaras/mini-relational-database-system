@@ -1289,6 +1289,79 @@ BTreeStatus btree_replace_cell(Pager *pager, BTreePage *btree_page, uint32_t cel
     return status;
 }
 
+/* Propagate first key change to parents. */
+BTreeStatus propagate_first_key_to_parents(Pager *pager, BTreePage *btree_page, BTreeCellContents *first_cell, BTreeIndexSpec *index) {
+    if (!pager || !btree_page || !first_cell || !index) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    BTreePage current = *btree_page;
+    while (!current.is_root) {
+        /* Get parent in memory. */
+        Page *parent = pager_get_page(pager, current.parent_pointer);
+        if (!parent) {
+            return BTREE_ERROR;
+        }
+
+        BTreePage btree_parent = {0};
+        BTreeStatus status = btree_page_attach_load_validate(pager, &btree_parent, parent, index);
+        if (status != BTREE_SUCCESS) {
+            return status;
+        }
+
+        /* Find child's cell index. */
+        bool found = false;
+        uint32_t cell_index = 0;
+        for (uint32_t i = 0; i < btree_parent.cell_count; i++) {
+            uint32_t cell_pointer = get_cell_pointer(btree_parent.data, i);
+            uint32_t child_pointer = get_cell_child_pointer(btree_parent.data, get_cell_offset(cell_pointer));
+
+            if (child_pointer == current.page->page_num) {
+                found = true;
+                cell_index = i;
+                break;
+            }
+        }
+
+        if (btree_parent.type_specific_data.rightmost_child_pointer == current.page->page_num) {
+            found = true;
+            cell_index = btree_parent.cell_count;
+        }
+
+        if (!found) {
+            return BTREE_ERROR;
+        }
+        
+        /* If cell index isn't 0, update cell[cell_index-1]'s keys with child's. */
+        if (cell_index > 0) {
+            BTreeCellContents parent_first_cell = {0};
+            status = get_cell_contents(&btree_parent, cell_index-1, &parent_first_cell, index);
+            if (status != BTREE_SUCCESS) {
+                return status;
+            }
+            value_free_array(parent_first_cell.keys, parent_first_cell.num_keys);
+
+            parent_first_cell.num_keys = first_cell->num_keys;
+            parent_first_cell.key_size = first_cell->key_size;
+            parent_first_cell.keys = first_cell->keys;
+            parent_first_cell.cell_size = parent_first_cell.key_size + sizeof(uint32_t);
+
+            status = btree_replace_cell(pager, &btree_parent, cell_index-1, &parent_first_cell, index);
+            if (status != BTREE_SUCCESS) {
+                return status;
+            }
+
+            break;
+        }
+
+        /* If cell index is 0, continue propagating to the parent. */
+        current = btree_parent;
+    }
+    
+    return BTREE_SUCCESS;
+}
+
+
 /* ---------- BTreeRangeResult Helpers ---------- */
 
 /* The caller owns the BTreeRangeResult struct */
