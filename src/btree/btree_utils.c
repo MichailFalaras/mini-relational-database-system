@@ -1015,6 +1015,32 @@ void insertion_result_reset(BTreeInsertionResult *insertion_res) {
     insertion_res->split_levels = 0;
 }
 
+/* Reset deletion result. */
+void deletion_result_reset(BTreeDeletionResult *deletion_res) {
+    if (!deletion_res) {
+        return;
+    }
+
+    deletion_res->deleted = false;
+    deletion_res->underflow = false;
+    deletion_res->page_num = UINT32_MAX;
+    deletion_res->first_key_changed = false;
+
+    if (deletion_res->first_cell.keys) {
+        value_free_array(deletion_res->first_cell.keys, deletion_res->first_cell.num_keys);
+        deletion_res->first_cell.keys = NULL;
+    }
+
+    if (deletion_res->first_cell.BTreePayload.row) {
+        row_free(deletion_res->first_cell.BTreePayload.row);
+        deletion_res->first_cell.BTreePayload.row = NULL;
+    }
+    
+    deletion_res->first_cell.num_keys = 0;
+    deletion_res->first_cell.key_size = 0;
+    deletion_res->first_cell.cell_size = 0;
+}
+
 /* Reset merge result metadata. */
 void merge_result_reset(BTreeMergeResult *merge_result) {
     if (!merge_result) {
