@@ -5,14 +5,12 @@ import "./../styles/sidebar.css";
 
 
 
-function Sidebar({ activeConn, tables, indexes, isRefreshing}) {
+function Sidebar({ activeConn, tables, indexes, isRefreshing, activeTable, onSelectTable }) {
 	// Table-related state
 	const [expandTables, setExpandTables] = useState(true);
-	const [activeTable, setActiveTable] = useState(tables?.[0]?.name ?? "");
 
 	// Index-related state
 	const [expandIndexes, setExpandIndexes] = useState(false);
-
 
 	// Sidebar input state
 	const [sidebarSearch, setSidebarSearch] = useState("");
@@ -82,12 +80,12 @@ function Sidebar({ activeConn, tables, indexes, isRefreshing}) {
 										)
 										: (
 										filteredTables?.map((table) => {
-											const isActive = table?.name === activeTable;
+											const isActive = table.name === activeTable;
 
 											return (
 												<button 
 													key={table?.name} 
-													onClick={() => setActiveTable(table?.name)}
+													onClick={() => onSelectTable(table.name)}
 													className={`table-option-btn ${isActive ? "active" : ""}`}
 												>
 													<Table2 className={`table-icon ${isActive ? "active" : ""}`} />
