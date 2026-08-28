@@ -2,9 +2,11 @@ import { useState } from "react";
 import { Trash2, Check, ArrowRight, Plus, Database } from "lucide-react";
 import "./../styles/database-dropdown.css";
 
-const ACTIVE_ID = 1;
 
-function DatabaseDropdown({ connections, activeConnId, onSelect, onConnectExisting, onClose, onDelete, onNewConnection, onCreateDatabase }) {
+
+function DatabaseDropdown({ connections, activeConnId, onConnect, onSelectConnection,
+    onClose, onDeleteConnection, onNewConnection, onCreateDatabase
+}) {
 	// State that keeps track of the "to-be-deleted" database (User clicked trash icon)
 	const [confirmId, setConfirmId] = useState(null);
 
@@ -40,7 +42,7 @@ function DatabaseDropdown({ connections, activeConnId, onSelect, onConnectExisti
 									<button 
 										className="confirm-delete-option"
 										onClick={() => {
-											onDelete(conn.id);
+											onDeleteConnection(conn.id);
 											setConfirmId(null);
 										}}
 									>
@@ -56,11 +58,11 @@ function DatabaseDropdown({ connections, activeConnId, onSelect, onConnectExisti
 								className={`database-option ${isActive ? "is-active" : ""}`}
 								onClick={() => {
 									if (conn.status === "connected") {
-										onSelect(conn.id);
+										onSelectConnection(conn.id);
 										onClose();
 									}
 									else {
-										onConnectExisting(conn);
+										onConnect(conn);
 									}
 								}}
 							>
@@ -83,7 +85,13 @@ function DatabaseDropdown({ connections, activeConnId, onSelect, onConnectExisti
 								)}
 
 								{!isActive && (
-									<button className="delete-disconnected-option">
+									<button 
+										className="delete-disconnected-option"
+										onClick={(event) => {
+											event.stopPropagation();
+											setConfirmId(conn.id);
+										}}
+									>
 										<Trash2 style={{width: "0.75rem", height: "0.75rem"}}/>
 									</button>
 								)}

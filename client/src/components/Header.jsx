@@ -4,9 +4,12 @@ import DatabaseDropdown from "./DatabaseDropdown.jsx";
 import UserMenu from "./UserMenu.jsx";
 import "./../styles/header.css";
 
-function Header({ connections, activeConn, isRefreshing, setIsRefreshing, showSettings, setShowSettings }) {
-	const [showDropdown, setShowDropdown] = useState(false);
+function Header({ connections, activeConn, onConnect, onSelectConnection, onDeleteConnection, 
+	onNewConnection, onCreateDatabase, isRefreshing, onRefresh, showSettings, setShowSettings, onSignOut }) {
 	
+	const [showDropdown, setShowDropdown] = useState(false);
+
+
 	return (
 		<header id="header">
 
@@ -50,6 +53,11 @@ function Header({ connections, activeConn, isRefreshing, setIsRefreshing, showSe
 					<DatabaseDropdown
 						connections={connections} 
 						activeConnId={activeConn?.id}
+						onConnect={onConnect}
+						onSelectConnection={onSelectConnection}
+						onDeleteConnection={onDeleteConnection}
+						onNewConnection={onNewConnection}
+						onCreateDatabase={onCreateDatabase}
 						onClose={() => setShowDropdown(false)}
 					/>
 				)}
@@ -71,6 +79,7 @@ function Header({ connections, activeConn, isRefreshing, setIsRefreshing, showSe
 					id="refresh-btn" 
 					className={isRefreshing ? "refreshing" : ""}
 					disabled={isRefreshing}
+					onClick={onRefresh}
 				>
 					<RefreshCcw 
 						style={{ width: "0.875rem", height: "0.875rem" }}
@@ -87,11 +96,9 @@ function Header({ connections, activeConn, isRefreshing, setIsRefreshing, showSe
 				</button>
 				
 				<div className="vertical-sep"/>
-				<UserMenu />
+
+				<UserMenu onSignOut={onSignOut}/>
 			</div>
-
-
-
 		</header>
 	);
 }
