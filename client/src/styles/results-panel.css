@@ -1,0 +1,83 @@
+/* ---------- Home Page > Results Panel ---------- */
+
+#results-panel {
+    flex: 1 1 0%;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background-color: #FFFFFF;
+}
+
+/* ---------- Home Page > Results Panel > Results Header ---------- */
+
+#results-header {
+    display: flex;
+    align-items: center;
+    height: 2.25rem;
+    flex-shrink: 0;
+    background-color: #FFFFFF;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.07);
+}
+
+.results-tab-btn {
+    position: relative;
+    height: 100%;
+    padding: 0 1rem;
+    font-size: 0.75rem;
+    font-weight: 500;
+    text-transform: capitalize;
+    background-color: transparent;
+    color: #9CA3AF;
+    border: none;
+    transition: color 150ms;
+}
+
+.results-tab-btn:not(.active):hover { color: #6B7280; }
+
+.results-tab-btn.active { color: #4F46E5; }
+
+#active-tab-styles {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 0.125rem; 
+    border-top-left-radius: 0.125rem;  
+    border-top-right-radius: 0.125rem;
+    background-color: #4F46E5;
+}
+
+.row-count {
+    margin-left: 0.375rem;
+    padding: 0 0.375rem;
+    border: none;
+    border-radius: 50%;
+    font-size: 10px;
+    background-color: rgba(79, 70, 229, 0.08);
+    color: #4F46E5;
+}
+
+#execution-time {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;       
+    padding-right: 0.75rem;
+}
+
+#execution-time > div {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    font-size: 12px;
+    color: #9CA3AF;
+}
+
+/* ---------- Home Page > Results Panel > Results Area ---------- */
+
+#results-area {
+    flex: 1 1 0%;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
