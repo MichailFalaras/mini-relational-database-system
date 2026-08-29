@@ -1,0 +1,60 @@
+/* ---------- Home Page > SQL Editor ---------- */
+
+#sql-editor {
+    display: flex;
+    height: 100%;
+    background-color: #F8F9FB;
+}
+
+#sql-editor-line-numbers {
+    flex-shrink: 0;
+    width: 2.75rem; 
+    padding: 0.75rem 0.625rem 0.75rem 0;
+    text-align: right;
+    user-select: none;
+    overflow: hidden;
+    border-right: 1px solid rgba(0, 0, 0, 0.07);
+    background-color: #F4F5F7;
+    color: #C8CDD6;
+    font-family: 'JetBrains Mono', monospace;
+    line-height: 1.65;
+}
+
+#sql-editor-area {
+    position: relative;
+    flex: 1 1 0%;
+    overflow: hidden;
+}
+
+#sql-editor-format {
+    position: absolute;
+    inset: 0;
+    margin: 0;
+    padding: 0.75rem 1rem; 
+    overflow: hidden;
+    pointer-events: none;
+    color: #374151;
+    white-space: pre;
+    overflow-wrap: normal;
+    font-family: 'JetBrains Mono', monospace;
+    line-height: 1.65;
+}
+
+#sql-editor-text {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    padding: 0.75rem 1rem; 
+    background-color: transparent;
+    color: transparent;
+    caret-color: #6366F1;
+    white-space: pre;
+    overflow-wrap: normal;
+    overflow: auto;
+    resize: none;
+    outline: none;
+    font-family: 'JetBrains Mono', monospace;
+    line-height: 1.65;
+    border: none;
+}
