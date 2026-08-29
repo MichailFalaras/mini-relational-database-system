@@ -180,11 +180,12 @@ typedef struct btree_range_result {
 
 /* BTree Deletion Result after deletion. */
 typedef struct btree_deletion_result {
+    bool deleted;
     bool underflow;
     uint32_t page_num;
-    bool deleted;
+
     bool first_key_changed;
-    void *new_first_key;
+    BTreeCellContents first_cell;
 } BTreeDeletionResult;
 
 /* BTree Insertion Result for insertion orchestration. */
@@ -237,13 +238,16 @@ extern BTreeStatus btree_root_to_leaf(BTree *btree, BTreeSearchKey *search_key, 
 extern BTreeStatus btree_node_insert(Pager *pager, BTreePage *btree_page, BTreeCellContents *cell_contents,
                             BTreeSplitResult *split_result, BTreeIndexSpec *index);
 
+/* BTree type agnostic deletion of cell through search key. */
+extern BTreeStatus btree_node_delete(Pager *pager, BTreePage *btree_page, BTreeSearchKey *search_key, BTreeDeletionResult *deletion_result);
+
 /* BTree Leaf Node Split.
  * Returns important split information in BTreeSplitResult. */
 extern BTreeStatus btree_leaf_node_split(Pager *pager, BTreePage *original_page, BTreeIndexSpec *index,
                                 BTreeSplitResult *split_result);
 /* BTree Internal Node Split. 
  * Returns split information BTreeSplitResult. */
-BTreeStatus btree_internal_node_split(Pager *pager, BTreePage *original_page, BTreeIndexSpec *index,
+extern BTreeStatus btree_internal_node_split(Pager *pager, BTreePage *original_page, BTreeIndexSpec *index,
                                 BTreeSplitResult *split_result);
 
 /* BTree Root Node Split.
@@ -294,7 +298,7 @@ extern BTreeStatus btree_node_merge(Pager *pager, BTreeMergeResult *merge_result
 
 /* B+Tree root *internal* node collapse after merging children. 
  * (NOTE: Update Index's new root page num). */
-BTreeStatus btree_root_collapse(BTree *btree, BTreePage *old_root, BTreeIndexSpec *index);
+extern BTreeStatus btree_root_collapse(BTree *btree, BTreePage *old_root, BTreeIndexSpec *index);
 
 /* ---- B+Tree orchestration ---- */
 
@@ -305,6 +309,9 @@ extern BTreeStatus btree_node_redistribution(Pager *pager, BTreePage *underflowi
 /* BTree Insertion Orchestration function. */
 extern BTreeStatus btree_insert(BTree *btree, BTreeCellContents *cell_contents, BTreeInsertionResult *insertion_res,
     BTreeIndexSpec *index);
+
+/* BTree deletion & underflow orchestration. */
+extern BTreeStatus btree_delete(BTree *btree, BTreeCellContents *cell_contents, BTreeDeletionResult *deletion_res, BTreeIndexSpec *index);
 
 /* BTree Split Propagation function. */
 extern BTreeStatus btree_split_propagation(BTree *btree, BTreePage *leaf_node, BTreeCellContents *pending_leaf_cell,

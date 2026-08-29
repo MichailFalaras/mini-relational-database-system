@@ -70,6 +70,9 @@ extern void index_btree_spec_free(BTreeIndexSpec *spec);
 /* Reset insertion orchestration result. */
 void insertion_result_reset(BTreeInsertionResult *insertion_res);
 
+/* Reset deletion result. */
+void deletion_result_reset(BTreeDeletionResult *deletion_res);
+
 /* Serialized key to Value array conversion. */
 Value **serialized_key_to_values(void *separator_key, uint32_t num_keys, BTreeIndexSpec *index);
 
@@ -122,16 +125,14 @@ BTreeStatus connect_sibling_leaf_nodes(Pager *pager, BTreePage *btree_page1, BTr
 /* Find the leftmost leaf page */
 BTreeStatus btree_find_leftmost_page(BTree *btree, BTreeIndexSpec *index, Page **res_page);
 
+/* Propagate first key change to parents. */
+BTreeStatus propagate_first_key_to_parents(Pager *pager, BTreePage *btree_page, BTreeCellContents *first_cell, BTreeIndexSpec *index);
 
 /* ---------- Cell Operations/Interface ---------- */
 
 /* BTreeCellView RAM Component Interface for easy cell access with offset and its length.
  * DOESNT update the Page Data, just for cell viewing and accesibility. */
 BTreeStatus get_cell(BTreePage *btree_page, uint16_t cell_index, BTreeCellView *cell, BTreeIndexSpec *index);
-
-// Updates Cell Pointer with new [ offset + size ]
-BTreeStatus set_cell(BTree *btree, BTreePage *btree_page, BTreeIndexSpec *index, BTreeSearchResult *search_result,
-                    BTreeCellContents *cell_contents);
 
 /* Insert new cell's Cell Pointer and its contents onto a BTreePage AFTER BINARY SEARCH. */
 BTreeStatus insert_cell(Pager *pager, BTreePage *btree_page, BTreeIndexSpec *index, BTreeSearchResult *search_result,

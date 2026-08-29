@@ -329,20 +329,23 @@ BTreeStatus btree_node_insert(Pager *pager, BTreePage *btree_page, BTreeCellCont
     return BTREE_SUCCESS;
 }
 
+/* BTree type agnostic deletion of cell through search key.
+ *
+ * Returns deletion result to caller. */
 BTreeStatus btree_node_delete(Pager *pager, BTreePage *btree_page, BTreeSearchKey *search_key, BTreeDeletionResult *deletion_result) {
     if (!pager || !btree_page || !btree_page->page
         || !btree_page->data || !search_key 
         || !search_key->index || !deletion_result) {
         return BTREE_INVALID_ARGUMENTS;
     }
-    BTreeStatus deletion_status = BTREE_SUCCESS;
+
+    if (btree_page->cell_count == 0) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
 
     /* Initialize deletion result metadata. */
-    deletion_result->underflow = false; // To change only if there's underflow
+    deletion_result_reset(deletion_result);
     deletion_result->page_num = btree_page->page->page_num;
-    deletion_result->deleted = false;
-    deletion_result->first_key_changed = false;
-    deletion_result->new_first_key = NULL;
 
     /* Find index of exact cell we want to delete.*/
     BTreeSearchResult search_result = {0};
@@ -357,54 +360,60 @@ BTreeStatus btree_node_delete(Pager *pager, BTreePage *btree_page, BTreeSearchKe
         return BTREE_NOT_FOUND;
     }
 
-    /* Acquire serialized first key before removing the cell. */
-    BTreeKeyView key_view = {0};
-    void *first_key = NULL;
-    if (search_result.result_index == 0 && btree_page->cell_count > 1) {
-        /* index 1 because we are choosing the key that is GOING TO BE the first key
-        * after deletion of the first one. */
-        status = get_key(btree_page, 1, &key_view, search_key->index);
-        if (status != BTREE_SUCCESS) {
-            return status;
-        }
-        
-        first_key = serialized_key_alloc(&key_view);
-        if (!first_key) {
-            return BTREE_ERROR;
-        }
+    /* Figure out if cell removal is going to cause underflow. */
+    BTreeCellContents cell_to_be_removed = {0};
+    status = get_cell_contents(btree_page, search_result.result_index, &cell_to_be_removed, search_key->index);
+    if (status != BTREE_SUCCESS) {
+        value_free_array(cell_to_be_removed.keys, cell_to_be_removed.num_keys);
+        if (cell_to_be_removed.type == BTREE_LEAF_NODE) { row_free(cell_to_be_removed.BTreePayload.row); }
+        return status;
+    }
+
+    uint32_t used_space = (btree_page->cell_count-1) * sizeof(uint32_t) +
+                        (PAGE_SIZE - btree_page->free_space_offset - cell_to_be_removed.cell_size);
+
+    /* Check if page is underflowing. */
+    status = btree_check_underflow(btree_page, used_space);
+    if (status == BTREE_NODE_UNDERFLOW) {
+        value_free_array(cell_to_be_removed.keys, cell_to_be_removed.num_keys);
+        if (cell_to_be_removed.type == BTREE_LEAF_NODE) { row_free(cell_to_be_removed.BTreePayload.row); }
+        deletion_result->underflow = true;
+        return status;
+    }
+    value_free_array(cell_to_be_removed.keys, cell_to_be_removed.num_keys);
+    if (cell_to_be_removed.type == BTREE_LEAF_NODE) { row_free(cell_to_be_removed.BTreePayload.row); }
+    
+    if (status != BTREE_SUCCESS) {
+        return status;
     }
 
     /* Remove specific cell. */
     status = btree_remove_cell(btree_page, search_result.result_index);
     if (status != BTREE_SUCCESS) {
-        free(first_key);
-        return status;
-    }
-
-    /* Check if page is underflowing. */
-    status = btree_check_underflow(btree_page, UINT32_MAX);
-    if (status == BTREE_NODE_UNDERFLOW) {
-        deletion_result->underflow = true;
-        deletion_status = BTREE_NODE_UNDERFLOW;
-
-    } else if (status != BTREE_SUCCESS) {
-        free(first_key);
         return status;
     }
 
     if (!btree_page_sync(pager, btree_page)) {
-        free(first_key);
         return BTREE_ERROR;
     }
 
     /* Pass serialized first key only if everything went ok. */
     if (search_result.result_index == 0) {
         deletion_result->first_key_changed = true;
-        deletion_result->new_first_key = first_key;
-    }
-    deletion_result->deleted = true;
+        
+        if (btree_page->cell_count > 0) {
+            BTreeCellContents temp = {0};
+            status = get_cell_contents(btree_page, 0, &temp, search_key->index);
+            if (status != BTREE_SUCCESS) {
+                return status;
+            }
 
-    return deletion_status;
+            deletion_result->first_cell = temp;
+        }
+    }
+    
+    deletion_result->deleted = true;
+    return BTREE_SUCCESS;
 }
 
 /* BTree Leaf Node Split.
@@ -1451,19 +1460,19 @@ BTreeStatus btree_leaf_merge(Pager *pager, BTreePage *left, BTreePage *right, BT
         }
 
         cell_size += cell_contents.cell_size;
-        status = btree_page_has_enough_space(left, cell_size + i*sizeof(uint32_t));
-        if (status != BTREE_SUCCESS) {
-            if (status == BTREE_NEEDS_SPLIT) {
-                status = BTREE_ERROR;
-            }
-
-            value_free_array(cell_contents.keys, cell_contents.num_keys);
-            row_free(cell_contents.BTreePayload.row);
-            return status;
-        }
-
+        
         value_free_array(cell_contents.keys, cell_contents.num_keys);
         row_free(cell_contents.BTreePayload.row);
+    }
+
+
+    if (right->cell_count == 0) { return BTREE_CORRUPT_PAGE; }
+    status = btree_page_has_enough_space(left, cell_size + (right->cell_count-1)*sizeof(uint32_t));
+    if (status != BTREE_SUCCESS) {
+        if (status == BTREE_NEEDS_SPLIT) {
+            status = BTREE_ERROR;
+        }
+        return status;
     }
 
     /* Transfer LEFT <- RIGHT. */
@@ -1501,14 +1510,6 @@ BTreeStatus btree_leaf_merge(Pager *pager, BTreePage *left, BTreePage *right, BT
         return BTREE_ERROR;
     }
 
-    /* If parent is root needs special handling if it underflows or has 0 cells. */
-
-    /* Continue "underflow propagation" with parent page as current page. */
-    status = btree_check_underflow(parent_page, UINT32_MAX);
-    if (status != BTREE_SUCCESS) {
-        return status;
-    }
-
     return BTREE_SUCCESS;
 }
 
@@ -1531,8 +1532,22 @@ BTreeStatus btree_internal_merge(Pager *pager, BTreePage *left, BTreePage *right
     /* "Combine" it with left page's rightmost pointer. */
     parent_cell_contents.BTreePayload.child_pointer = left->type_specific_data.rightmost_child_pointer;
 
+    /* Check if all cells fit without need for split. */
+    uint32_t cell_size = parent_cell_contents.cell_size;
+    for (uint32_t i = 0; i < right->cell_count; i++) {
+        BTreeCellContents cell_contents = {0};
+        status = get_cell_contents(right, i, &cell_contents, index);
+        if (status != BTREE_SUCCESS) {
+            value_free_array(cell_contents.keys, cell_contents.num_keys);
+            value_free_array(parent_cell_contents.keys, parent_cell_contents.num_keys);
+            return status;
+        }
 
-    status = btree_page_has_enough_space(left, parent_cell_contents.cell_size);
+        cell_size += cell_contents.cell_size;
+        value_free_array(cell_contents.keys, cell_contents.num_keys);
+    }
+
+    status = btree_page_has_enough_space(left, cell_size + right->cell_count*sizeof(uint32_t));
     if (status != BTREE_SUCCESS) {
         if (status == BTREE_NEEDS_SPLIT) {
             status = BTREE_ERROR;
@@ -1541,7 +1556,7 @@ BTreeStatus btree_internal_merge(Pager *pager, BTreePage *left, BTreePage *right
         return status;
     }
 
-    /* Insert it onto left page. */
+    /* Insert parent cell into left page. */
     BTreeSplitResult split_result = {0};
     status = btree_node_insert(pager, left, &parent_cell_contents, &split_result, index);
     if (status != BTREE_SUCCESS) {
@@ -1552,33 +1567,6 @@ BTreeStatus btree_internal_merge(Pager *pager, BTreePage *left, BTreePage *right
         return status;
     }
     value_free_array(parent_cell_contents.keys, parent_cell_contents.num_keys);
-
-    /* Check if all cells fit without need for split. */
-    uint32_t cell_size = 0;
-    for (uint32_t i = 0; i < right->cell_count; i++) {
-        BTreeCellContents cell_contents = {0};
-        status = get_cell_contents(right, i, &cell_contents, index);
-        if (status != BTREE_SUCCESS) {
-            value_free_array(cell_contents.keys, cell_contents.num_keys);
-            row_free(cell_contents.BTreePayload.row);
-            return status;
-        }
-
-        cell_size += cell_contents.cell_size;
-        status = btree_page_has_enough_space(left, cell_size + i*sizeof(uint32_t));
-        if (status != BTREE_SUCCESS) {
-            if (status == BTREE_NEEDS_SPLIT) {
-                status = BTREE_ERROR;
-            }
-
-            value_free_array(cell_contents.keys, cell_contents.num_keys);
-            row_free(cell_contents.BTreePayload.row);
-            return status;
-        }
-
-        value_free_array(cell_contents.keys, cell_contents.num_keys);
-        row_free(cell_contents.BTreePayload.row);
-    }
 
     /* Transfer LEFT <- RIGHT. */
     for (uint32_t i = 0; i < right->cell_count; i++) {
@@ -1610,14 +1598,6 @@ BTreeStatus btree_internal_merge(Pager *pager, BTreePage *left, BTreePage *right
     /* Release / Free right page. */
     if (!pager_release_page(pager, right->page->page_num)) {
         return BTREE_ERROR;
-    }
-
-    /* If parent is root needs special handling if it underflows or has 0 cells. */
-
-    /* Continue "underflow propagation" with parent page as current page. */
-    status = btree_check_underflow(parent_page, UINT32_MAX);
-    if (status != BTREE_SUCCESS) {
-        return status;
     }
 
     return BTREE_SUCCESS;
@@ -1673,11 +1653,11 @@ BTreeStatus btree_node_merge(Pager *pager, BTreeMergeResult *merge_result, BTree
     if (merge_result->parent_underflowing_cell_index < merge_result->parent_sibling_cell_index) {
         right = &btree_sibling_page;
         left = &btree_underflowing_page;
-        separator_cell_index = merge_result->parent_sibling_cell_index;
+        separator_cell_index = merge_result->parent_underflowing_cell_index;
     } else {
         right = &btree_underflowing_page;
         left = &btree_sibling_page;
-        separator_cell_index = merge_result->parent_underflowing_cell_index;
+        separator_cell_index = merge_result->parent_sibling_cell_index;
     }
 
     if (btree_underflowing_page.type != btree_sibling_page.type) {
@@ -1855,7 +1835,7 @@ BTreeStatus btree_node_redistribution(Pager *pager, BTreePage *underflowing_page
 
         /* If it won't underflow, try borrowing. */
         if (status != BTREE_NODE_UNDERFLOW) {
-            uint32_t parent_cell_pointer_index = (cell_pointer_index == parent_page.cell_count) ? cell_pointer_index-1 : cell_pointer_index;
+            uint32_t parent_cell_pointer_index = cell_pointer_index-1;
             status = btree_node_borrow(pager, parent_cell_pointer_index, underflowing_page, &parent_page,
                  &btree_left_page, BTREE_BORROW_FROM_LEFT, index);
             
@@ -1931,7 +1911,7 @@ BTreeStatus btree_node_redistribution(Pager *pager, BTreePage *underflowing_page
  *
  * Returns BTreeInsertionResult which contains valid modifications
  * only if insertion and splitted flags are true. Otherwise, ignore.
- * (NOTE: Rollback need to be implemented in case of failure)*/
+ * (NOTE: Rollback need to be implemented in case of failure) */
 BTreeStatus btree_insert(BTree *btree, BTreeCellContents *cell_contents, BTreeInsertionResult *insertion_res, BTreeIndexSpec *index) {
     if (!btree || btree->root_page_num <= SYSTEM_CATALOG_PAGE_NUM 
         || btree->root_page_num >= MAX_PAGES || !btree->pager
@@ -1983,6 +1963,149 @@ BTreeStatus btree_insert(BTree *btree, BTreeCellContents *cell_contents, BTreeIn
     }
 
     insertion_res->inserted = true; // Only if insertion/split propagation returned successfully
+    return BTREE_SUCCESS;
+}
+
+/* BTree deletion & underflow orchestration.
+ * Handles underflow propagation if deletion of cell in a page is going to
+ * make the page underflow.
+ * Tries redistributing cells, if that fails, tries merging sibling pages.
+ * If root has 0 cells, handles root collapse.
+ * Then tries deletion all over again.
+ * 
+ * At the end, if first key changed of that specific leaf node we wanting to
+ * remove a cell from, you have to propagate the key changes to the parents above.
+ *  
+ * Returns BTreeDeletionResult. */
+BTreeStatus btree_delete(BTree *btree, BTreeCellContents *cell_contents, BTreeDeletionResult *deletion_res, BTreeIndexSpec *index) {
+    if (!btree || btree->root_page_num <= SYSTEM_CATALOG_PAGE_NUM 
+        || btree->root_page_num >= MAX_PAGES || !btree->pager
+        || !cell_contents  || !deletion_res || !index) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+    deletion_result_reset(deletion_res);
+
+    /* Create search key and search result for root-to-leaf traversal. */
+    BTreeSearchResult search_result = {0};
+    BTreeSearchKey search_key = {0};
+    search_key.index = index;
+    search_key.num_target_keys = cell_contents->num_keys;
+    search_key.target_key = values_to_serialized_key(cell_contents->keys, search_key.num_target_keys, index);
+    if (!search_key.target_key) {
+        return BTREE_ERROR;
+    }
+
+    retry_deletion: // To restart deletion after underflow propagation
+    BTreeStatus status = btree_root_to_leaf(btree, &search_key, &search_result, BTREE_UPPER_BOUND); 
+    if (status != BTREE_SUCCESS) {
+        free(search_key.target_key);
+        return status;
+    }
+
+    BTreePage leaf_node = {0};
+    status = btree_page_attach_load_validate(btree->pager, &leaf_node, search_result.page, index);
+    if (status != BTREE_SUCCESS) {
+        free(search_key.target_key);
+        return status;
+    }
+
+    status = btree_node_delete(btree->pager, &leaf_node, &search_key, deletion_res);
+    if (status != BTREE_SUCCESS && status != BTREE_NODE_UNDERFLOW) {
+        free(search_key.target_key);
+        return status;
+    }
+
+    /* If deletion fails because leaf node is going to underflow after deletion. */
+    if (status == BTREE_NODE_UNDERFLOW && deletion_res->underflow) {
+        BTreePage current = leaf_node;
+        BTreeMergeResult merge_result = {0};
+
+        while (true) {
+            merge_result_reset(&merge_result);
+
+            /* Try redistribution, if that fails trying merging. */
+            status = btree_node_redistribution(btree->pager, &current, index, &merge_result);
+            if (status != BTREE_SUCCESS && status != BTREE_NEEDS_MERGE) {
+                if (status == BTREE_UNDERFLOW_UNRESOLVED) {
+                    status = BTREE_CORRUPT_PAGE;
+                }
+
+                free(search_key.target_key);
+                return status;
+            }
+
+            if (status == BTREE_SUCCESS) {
+                break;
+            }
+
+            if (merge_result.needs_merge) {
+                status = btree_node_merge(btree->pager, &merge_result, index);
+                if (status != BTREE_SUCCESS && status != BTREE_NODE_UNDERFLOW) {
+                    free(search_key.target_key);
+                    return status;
+                }
+            }
+
+            /* Move upwards to parent. */
+            Page *page = pager_get_page(btree->pager, merge_result.parent_page_num);
+            if (!page) {
+                free(search_key.target_key);
+                return BTREE_CORRUPT_PAGE;
+            }
+
+            BTreePage btree_parent = {0};
+            status = btree_page_attach_load_validate(btree->pager, &btree_parent, page, index);
+            if (status != BTREE_SUCCESS) {
+                free(search_key.target_key);
+                return status;
+            }
+
+            /* Check if we reached root. */
+            current = btree_parent; 
+            if (current.is_root) {
+                /* If root has cell_count: 0 and children: 1 collapse root. */
+                if (current.cell_count == 0) {
+                    status = btree_root_collapse(btree, &current, index);
+                    if (status != BTREE_SUCCESS) {
+                        free(search_key.target_key);
+                        return status;
+                    }
+                }
+                
+                break;
+            }
+
+            status = btree_check_underflow(&btree_parent, UINT32_MAX);
+            if (status != BTREE_SUCCESS && status != BTREE_NODE_UNDERFLOW) {
+                free(search_key.target_key);
+                return status;
+            }
+
+            if (status == BTREE_SUCCESS) {
+                break;
+            }
+                
+        }
+        
+        /* Retry deleting. */
+        deletion_result_reset(deletion_res);
+        deletion_res->underflow = false;
+        goto retry_deletion;
+    }
+    free(search_key.target_key);
+
+    /* Update deletion result metadata. */
+    deletion_res->deleted = true;
+    deletion_res->page_num = leaf_node.page->page_num;
+
+    /* Propagate first key changes. */
+    if (deletion_res->first_key_changed) {
+        status = propagate_first_key_to_parents(btree->pager, &leaf_node, &(deletion_res->first_cell), index);
+        if (status != BTREE_SUCCESS) {
+            return status;
+        }
+    }
+    
     return BTREE_SUCCESS;
 }
 
