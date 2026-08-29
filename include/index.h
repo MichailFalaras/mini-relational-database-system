@@ -61,6 +61,14 @@ typedef struct index_range_result {
     uint32_t capacity;
 } IndexRangeResult;
 
+/* Index mutation-related metadata (insertion/update/deletion of entries) */
+typedef enum index_mutation_status {
+    INDEX_MUTATION_SUCCESS,
+    INDEX_MUTATION_DUPLICATE_KEY,
+    INDEX_MUTATION_INVALID_ARGUMENTS,
+    INDEX_MUTATION_ERROR
+} IndexMutationStatus;
+
 
 /* Index metadata operations */
 extern Index *index_metadata_create(const char *index_name, IndexType type, const IndexKey *key, 
@@ -104,5 +112,7 @@ extern IndexLookupStatus index_find_range(const Index *index, Pager *pager, Sche
 // Full Index scan
 extern IndexLookupStatus index_scan(const Index *index, Pager *pager, Schema *schema, IndexRangeResult *result);
 
+// Insert Index entry
+extern IndexMutationStatus index_insert_entry(Index *index, Pager *pager, Schema *schema, Row *row);
 
 #endif

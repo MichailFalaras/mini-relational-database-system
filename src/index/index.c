@@ -9,6 +9,7 @@
 #include "../src/btree/btree_utils.h"
 #include "../../include/schema.h"
 #include "../../include/row.h"
+#include "../../include/data_types.h"
 
 /* Index metadata operations */
 
@@ -958,4 +959,155 @@ IndexLookupStatus index_scan(const Index *index, Pager *pager, Schema *schema,
         NULL, NULL, 0, true,
         result
     );
+}
+
+/*
+ * Insert an entry into the Index B+ Tree.
+ *
+ * Failure behavior:
+ * Validation and duplicate-key failures do not modify Index metadata.
+ *
+ * B+ Tree insertion failures are propagated as Index mutation errors.
+ * Atomic rollback of partially applied B+ Tree modifications is not
+ * currently supported and is the responsibility of the B+ Tree layer.
+ *
+ * Root page changes are reflected in the in-memory Index metadata.
+ * Persistent root metadata updates are deferred until system catalog
+ * persistence is implemented.
+ */
+IndexMutationStatus index_insert_entry(Index *index, Pager *pager, Schema *schema, Row *row) {
+     // Validate inputs
+    if (!index || !index->key || 
+        !index->key->column_index_array || 
+        index->key->num_columns == 0) {
+        return INDEX_MUTATION_INVALID_ARGUMENTS;
+    }
+
+    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+        return INDEX_MUTATION_INVALID_ARGUMENTS;
+    }
+
+    if (index->root_page_num <= SYSTEM_CATALOG_PAGE_NUM ||
+        index->root_page_num >= pager->num_pages ||
+        index->root_page_num >= MAX_PAGES) {
+        return INDEX_MUTATION_INVALID_ARGUMENTS;
+    }
+
+    if (!schema || !row || !row->values || row->n_columns == 0 || row->is_deleted) {
+        return INDEX_MUTATION_INVALID_ARGUMENTS;
+    }
+
+    // Initialize sttructures of insertion functionality
+    BTree btree = {0};
+    btree.pager = pager;
+    btree.root_page_num = index->root_page_num;
+
+    BTreeIndexSpec spec = {0};
+    if (!btree_index_spec_init(index, schema, &spec)) {
+        return INDEX_MUTATION_ERROR;
+    }
+
+    // Initialized in btree_insert()
+    BTreeInsertionResult result = {0};
+
+    // Initialize Contents newly-inserted Cell 
+    BTreeCellContents cell_contents = {0};
+
+    cell_contents.type = BTREE_LEAF_NODE;
+    cell_contents.num_keys = index->key->num_columns;
+    cell_contents.key_size = spec.key_size;
+
+    cell_contents.keys = (Value **) calloc(cell_contents.num_keys, sizeof(Value *));
+    if (!cell_contents.keys) {
+        index_btree_spec_free(&spec);
+        return INDEX_MUTATION_ERROR;
+    }
+    
+    // Calculate size of new cell contents
+    uint32_t row_size = sizeof(uint8_t) + sizeof(uint32_t);
+
+    for (uint32_t i = 0;  i < row->n_columns; i++) {
+        if (!row->values[i]) {
+            free(cell_contents.keys);
+            index_btree_spec_free(&spec);
+            return INDEX_MUTATION_INVALID_ARGUMENTS;
+        }
+
+        row_size += get_data_type_size(row->values[i]->type);
+    }
+
+    uint32_t total_cell_size = (uint32_t)cell_contents.key_size + row_size;
+
+    if (total_cell_size > UINT16_MAX) {
+        free(cell_contents.keys);
+        index_btree_spec_free(&spec);
+        return INDEX_MUTATION_ERROR;
+    }
+
+    cell_contents.cell_size = (uint16_t)total_cell_size;
+    
+    // Extract indexed row values into the cell key
+    for (uint32_t i = 0; i < cell_contents.num_keys; i++) {
+        uint32_t pos = index->key->column_index_array[i];
+
+        if (pos >= row->n_columns) {
+            free(cell_contents.keys);
+            index_btree_spec_free(&spec);
+            return INDEX_MUTATION_INVALID_ARGUMENTS;
+        }
+
+        Value *value = row_get_value(row, pos);
+
+        if (!value) {
+            free(cell_contents.keys);
+            index_btree_spec_free(&spec);
+            return INDEX_MUTATION_ERROR;
+        }
+
+        cell_contents.keys[i] = value;
+    }
+
+    // Assign the full row as the leaf payload
+    cell_contents.BTreePayload.row = row;
+
+    // Insertion orchestration
+    BTreeStatus status = btree_insert(&btree, &cell_contents, &result, &spec);
+
+    free(cell_contents.keys);
+    cell_contents.keys = NULL;
+
+    switch (status) {
+        case BTREE_SUCCESS:
+            break;
+
+        case BTREE_DUPLICATE_KEY:
+            index_btree_spec_free(&spec);
+            return INDEX_MUTATION_DUPLICATE_KEY;
+
+        case BTREE_INVALID_ARGUMENTS:
+            index_btree_spec_free(&spec);
+            return INDEX_MUTATION_INVALID_ARGUMENTS;
+
+        case BTREE_ERROR:
+        case BTREE_CORRUPT_PAGE:
+        case BTREE_INVALID_PAGE:
+        case BTREE_FREE_PAGE:
+            index_btree_spec_free(&spec);
+            return INDEX_MUTATION_ERROR;
+
+        default:
+            index_btree_spec_free(&spec);
+            return INDEX_MUTATION_ERROR;
+    }
+
+    // Root may have changed during split propagation
+    if (btree.root_page_num != index->root_page_num) {
+        index->root_page_num = btree.root_page_num;
+
+        // TODO(catalog): Persist the updated index root page number
+        // when system-catalog metadata persistence is implemented.
+    }
+
+    index_btree_spec_free(&spec);
+    return INDEX_MUTATION_SUCCESS;
 }
