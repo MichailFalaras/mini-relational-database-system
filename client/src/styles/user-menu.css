@@ -1,0 +1,113 @@
+/* ---------- Home Page > User Menu > Toggle Button ---------- */
+
+#user-menu-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.75rem;         
+    height: 1.75rem;  
+    border: none;
+    border-radius: 50%;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    flex-shrink: 0;
+    color: #FFFFFF;
+    background: linear-gradient(135deg, #4F46E5, #7C3AED);
+    transition-property: opacity;
+    transition-duration: 150ms;
+}
+
+.your-class:hover { opacity: 0.85; }
+
+/* ---------- Home Page > User Menu > Options ---------- */
+
+#user-menu-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+}
+
+#user-menu {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    z-index: 50;
+    width: 14rem;
+    margin-top: 0.375rem;   
+    border: 1px solid rgba(0, 0, 0, 0.1);        
+    border-radius: 0.75rem; 
+    overflow: hidden;
+    background: #FFFFFF;
+    box-shadow: 0 10px 36px rgba(0, 0, 0, 0.14);
+}
+
+#user-menu-info {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem; 
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid rgba(0,0,0,0.07);
+}
+
+#user-initials {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;          
+    height: 2rem;
+    border: none;         
+    border-radius: 50%;
+    font-size: 0.75rem;   
+    line-height: 1rem;    
+    font-weight: 600;
+    flex-shrink: 0;
+    background: linear-gradient(135deg, #4F46E5, #7C3AED);
+    color: #FFFFFF;
+}
+
+#user-name {
+    font-size: 0.875rem;   
+    line-height: 1.25rem; 
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #111827;
+    margin: 0;
+}
+
+#user-email {
+    font-size: 0.75rem;  
+    line-height: 1rem;    
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #9CA3AF;
+    margin: 0;
+} 
+
+#guest-email {
+    font-size: 0.75rem;  
+    line-height: 1rem;    
+    color: #C4CAD4;
+    margin: 0;
+}
+
+/* ---------- Home Page > User Menu > Options > Sign out Button ---------- */
+
+#sign-out-btn {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;          
+    padding: 0.5rem 1rem;   
+    font-size: 0.875rem;    
+    line-height: 1.25rem;   
+    color: #374151;
+    background-color: transparent;
+    border: none;
+    transition: color 150ms, background-color 150ms;
+}
+
+#sign-out-btn:hover { background-color: rgba(0, 0, 0, 0.04); }
