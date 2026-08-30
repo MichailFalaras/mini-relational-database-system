@@ -553,7 +553,6 @@ uint32_t get_data_type_size(DataType type) {
             return sizeof(bool);
         case JSONB:
             return sizeof(jsonb_t);
-        // Don't know about `bool null_val`
         default:
             printf("get_data_type_size: Unsupported data type.\n");
             return 0;

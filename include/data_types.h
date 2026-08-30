@@ -18,8 +18,7 @@ typedef enum data_types {
     TIMESTAMP,
     BLOB,
     BOOL,
-    JSONB,
-    NULL_TYPE 
+    JSONB
 } DataType;
 
 /* NUMERIC/DECIMAL Data Type. */
@@ -67,6 +66,7 @@ typedef struct blob {
 /* Value and corresponding data type both in this struct. */
 typedef struct value {
     DataType type;
+    bool null_val;
     union {
         int32_t int32_val;
         uint32_t uint32_val;
@@ -81,7 +81,6 @@ typedef struct value {
         blob_t blob_val;
         bool bool_val;
         jsonb_t jsonb_val;
-        bool null_val;
     } value;
 } Value;
 
