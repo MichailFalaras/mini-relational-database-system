@@ -56,6 +56,15 @@ BTreeStatus btree_binary_search(BTreePage *btree_page, BTreeSearchKey *search_ke
         return BTREE_INVALID_ARGUMENTS;
     }
     
+    if (!search_result || !search_key 
+        || !search_key->index 
+        || !search_key->index->index_key
+        || !search_key->target_key
+        || search_key->num_target_keys == 0
+        || search_key->num_target_keys > search_key->index->index_key->num_columns) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
     if (mode != BTREE_LOWER_BOUND && mode != BTREE_UPPER_BOUND) {
         return BTREE_INVALID_ARGUMENTS;
     }
@@ -286,7 +295,8 @@ BTreeStatus btree_node_insert(Pager *pager, BTreePage *btree_page, BTreeCellCont
     if (btree_page->type == BTREE_LEAF_NODE && index->is_unique == true
          && search_result.result_index < btree_page->cell_count) {
     
-        if (search_result.exact_match == true) {
+        if (search_result.exact_match == true
+            && !key_contains_null_val(cell_contents->keys, cell_contents->num_keys)) {
             return BTREE_DUPLICATE_KEY;
         }
     
@@ -888,20 +898,24 @@ BTreeStatus btree_find_range_keys(BTree *btree, BTreeIndexSpec *index, BTreeSear
     }
 
     if (start_search_key) {
-        if (!start_search_key->index || start_search_key->index != index ||
-            !start_search_key->target_key) {
+        if (!start_search_key->index 
+            || start_search_key->index != index 
+            || !start_search_key->target_key 
+            || start_search_key->num_target_keys == 0
+            || start_search_key->num_target_keys > index->index_key->num_columns) {
             return BTREE_INVALID_ARGUMENTS;
         }
     }
     
-
     if (end_search_key) {
-        if (!end_search_key->index || end_search_key->index != index ||
-            !end_search_key->target_key) {
+        if (!end_search_key->index 
+            || end_search_key->index != index 
+            || !end_search_key->target_key 
+            || end_search_key->num_target_keys == 0
+            || end_search_key->num_target_keys > index->index_key->num_columns) {
             return BTREE_INVALID_ARGUMENTS;
         }
     }
-
 
     // Allocating Range Result structure using a helper
     BTreeStatus status = btree_range_result_init(result);
@@ -1060,7 +1074,7 @@ BTreeStatus btree_find_range_keys(BTree *btree, BTreeIndexSpec *index, BTreeSear
 
             if (!deserialize_cell_contents(
                     index->schema, 
-                    btree_page.data, 
+                    btree_page.data + cell_view.offset, 
                     &btree_page, 
                     &cell_view, 
                     &cell, 
