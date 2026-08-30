@@ -37,6 +37,7 @@ bool deserialize_cell_contents(const Schema *schema, uint8_t *read_offset, BTree
         return false;
     }
 
+    cell->type = btree_page->type;
     switch (btree_page->type) {
         case BTREE_INTERNAL_NODE:
             if (!deserialize_internal_node(read_offset, cell_view, cell, index)) {
@@ -88,7 +89,6 @@ bool deserialize_leaf_node(const Schema *schema, uint8_t *read_offset, BTreeCell
         return false;
     }
     
-    read_offset += cell_view->offset;
     if (!deserialize_keys(&read_offset, cell, index)) {
         return false;
     }
@@ -126,7 +126,6 @@ bool deserialize_internal_node(uint8_t *read_offset, BTreeCellView *cell_view, B
     cell->key_size = cell_view->key.key_size;
     cell->cell_size = cell->key_size + sizeof(uint32_t);
 
-    read_offset += cell_view->offset;
     memcpy(&cell->BTreePayload.child_pointer, read_offset, sizeof(uint32_t));
     read_offset += sizeof(uint32_t);
 
@@ -142,9 +141,71 @@ bool deserialize_internal_node(uint8_t *read_offset, BTreeCellView *cell_view, B
     return true;
 }
 
+/* Serialize NULL bitmap right before serializing keys/row columns.
+ *
+ * Separating number of values in key and bitmap columns allows creating
+ * prefix keys with NULL bitmap. */
+bool serialize_null_bitmap(uint8_t **write_offset, Value **key, uint32_t num_vals, uint32_t bitmap_columns) {
+    if (!write_offset || !key
+        || !num_vals || !bitmap_columns
+        || num_vals > bitmap_columns) {
+        return false;
+    }
+
+    uint32_t bitmap_size = (bitmap_columns + 7) / 8;
+    uint8_t *bitmap = (uint8_t *) malloc(bitmap_size);
+    if (!bitmap) {
+        return false;
+    }
+    memset(bitmap, 0, bitmap_size);
+
+    for (uint32_t i = 0; i < num_vals; i++) {
+        // To handle multi byte bitmaps
+        uint32_t bitmap_index = i / 8; 
+        uint32_t bitmap_shift = i % 8;
+
+        if (!key[i]) {
+            free(bitmap);
+            return false;
+        }
+
+        if (key[i]->null_val) {
+            bitmap[bitmap_index] |= 1 << bitmap_shift; 
+        }
+    }
+
+    memcpy(*write_offset, bitmap, bitmap_size);
+    *write_offset += bitmap_size;
+
+    free(bitmap);
+    return true;
+}
+
+/* Deserialize bitmap before deserializing keys/row columns. */
+bool deserialize_null_bitmap(uint8_t **read_offset, uint8_t **bitmap, uint32_t num_columns) {
+    if (!read_offset || !bitmap || num_columns == 0) {
+        return false;
+    }
+
+    uint32_t bitmap_size = (num_columns + 7) / 8;
+    *bitmap = (uint8_t *) malloc(bitmap_size);
+    if (!(*bitmap)) {
+        return false;
+    }
+
+    memcpy(*bitmap, *read_offset, bitmap_size);
+    *read_offset += bitmap_size;
+
+    return true;
+}
+
 /* Serialize/Deserialize keys. */
 bool serialize_keys(uint8_t **write_offset, BTreeCellContents *cell) {
     if (!write_offset || !cell) {
+        return false;
+    }
+
+    if (!serialize_null_bitmap(write_offset, cell->keys, cell->num_keys, cell->num_keys)) {
         return false;
     }
 
@@ -164,16 +225,35 @@ bool deserialize_keys(uint8_t **read_offset, BTreeCellContents *cell, BTreeIndex
         return false;
     }
 
+    uint8_t *bitmap;
+    if (!deserialize_null_bitmap(read_offset, &bitmap, index->index_key->num_columns)) {
+        value_free_array(cell->keys, cell->num_keys);
+        cell->keys = NULL;
+        return false;
+    }
+
+    uint32_t bitmap_size = (index->index_key->num_columns + 7) / 8;
+    uint32_t key_size = bitmap_size;
     for (uint32_t i = 0; i < index->index_key->num_columns; i++) {
-        cell->keys[i] = deserialize_value_data(index->column_types[i], *read_offset);
+        uint32_t bitmap_index = i / 8; 
+        uint32_t bitmap_shift = i % 8;
+
+        bool is_null = ((bitmap[bitmap_index] & (1 << bitmap_shift)) != 0);
+
+        cell->keys[i] = deserialize_value_data(index->column_types[i], is_null, *read_offset);
         if (!cell->keys[i]) {
             value_free_array(cell->keys, cell->num_keys);
+            free(bitmap);
             return false;
         }
 
+        key_size += get_data_type_size(index->column_types[i]);
         *read_offset += get_data_type_size(index->column_types[i]);
     }
+    cell->key_size = key_size;
+    cell->num_keys = index->index_key->num_columns;
 
+    free(bitmap);
     return true;
 }
 
@@ -188,6 +268,10 @@ bool serialize_row(uint8_t **write_offset, const Row *row) {
 
     memcpy(*write_offset, &row->n_columns, sizeof(uint32_t));
     *write_offset += sizeof(uint32_t);
+
+    if (!serialize_null_bitmap(write_offset, row->values, row->n_columns, row->n_columns)) {
+        return false;
+    }
 
     for (uint32_t i = 0; i < row->n_columns; i++) {
         if (!serialize_value_data(row->values[i], *write_offset)) {
@@ -221,23 +305,44 @@ bool deserialize_row(const Schema *schema, uint8_t **read_offset, BTreeCellConte
         return false;
     }
 
-    cell->BTreePayload.row->values = (Value **) calloc(cell->BTreePayload.row->n_columns, sizeof(Value *));
-    if (!cell->BTreePayload.row->values) {
+    uint8_t *bitmap;
+    if (!deserialize_null_bitmap(read_offset, &bitmap, cell->BTreePayload.row->n_columns)) {
         row_free(cell->BTreePayload.row);
         return false;
     }
 
+    uint32_t bitmap_size = (cell->BTreePayload.row->n_columns + 7) / 8;
+    uint32_t cell_size = cell->key_size
+                        + sizeof(uint8_t)
+                        + sizeof(uint32_t)
+                        + bitmap_size;
+    cell->BTreePayload.row->values = (Value **) calloc(cell->BTreePayload.row->n_columns, sizeof(Value *));
+    if (!cell->BTreePayload.row->values) {
+        row_free(cell->BTreePayload.row);
+        free(bitmap);
+        return false;
+    }
+
     for (uint32_t i = 0; i < cell->BTreePayload.row->n_columns; i++) {
-        cell->BTreePayload.row->values[i] = deserialize_value_data(schema->columns[i]->type, *read_offset);
+        uint32_t bitmap_index = i / 8; 
+        uint32_t bitmap_shift = i % 8;
+
+        bool is_null = ((bitmap[bitmap_index] & (1 << bitmap_shift)) != 0);
+
+        cell->BTreePayload.row->values[i] = deserialize_value_data(schema->columns[i]->type, is_null, *read_offset);
         if (!cell->BTreePayload.row->values[i]) {
             value_free_array(cell->BTreePayload.row->values, cell->BTreePayload.row->n_columns);
             row_free(cell->BTreePayload.row);
+            free(bitmap);
             return false;
         }
 
+        cell_size += get_data_type_size(schema->columns[i]->type);
         *read_offset += get_data_type_size(schema->columns[i]->type);
     }
 
+    cell->cell_size = cell_size;
+    free(bitmap);
     return true;
 }
 
@@ -245,6 +350,11 @@ bool deserialize_row(const Schema *schema, uint8_t **read_offset, BTreeCellConte
 bool serialize_value_data(Value *value, void *serialized_output) {
     if (!value || !serialized_output) {
         return false;
+    }
+
+    if (value->null_val) {
+        memset(serialized_output, 0, get_data_type_size(value->type));
+        return true;
     }
 
     switch (value->type) {
@@ -287,9 +397,6 @@ bool serialize_value_data(Value *value, void *serialized_output) {
         case JSONB:
             memcpy(serialized_output, &value->value.jsonb_val, get_data_type_size(JSONB));
             break;
-        case NULL_TYPE:
-            memcpy(serialized_output, &value->value.null_val, get_data_type_size(NULL_TYPE));
-            break;
         default:
             printf("serialize_value_data: Unsupported data type.\n");
             return false;
@@ -298,7 +405,7 @@ bool serialize_value_data(Value *value, void *serialized_output) {
     return true;
 }
 
-Value *deserialize_value_data(DataType type, void *offset) {
+Value *deserialize_value_data(DataType type, bool is_null, void *offset) {
     if (!offset) {
         return NULL;
     }
@@ -308,6 +415,12 @@ Value *deserialize_value_data(DataType type, void *offset) {
         return NULL;
     }
     value->type = type;
+    value->null_val = is_null;
+
+    if (value->null_val) {
+        memset(&(value->value), 0, sizeof(value->value));
+        return value;
+    }
 
     switch (type) {
         case INTEGER:
@@ -349,11 +462,9 @@ Value *deserialize_value_data(DataType type, void *offset) {
         case JSONB:
             memcpy(&value->value.jsonb_val, offset, get_data_type_size(JSONB));
             break;
-        case NULL_TYPE:
-            memcpy(&value->value.null_val, offset, get_data_type_size(NULL_TYPE));
-            break;
         default:
             printf("serialize_value_data: Unsupported data type.\n");
+            free(value);
             return NULL;
     }
 

@@ -29,6 +29,12 @@ extern bool serialize_internal_node(uint8_t *write_offset, BTreeCellContents *ce
 
 extern bool deserialize_internal_node(uint8_t *read_offset, BTreeCellView *cell_view, BTreeCellContents *cell, BTreeIndexSpec *index);
 
+/* Serialize NULL bitmap right before serializing keys/row columns. */
+bool serialize_null_bitmap(uint8_t **write_offset, Value **key, uint32_t num_vals, uint32_t bitmap_columns);
+
+/* Deserialize bitmap before deserializing keys/row columns. */
+extern bool deserialize_null_bitmap(uint8_t **read_offset, uint8_t **bitmap, uint32_t num_columns);
+
 /* Serialize/Deserialize keys. */
 extern bool serialize_keys(uint8_t **write_offset, BTreeCellContents *cell);
 
@@ -42,7 +48,7 @@ extern bool deserialize_row(const Schema *schema, uint8_t **read_offset, BTreeCe
 /* Serialize/Deserialize value data. */
 extern bool serialize_value_data(Value *value, void *serialized_output);
 
-extern Value *deserialize_value_data(DataType type, void *offset);
+extern Value *deserialize_value_data(DataType type, bool is_null, void *offset);
 
 /* Serialize/Deserialize catalog contents */
 extern bool serialize_catalog_contents(uint8_t *write_offset, BTreePage *btree_page, BTreeCellContents *cell);
