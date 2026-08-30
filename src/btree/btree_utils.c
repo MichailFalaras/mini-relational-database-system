@@ -65,7 +65,7 @@ BTreeStatus btree_page_validate(Pager *pager, BTreePage *btree_page, BTreeIndexS
 
     /* Cell Count checks. */
     uint16_t header_size = get_header_size(btree_page->type);
-    uint16_t max_cells = (PAGE_SIZE - header_size) / MIN_CELL_SIZE;
+    uint16_t max_cells = (PAGE_SIZE - header_size) / MIN_INTERNAL_CELL_SIZE;
     if (btree_page->cell_count > max_cells) {
         return BTREE_CORRUPT_PAGE;
     }
@@ -242,7 +242,17 @@ BTreeStatus btree_compare(Value **left, Value **right, uint32_t num_vals, int *r
     /* Compare both same index columns. (With upper limit the search keys used, not
     the amount of keys the BTree is organized with) */
     for (uint32_t i = 0; i < num_vals; i++) {
-        if (!value_compare(left[i], right[i], result)) {
+        if (!left[i] || !right[i]) {
+            return BTREE_INVALID_ARGUMENTS;
+        }
+
+        if (left[i]->null_val && right[i]->null_val) {
+            *result = 0;
+        } else if (left[i]->null_val) {
+            *result = 1;
+        } else if (right[i]->null_val) {
+            *result = -1;
+        } else if (!value_compare(left[i], right[i], result)) {
             return BTREE_ERROR;
         }
 
@@ -319,7 +329,6 @@ BTreeStatus btree_check_underflow(BTreePage *btree_page, uint32_t used_space) {
 
     return BTREE_SUCCESS;
 }
-
 
 /* Inserting into an internal node and the binary search's returned
  * index is equal to the page's cell count then:
@@ -661,7 +670,7 @@ BTreeStatus btree_transfer_cells(BTreePage *src, uint16_t src_idx, BTreePage *de
     }
     BTreeCellContents src_cell = {0};
     
-    if (!deserialize_cell_contents(index->schema, src->data, src, &src_cell_view, &src_cell, index)) {
+    if (!deserialize_cell_contents(index->schema, src->data + src_cell_view.offset, src, &src_cell_view, &src_cell, index)) {
         return BTREE_ERROR;
     }
 
@@ -1057,32 +1066,51 @@ void merge_result_reset(BTreeMergeResult *merge_result) {
 
 /* Serialized key to Value array conversion. */
 Value **serialized_key_to_values(void *separator_key, uint32_t num_keys, BTreeIndexSpec *index) {
-    if (!separator_key || !index) {
+    if (!separator_key || !index
+        || !num_keys || !index->index_key
+        || !index->index_key->num_columns
+        || num_keys > index->index_key->num_columns) {
+        return NULL;
+    }
+    uint8_t *key_offset = (uint8_t *) separator_key;
+
+    uint8_t *bitmap;
+    if (!deserialize_null_bitmap(&key_offset, &bitmap, index->index_key->num_columns)) {
         return NULL;
     }
 
-    Value **key_vals = (Value **) calloc(index->index_key->num_columns, sizeof(Value *));
+    Value **key_vals = (Value **) calloc(num_keys, sizeof(Value *));
     if (!key_vals) {
+        free(bitmap);
         return NULL;
     }
         
-    uint8_t *key_offset = (uint8_t *) separator_key;
     for (uint32_t i = 0; i < num_keys; i++) {
-        key_vals[i] = value_create(index->column_types[i], key_offset);
+        uint32_t bitmap_index = i / 8; 
+        uint32_t bitmap_shift = i % 8;
+
+        bool is_null = ((bitmap[bitmap_index] & (1 << bitmap_shift)) != 0);
+
+        key_vals[i] = deserialize_value_data(index->column_types[i], is_null, key_offset);
         if (!key_vals[i]) {
-            value_free_array(key_vals, index->index_key->num_columns);
+            free(bitmap);
+            value_free_array(key_vals, num_keys);
             return NULL;
         }
 
         key_offset += get_data_type_size(index->column_types[i]);
     }
 
+    free(bitmap);
     return key_vals;
 }
 
 /* Value array to serialized key stored in heap. */
 void *values_to_serialized_key(Value **key_vals, uint32_t num_keys, BTreeIndexSpec *index) {
-    if (!key_vals || !index) {
+    if (!key_vals || !index
+        || !num_keys || !index->index_key
+        || !index->index_key->num_columns
+        || num_keys > index->index_key->num_columns) {
         return NULL;
     }
 
@@ -1092,6 +1120,11 @@ void *values_to_serialized_key(Value **key_vals, uint32_t num_keys, BTreeIndexSp
     }
 
     uint8_t *offset = (uint8_t *) serialized_key;
+    if (!serialize_null_bitmap(&offset, key_vals, num_keys, index->index_key->num_columns)) {
+        free(serialized_key);
+        return NULL;
+    }
+
     for (uint32_t i = 0; i < num_keys; i++) {
         if (!serialize_value_data(key_vals[i], offset)) {
             free(serialized_key);
@@ -1238,7 +1271,7 @@ BTreeStatus get_cell_contents(BTreePage *btree_page, uint32_t cell_pointer_index
     dest->key_size = cell_view.key.key_size;
     dest->cell_size = dest->key_size + cell_view.payload_size;
 
-    if (!deserialize_cell_contents(index->schema, btree_page->data, btree_page, &cell_view, dest, index)) {
+    if (!deserialize_cell_contents(index->schema, btree_page->data + cell_view.offset, btree_page, &cell_view, dest, index)) {
         return BTREE_ERROR;
     }
 
@@ -1361,6 +1394,24 @@ BTreeStatus propagate_first_key_to_parents(Pager *pager, BTreePage *btree_page, 
     return BTREE_SUCCESS;
 }
 
+/* Check if NULL is contained in a key. */
+bool key_contains_null_val(Value **key, uint32_t num_keys) {
+    if (!key || !num_keys) {
+        return false;
+    }
+
+    for (uint32_t i = 0; i < num_keys; i++) {
+        if (!key[i]) {
+            return false;
+        }
+
+        if (key[i]->null_val) {
+            return true;
+        }
+    }
+
+    return false;
+} 
 
 /* ---------- BTreeRangeResult Helpers ---------- */
 
@@ -1497,7 +1548,16 @@ bool btree_index_spec_init(const Index *index, Schema *schema, BTreeIndexSpec *s
         }
     }
 
-    spec->key_size = key_size;
+    // Needs bitmap and key size for correct cell operations despite
+    // bitmap existing only in disk. 
+    uint32_t bitmap_size = (index->key->num_columns + 7) / 8;
+    if (key_size > UINT16_MAX - bitmap_size) {
+        free(spec->column_types);
+        spec->column_types = NULL;
+        return false;
+    }
+
+    spec->key_size = bitmap_size + key_size; 
     spec->is_unique = index->is_unique;
 
     return true;

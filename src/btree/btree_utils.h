@@ -21,7 +21,7 @@ typedef struct btree_search_result BTreeSearchResult;
 typedef struct btree_split_result BTreeSplitResult;
 typedef struct btree_range_result BTreeRangeResult;
 
-#define MIN_CELL_SIZE 5 // lets suppose key is a bool (uint8_t) and a child pointer (uint32_t)
+#define MIN_INTERNAL_CELL_SIZE 6 // child pointer, NULL bitmap, keys
 
 /* ---------- BTreePage Component Interface ---------- */
 
@@ -66,6 +66,9 @@ extern bool btree_index_spec_init(const Index *index, Schema *schema, BTreeIndex
 extern void index_btree_spec_free(BTreeIndexSpec *spec);
 
 /* ---------- Miscellaneous  ---------- */
+
+/* Check if NULL is contained in a key. */
+bool key_contains_null_val(Value **key, uint32_t num_keys);
 
 /* Reset insertion orchestration result. */
 void insertion_result_reset(BTreeInsertionResult *insertion_res);
