@@ -1511,3 +1511,92 @@ void index_btree_spec_free(BTreeIndexSpec *spec) {
     free(spec->column_types);
     spec->column_types = NULL;
 }
+
+
+/* Get cell contents from a Row */
+BTreeStatus get_cell_contents_from_row(BTreeCellContents *cell_contents, BTreeIndexSpec *spec, Row *row) {
+    if (!cell_contents) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    if (!spec || 
+        !spec->index_key || 
+        !spec->index_key->column_index_array ||
+        spec->index_key->num_columns == 0) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    if (!row || !row->values || row->n_columns == 0) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    cell_contents->type = BTREE_LEAF_NODE;
+    cell_contents->num_keys = spec->index_key->num_columns;
+    
+    cell_contents->keys = (Value **) calloc(cell_contents->num_keys, sizeof(Value *));
+    
+    if (!cell_contents->keys) {
+        return BTREE_ERROR;
+    }
+    
+    // Calculating serialized key size, including the NULL bitmap size
+    uint32_t key_size = (cell_contents->num_keys + 7) / 8;
+
+    for (uint32_t i = 0; i < cell_contents->num_keys; i++) {
+        uint32_t col_pos = spec->index_key->column_index_array[i];
+
+        if (col_pos >= row->n_columns) {
+            free(cell_contents->keys);
+            cell_contents->keys = NULL;
+            return BTREE_INVALID_ARGUMENTS;
+        }
+
+        Value *value = row_get_value(row, col_pos);
+
+        if (!value) {
+            free(cell_contents->keys);
+            cell_contents->keys = NULL;
+            return BTREE_ERROR;
+        }
+
+        cell_contents->keys[i] = value;
+
+        key_size += get_data_type_size(value->type);
+    }
+
+    if (key_size > UINT16_MAX) {
+        free(cell_contents->keys);
+        cell_contents->keys = NULL;
+        return BTREE_ERROR;
+    }
+
+    cell_contents->key_size = (uint16_t) key_size;
+
+    // Calculate size of new cell contents
+    uint32_t row_size = sizeof(uint8_t) + sizeof(uint32_t) + ((row->n_columns + 7) / 8);
+
+    for (uint32_t i = 0;  i < row->n_columns; i++) {
+        if (!row->values[i]) {
+            free(cell_contents->keys);
+            cell_contents->keys = NULL;
+            return BTREE_INVALID_ARGUMENTS;
+        }
+
+        row_size += get_data_type_size(row->values[i]->type);
+    }
+
+    uint32_t total_cell_size = cell_contents->key_size + row_size;
+
+    if (total_cell_size > UINT16_MAX) {
+        free(cell_contents->keys);
+        cell_contents->keys = NULL;
+        return BTREE_ERROR;
+    }
+
+    cell_contents->cell_size = (uint16_t)total_cell_size;
+    
+    // Assign the full row as the leaf payload
+    cell_contents->BTreePayload.row = row;
+
+    return BTREE_SUCCESS;
+}

@@ -976,7 +976,7 @@ IndexLookupStatus index_scan(const Index *index, Pager *pager, Schema *schema,
  * persistence is implemented.
  */
 IndexMutationStatus index_insert_entry(Index *index, Pager *pager, Schema *schema, Row *row) {
-     // Validate inputs
+    // Validate inputs
     if (!index || !index->key || 
         !index->key->column_index_array || 
         index->key->num_columns == 0) {
@@ -1013,68 +1013,22 @@ IndexMutationStatus index_insert_entry(Index *index, Pager *pager, Schema *schem
     // Initialize Contents newly-inserted Cell 
     BTreeCellContents cell_contents = {0};
 
-    cell_contents.type = BTREE_LEAF_NODE;
-    cell_contents.num_keys = index->key->num_columns;
-    cell_contents.key_size = spec.key_size;
-
-    cell_contents.keys = (Value **) calloc(cell_contents.num_keys, sizeof(Value *));
-    if (!cell_contents.keys) {
-        index_btree_spec_free(&spec);
-        return INDEX_MUTATION_ERROR;
-    }
+    BTreeStatus status = get_cell_contents_from_row(&cell_contents, &spec, row);
     
-    // Calculate size of new cell contents
-    uint32_t row_size = sizeof(uint8_t) + sizeof(uint32_t);
-
-    for (uint32_t i = 0;  i < row->n_columns; i++) {
-        if (!row->values[i]) {
-            free(cell_contents.keys);
-            index_btree_spec_free(&spec);
-            return INDEX_MUTATION_INVALID_ARGUMENTS;
-        }
-
-        row_size += get_data_type_size(row->values[i]->type);
-    }
-
-    uint32_t total_cell_size = (uint32_t)cell_contents.key_size + row_size;
-
-    if (total_cell_size > UINT16_MAX) {
-        free(cell_contents.keys);
+    if (status != BTREE_SUCCESS) {
         index_btree_spec_free(&spec);
-        return INDEX_MUTATION_ERROR;
+        
+        return status == BTREE_INVALID_ARGUMENTS
+            ? INDEX_MUTATION_INVALID_ARGUMENTS
+            : INDEX_MUTATION_ERROR;
     }
-
-    cell_contents.cell_size = (uint16_t)total_cell_size;
-    
-    // Extract indexed row values into the cell key
-    for (uint32_t i = 0; i < cell_contents.num_keys; i++) {
-        uint32_t pos = index->key->column_index_array[i];
-
-        if (pos >= row->n_columns) {
-            free(cell_contents.keys);
-            index_btree_spec_free(&spec);
-            return INDEX_MUTATION_INVALID_ARGUMENTS;
-        }
-
-        Value *value = row_get_value(row, pos);
-
-        if (!value) {
-            free(cell_contents.keys);
-            index_btree_spec_free(&spec);
-            return INDEX_MUTATION_ERROR;
-        }
-
-        cell_contents.keys[i] = value;
-    }
-
-    // Assign the full row as the leaf payload
-    cell_contents.BTreePayload.row = row;
 
     // Insertion orchestration
-    BTreeStatus status = btree_insert(&btree, &cell_contents, &result, &spec);
+    status = btree_insert(&btree, &cell_contents, &result, &spec);
 
     free(cell_contents.keys);
     cell_contents.keys = NULL;
+    cell_contents.BTreePayload.row = NULL;
 
     switch (status) {
         case BTREE_SUCCESS:

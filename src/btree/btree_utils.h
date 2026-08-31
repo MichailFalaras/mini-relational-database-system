@@ -184,6 +184,9 @@ BTreeStatus shift_cell(BTreePage *btree_page, uint32_t cell_pointer, BTreeShiftD
 BTreeStatus update_cell_pointers_offset(BTreePage *btree_page, uint32_t boundary_cell_pointer, uint16_t cell_size, 
     BTreeShiftDirection shift_direction);
 
+/* Get cell contents from a Row */
+BTreeStatus get_cell_contents_from_row(BTreeCellContents *cell_contents, BTreeIndexSpec *spec, Row *row);
+
 /* ---------- Inline Helpers for immediate Page Metadata Access ---------- */
 
 /* Cell Pointer now containts both the cell's offset and its length. */
