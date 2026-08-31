@@ -207,7 +207,7 @@ Value *evaluate_expression(const ExpressionNode *expr, const EvaluationContext *
             }
 
             bool res = false;
-            if (val->type == NULL_TYPE && val->value.null_val == true) {
+            if (val->null_val) {
                 res = true;
             }
 
@@ -226,7 +226,7 @@ Value *evaluate_expression(const ExpressionNode *expr, const EvaluationContext *
             }
 
             bool res = false;
-            if (val->type != NULL_TYPE && val->value.null_val == false) {
+            if (val->null_val) {
                 res = true;
             }
 

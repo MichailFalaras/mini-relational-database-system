@@ -691,7 +691,7 @@ bool schema_validate_row(const Schema *schema, const Row *row, const EvaluationC
                 for (uint32_t k = 0; k < schema->constraints[j]->constraint_data.primary_key.amount_columns; k++) {
                     uint32_t index = schema->constraints[j]->constraint_data.primary_key.primary_key_columns[k];
 
-                    if (schema->columns[index]->type == NULL_TYPE || row->values[index]->value.null_val == true) {
+                    if (row->values[index]->null_val) {
                         return false;
                     }
                 }
@@ -699,14 +699,13 @@ bool schema_validate_row(const Schema *schema, const Row *row, const EvaluationC
             }
             case NOT_NULL: {
                 uint32_t index = schema->constraints[j]->constraint_data.not_null.column_ref;
-                if (row->values[index]->value.null_val == true) {
+                if (row->values[index]->null_val) {
                     return false;
                 }
                 break;
             }
             case CHECK: {
-                Value *val = evaluate_expression(
-                    schema->constraints[j]->constraint_data.check.constraint_expr, context);
+                Value *val = evaluate_expression(schema->constraints[j]->constraint_data.check.constraint_expr, context);
 
                 if (val == NULL) {
                     return false;
