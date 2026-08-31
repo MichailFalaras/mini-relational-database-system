@@ -90,6 +90,9 @@ Value *value_alloc(DataType type);
 /* Create a Value struct */
 Value *value_create(DataType type, const void *value);
 
+/* Create Value struct of type with NULL value. */
+Value *value_create_null(DataType type);
+
 /* Copy One Value struct to another Value struct */
 Value *value_copy(const Value *value);
 

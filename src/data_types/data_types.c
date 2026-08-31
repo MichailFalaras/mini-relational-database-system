@@ -223,6 +223,16 @@ Value *value_create(DataType type, const void *value) {
      return new_value;
 }
 
+/* Create Value struct of type with NULL value. */
+Value *value_create_null(DataType type) {
+    Value *value = value_alloc(type);
+    if (!value) {
+        return NULL;
+    }
+
+    value->null_val = true;
+    return value;
+}
 
 /* Copy One Value struct to another Value struct */
 Value *value_copy(const Value *src_value) {
@@ -542,11 +552,6 @@ bool value_can_assign(DataType target, const Value *value) {
         return false;
     }
 
-    // Any value can be converted to NULL, as long as there's no NOT NULL constraint
-    if (value->null_val) {
-        return true;
-    }
-
     // Identical data types
     if (target == value->type)
         return true;
@@ -555,8 +560,11 @@ bool value_can_assign(DataType target, const Value *value) {
     // the tested data type.
     switch (target) {
         case INTEGER:
-            return (value->type == INTEGER);
+            if (value->type == UNSIGNED_INTEGER) {
+                return value->value.uint32_val <= INT32_MAX;
+            }
 
+            return (value->type == INTEGER);
         case UNSIGNED_INTEGER:
             if (value->type == INTEGER)
                 return value->value.int32_val >= 0;
