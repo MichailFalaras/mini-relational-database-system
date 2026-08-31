@@ -123,8 +123,9 @@ BTreeStatus btree_page_validate(Pager *pager, BTreePage *btree_page, BTreeIndexS
             return BTREE_CORRUPT_PAGE;
         }
 
-        if (cell.offset < btree_page->free_space_offset || cell.offset >= PAGE_SIZE
-            || cell.offset > PAGE_SIZE - cell.payload_size) {
+        if (cell.offset < btree_page->free_space_offset 
+            || cell.offset >= PAGE_SIZE
+            || cell.offset > PAGE_SIZE - cell.payload_size - cell.key.key_size) {
             return BTREE_CORRUPT_PAGE;
         }
 

@@ -448,7 +448,7 @@ BTreeStatus btree_leaf_node_split(Pager *pager, BTreePage *original_page, BTreeI
     /* Get it in cache. */
     Page *new_page = pager_get_page(pager, new_page_num);
     if (!new_page) {
-        pager_release_page(pager, new_page->page_num);
+        pager_release_page(pager, new_page_num);
         return BTREE_ERROR;
     }
 
