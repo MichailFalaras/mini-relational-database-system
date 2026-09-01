@@ -535,126 +535,85 @@ IndexLookupStatus index_find_exact(const Index *index, Pager *pager, Schema *sch
     search_key.target_key = key_values;
     search_key.num_target_keys = num_columns;
 
+    BTreeSearchEntries btree_result = {0};
+    BTreeStatus status;
+
     // For Unique or Primary index, at most one matching row can exist, so use the
     // optimized single-cell B+ Tree exact lookup.
-
-    if (index->is_unique) {
-        BTreeSearchResult search_result = {0};
-        BTreeCellContents cell_contents = {0};
-
-        BTreeStatus status = btree_find_exact_key(&btree, &search_key, &search_result, &cell_contents);
-
-        switch (status) {
-            case BTREE_SUCCESS:
-                break;
-
-            case BTREE_NOT_FOUND:
-                btree_cell_contents_free(&cell_contents);
-                index_btree_spec_free(&spec);
-                return INDEX_LOOKUP_NOT_FOUND;
-
-            case BTREE_INVALID_ARGUMENTS:
-                btree_cell_contents_free(&cell_contents);
-                index_btree_spec_free(&spec);
-                return INDEX_LOOKUP_INVALID_ARGUMENTS;
-
-            default:
-                btree_cell_contents_free(&cell_contents);
-                index_btree_spec_free(&spec);
-                return INDEX_LOOKUP_ERROR;
-        }
-
-        if (!cell_contents.BTreePayload.row) {
-            btree_cell_contents_free(&cell_contents);
-            index_btree_spec_free(&spec);
-            return INDEX_LOOKUP_ERROR;
-        }
-
-        if (!index_range_result_init(result)) {
-            btree_cell_contents_free(&cell_contents);
-            index_btree_spec_free(&spec);
-            return INDEX_LOOKUP_ERROR;
-        }
-
-        if (!index_range_result_append(result,cell_contents.BTreePayload.row)) {
-            index_range_result_free(result);
-            btree_cell_contents_free(&cell_contents);
-            index_btree_spec_free(&spec);
-            return INDEX_LOOKUP_ERROR;
-        }
-
-        // Row ownership moved from BTreeCellContents to IndexRangeResult.
-        cell_contents.BTreePayload.row = NULL;
-
-        btree_cell_contents_free(&cell_contents);
-        index_btree_spec_free(&spec);
-
-        return INDEX_LOOKUP_SUCCESS;
-    }
-
-
     // For Non-Unique secondary index, multiple leaf cells can contain the exact same full key.
     // Search the inclusive range: key <= entry_key <= key
-    BTreeRangeResult btree_result = {0};
+    if (index->is_unique) {
+        BTreeSearchResult search_result = {0};
+        status = btree_find_exact_key(&btree, &search_key, &search_result, &btree_result);
+    }
+    else {
+        status = btree_find_range_keys(&btree, &spec, &search_key, true, &search_key, true, &btree_result);
+    }
 
-    BTreeStatus status = btree_find_range_keys(&btree, &spec, &search_key, true, 
-        &search_key, true, &btree_result);
-
+    // Evaluating search completion status code
     switch (status) {
         case BTREE_SUCCESS:
             break;
 
         case BTREE_NOT_FOUND:
-            btree_range_result_free(&btree_result);
+            btree_search_entries_free(&btree_result);
             index_btree_spec_free(&spec);
             return INDEX_LOOKUP_NOT_FOUND;
 
         case BTREE_INVALID_ARGUMENTS:
-            btree_range_result_free(&btree_result);
+            btree_search_entries_free(&btree_result);
             index_btree_spec_free(&spec);
             return INDEX_LOOKUP_INVALID_ARGUMENTS;
 
         default:
-            btree_range_result_free(&btree_result);
+            btree_search_entries_free(&btree_result);
             index_btree_spec_free(&spec);
             return INDEX_LOOKUP_ERROR;
     }
 
-    // An exact non-unique lookup that found no matching rows should still report NOT_FOUND.
+    // No match was found
     if (btree_result.count == 0) {
-        btree_range_result_free(&btree_result);
+        btree_search_entries_free(&btree_result);
         index_btree_spec_free(&spec);
         return INDEX_LOOKUP_NOT_FOUND;
     }
 
-    if (!index_range_result_init(result)) {
-        btree_range_result_free(&btree_result);
+    // A match is found, but a unique index cannot return more than 1 matches
+    if (index->is_unique && btree_result.count != 1) {
+        btree_search_entries_free(&btree_result);
         index_btree_spec_free(&spec);
         return INDEX_LOOKUP_ERROR;
     }
 
+    // Initialize index result structure
+    if (!index_range_result_init(result)) {
+        btree_cell_contents_free(&btree_result);
+        index_btree_spec_free(&spec);
+        return INDEX_LOOKUP_ERROR;
+    }
+
+    // Transfer Row ownership from BTreeSearchEntries to IndexRangeResult
     for (uint32_t i = 0; i < btree_result.count; i++) {
-        Row *row = btree_result.cells[i].BTreePayload.row;
+        Row *row = btree_result.entries[i].cell.BTreePayload.row;
 
         if (!row) {
             index_range_result_free(result);
-            btree_range_result_free(&btree_result);
+            btree_search_entries_free(&btree_result);
             index_btree_spec_free(&spec);
             return INDEX_LOOKUP_ERROR;
         }
 
         if (!index_range_result_append(result, row)) {
             index_range_result_free(result);
-            btree_range_result_free(&btree_result);
+            btree_search_entries_free(&btree_result);
             index_btree_spec_free(&spec);
             return INDEX_LOOKUP_ERROR;
         }
 
-        // Ownership moved into IndexRangeResult
-        btree_result.cells[i].BTreePayload.row = NULL;
+        btree_result.entries[i].cell.BTreePayload.row = NULL;
     }
 
-    btree_range_result_free(&btree_result);
+    btree_search_entries_free(&btree_result);
     index_btree_spec_free(&spec);
 
     return INDEX_LOOKUP_SUCCESS;
@@ -709,7 +668,7 @@ IndexLookupStatus index_find_prefix(const Index *index, Pager *pager, Schema *sc
     prefix_key.target_key = prefix_key_values;
     prefix_key.num_target_keys = prefix_num_columns;
 
-    BTreeRangeResult btree_result = {0};
+    BTreeSearchEntries btree_result = {0};
 
     BTreeStatus status = btree_find_prefix_keys(&btree, &spec, &prefix_key, &btree_result);
 
@@ -718,45 +677,48 @@ IndexLookupStatus index_find_prefix(const Index *index, Pager *pager, Schema *sc
             break;
 
         case BTREE_NOT_FOUND:
-            btree_range_result_free(&btree_result);
+            btree_search_entries_free(&btree_result);
             index_btree_spec_free(&spec);
             return INDEX_LOOKUP_NOT_FOUND;
 
         case BTREE_INVALID_ARGUMENTS:
-            btree_range_result_free(&btree_result);
+            btree_search_entries_free(&btree_result);
             index_btree_spec_free(&spec);
             return INDEX_LOOKUP_INVALID_ARGUMENTS;
 
         default:
-            btree_range_result_free(&btree_result);
+            btree_search_entries_free(&btree_result);
             index_btree_spec_free(&spec);
             return INDEX_LOOKUP_ERROR;
     }
 
+    // No matches were found
     if (btree_result.count == 0) {
-        btree_range_result_free(&btree_result);
+        btree_search_entries_free(&btree_result);
         index_btree_spec_free(&spec);
         return INDEX_LOOKUP_NOT_FOUND;
     }
 
+    // Initialize the index result's structure
     if (!index_range_result_init(result)) {
-        btree_range_result_free(&btree_result);
+        btree_search_entries_free(&btree_result);
         index_btree_spec_free(&spec);
         return INDEX_LOOKUP_ERROR;
     }
 
+    // Transfer ownership of rows from BTreeSearchEntries to IndexRangeResult
     for (uint32_t i = 0; i < btree_result.count; i++) {
-        Row *row = btree_result.cells[i].BTreePayload.row;
+        Row *row = btree_result.entries[i].cell.BTreePayload.row;
 
         if (!row) {
             index_range_result_free(result);
-            btree_range_result_free(&btree_result);
+            btree_search_entries_free(&btree_result);
             index_btree_spec_free(&spec);
             return INDEX_LOOKUP_ERROR;
         }
 
         if (!index_range_result_append(result, row)) {
-            btree_range_result_free(&btree_result);
+            btree_search_entries_free(&btree_result);
             index_btree_spec_free(&spec);
 
             // If append fails, we also need to free the already transferred rows
@@ -767,10 +729,10 @@ IndexLookupStatus index_find_prefix(const Index *index, Pager *pager, Schema *sc
 
         // Ownership moved into IndexRangeResult.
          
-        btree_result.cells[i].BTreePayload.row = NULL;
+        btree_result.entries[i].cell.BTreePayload.row = NULL;
     }
 
-    btree_range_result_free(&btree_result);
+    btree_search_entries_free(&btree_result);
     index_btree_spec_free(&spec);
 
     return INDEX_LOOKUP_SUCCESS;
@@ -872,10 +834,10 @@ IndexLookupStatus index_find_range(const Index *index, Pager *pager, Schema *sch
     BTreeSearchKey *start_search_ptr = has_start ? &start_search_key : NULL;
     BTreeSearchKey *end_search_ptr = has_end ? &end_search_key : NULL;
 
-    BTreeRangeResult range_results = {0};
+    BTreeSearchEntries btree_result = {0};
 
     BTreeStatus status = btree_find_range_keys(&btree, &spec, 
-        start_search_ptr, include_start, end_search_ptr, include_end, &range_results);
+        start_search_ptr, include_start, end_search_ptr, include_end, &btree_result);
 
     switch (status) {
         case BTREE_SUCCESS:
@@ -883,23 +845,23 @@ IndexLookupStatus index_find_range(const Index *index, Pager *pager, Schema *sch
 
         case BTREE_NOT_FOUND:
             index_btree_spec_free(&spec);
-            btree_range_result_free(&range_results);
+            btree_search_entries_free(&btree_result);
             return INDEX_LOOKUP_NOT_FOUND;
 
         case BTREE_INVALID_ARGUMENTS:
             index_btree_spec_free(&spec);
-            btree_range_result_free(&range_results);
+            btree_search_entries_free(&btree_result);
             return INDEX_LOOKUP_INVALID_ARGUMENTS;
 
         default:
             index_btree_spec_free(&spec);
-            btree_range_result_free(&range_results);
+            btree_search_entries_free(&btree_result);
             return INDEX_LOOKUP_ERROR;
     }
 
     // An exact non-unique range lookup that found no matching rows should return a success status code
-    if (range_results.count == 0) {
-        btree_range_result_free(&range_results);
+    if (btree_result.count == 0) {
+        btree_search_entries_free(&btree_result);
         index_btree_spec_free(&spec);
 
         // result was already initialized to {NULL, 0, 0}
@@ -909,26 +871,26 @@ IndexLookupStatus index_find_range(const Index *index, Pager *pager, Schema *sch
     // Allocate the range result entries 
     if (!index_range_result_init(result)) {
         index_btree_spec_free(&spec);
-        btree_range_result_free(&range_results);
+        btree_search_entries_free(&btree_result);
 
         return INDEX_LOOKUP_ERROR;
     }
 
-    // Transfer ownership of range result Rows to IndexEntry array elements
-    for (uint32_t i = 0; i < range_results.count; i++) {
-        Row *entry_row = range_results.cells[i].BTreePayload.row;
+    // Transfer ownership of rows from BTreeSearchEntries to IndexRangeResult
+    for (uint32_t i = 0; i < btree_result.count; i++) {
+        Row *row = btree_result.entries[i].cell.BTreePayload.row;
 
-        if (!entry_row) {
+        if (!row) {
             index_range_result_free(result);
-            btree_range_result_free(&range_results);
+            btree_search_entries_free(&btree_result);
             index_btree_spec_free(&spec);
 
             return INDEX_LOOKUP_ERROR;
         }
 
-        if (!index_range_result_append(result, entry_row)) {
+        if (!index_range_result_append(result, row)) {
             index_btree_spec_free(&spec);
-            btree_range_result_free(&range_results);
+            btree_search_entries_free(&btree_result);
 
             // If append fails, we also need to free the already transferred rows
             index_range_result_free(result);
@@ -937,11 +899,11 @@ IndexLookupStatus index_find_range(const Index *index, Pager *pager, Schema *sch
         }
         
         // Ownership of current Row struct has been transferred
-        range_results.cells[i].BTreePayload.row = NULL;
+        btree_result.entries[i].cell.BTreePayload.row = NULL;
     }
 
     index_btree_spec_free(&spec);
-    btree_range_result_free(&range_results);
+    btree_search_entries_free(&btree_result);
     
     return INDEX_LOOKUP_SUCCESS;
 }
@@ -1064,4 +1026,139 @@ IndexMutationStatus index_insert_entry(Index *index, Pager *pager, Schema *schem
 
     index_btree_spec_free(&spec);
     return INDEX_MUTATION_SUCCESS;
+}
+
+
+/*
+ * Delete Index entry/entries from the underlying B+ Tree.
+ *
+ * NOTE: B+ Tree mutations are not transactional at this stage of
+ * development. If deletion fails after modifying one or more pages,
+ * those changes cannot currently be rolled back. This is particularly
+ * relevant to non-unique indexes, where removing all entries for a key
+ * can require multiple B+ Tree mutations.
+ *
+ * Atomic mutation and rollback support will be introduced by the
+ * transaction/recovery layer in a later stage of development.
+ */
+IndexMutationStatus index_delete_entry(Index *index, Pager *pager, Schema *schema, Row *row) {
+    // Validate inputs
+    if (!index || !index->key || 
+        !index->key->column_index_array || 
+        index->key->num_columns == 0) {
+        return INDEX_MUTATION_INVALID_ARGUMENTS;
+    }
+
+    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+        return INDEX_MUTATION_INVALID_ARGUMENTS;
+    }
+
+    if (index->root_page_num <= SYSTEM_CATALOG_PAGE_NUM ||
+        index->root_page_num >= pager->num_pages ||
+        index->root_page_num >= MAX_PAGES) {
+        return INDEX_MUTATION_INVALID_ARGUMENTS;
+    }
+
+    if (!schema || !row || !row->values || row->n_columns == 0 || row->is_deleted) {
+        return INDEX_MUTATION_INVALID_ARGUMENTS;
+    }
+
+    // Initialize sttructures of deletion functionality
+    BTree btree = {0};
+    btree.pager = pager;
+    btree.root_page_num = index->root_page_num;
+
+    BTreeIndexSpec spec = {0};
+    if (!btree_index_spec_init(index, schema, &spec)) {
+        return INDEX_MUTATION_ERROR;
+    }
+
+    // Initialized in btree_delete()
+    BTreeDeletionResult result = {0};
+
+    // Initialize Contents of soon-to-be-deleted Cell
+    BTreeCellContents cell_contents = {0};
+
+    BTreeStatus status = get_cell_contents_from_row(&cell_contents, &spec, row);
+    
+    if (status != BTREE_SUCCESS) {
+        index_btree_spec_free(&spec);
+        
+        return status == BTREE_INVALID_ARGUMENTS 
+            ? INDEX_MUTATION_INVALID_ARGUMENTS 
+            : INDEX_MUTATION_ERROR;
+    }
+
+    // Initialization of return status
+    IndexMutationStatus mutation_status = INDEX_MUTATION_ERROR;
+
+    // UNIQUE Index --> looking for 1 entry
+    if (index->is_unique) {
+        status = btree_delete(&btree, &cell_contents, &result, &spec);
+
+        switch (status) {
+            case BTREE_SUCCESS:
+                mutation_status = INDEX_MUTATION_SUCCESS;
+                break;
+
+            case BTREE_NOT_FOUND:
+                mutation_status = INDEX_MUTATION_NOT_FOUND;
+                break;
+
+            case BTREE_INVALID_ARGUMENTS:
+                mutation_status = INDEX_MUTATION_INVALID_ARGUMENTS;
+                break;
+
+            case BTREE_ERROR:
+            case BTREE_CORRUPT_PAGE:
+            case BTREE_INVALID_PAGE:
+            case BTREE_FREE_PAGE:
+            default:
+                mutation_status = INDEX_MUTATION_ERROR;
+                break;
+        }
+    } else {
+        // Non-UNIQUE Index --> looking for 1 or more entries
+        bool deleted_any = false;
+
+        while (true) {
+            status = btree_delete(&btree, &cell_contents, &result, &spec);
+
+            if (status == BTREE_SUCCESS) {
+                deleted_any = true;
+                continue;
+            }
+
+            // Either no matching entry existed initially or all matching entries have now been deleted.
+            if (status == BTREE_NOT_FOUND) {
+                mutation_status = deleted_any ? INDEX_MUTATION_SUCCESS : INDEX_MUTATION_NOT_FOUND;
+                break;
+            }
+
+            if (status == BTREE_INVALID_ARGUMENTS) {
+                mutation_status = INDEX_MUTATION_INVALID_ARGUMENTS;
+            } else {
+                mutation_status = INDEX_MUTATION_ERROR;
+            }
+
+            break;
+        }
+    }
+
+    
+    if (btree.root_page_num != index->root_page_num) {
+        index->root_page_num = btree.root_page_num;
+
+        /*
+        * TODO(catalog): Persist the updated index root page number
+        * when system-catalog metadata persistence is implemented.
+        */
+    }
+
+    free(cell_contents.keys);
+    cell_contents.keys = NULL;
+    cell_contents.BTreePayload.row = NULL;
+
+    index_btree_spec_free(&spec);
+    return mutation_status;
 }

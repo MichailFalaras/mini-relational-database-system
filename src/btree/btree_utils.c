@@ -1362,17 +1362,21 @@ BTreeStatus propagate_first_key_to_parents(Pager *pager, BTreePage *btree_page, 
 }
 
 
-/* ---------- BTreeRangeResult Helpers ---------- */
+/* ---------- BTreeSearchEntries Helpers ---------- */
 
-/* The caller owns the BTreeRangeResult struct */
-BTreeStatus btree_range_result_init(BTreeRangeResult *result) {
+/* The caller owns the BTreeSearchEntries struct */
+BTreeStatus btree_search_entries_init(BTreeSearchEntries *result) {
     if (!result) {
         return BTREE_INVALID_ARGUMENTS;
     }
 
-    result->cells = (BTreeCellContents *) calloc(BTREE_RANGE_INITIAL_CAPACITY, sizeof(BTreeCellContents));
+    if (result->entries || result->count != 0 || result->capacity != 0) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    result->entries = (BTreeEntry *) calloc(BTREE_RANGE_INITIAL_CAPACITY, sizeof(BTreeEntry));
     
-    if(!result->cells) {
+    if(!result->entries) {
         result->count = 0;
         result->capacity = 0;
         return BTREE_ERROR;
@@ -1383,8 +1387,8 @@ BTreeStatus btree_range_result_init(BTreeRangeResult *result) {
     return BTREE_SUCCESS;
 }
 
-BTreeStatus btree_range_result_append(BTreeRangeResult *result, BTreeCellContents *new_cell) {
-    if (!result || !new_cell) {
+BTreeStatus btree_search_entries_append(BTreeSearchEntries *result, BTreeEntry *new_entry) {
+    if (!result || !new_entry) {
         return BTREE_INVALID_ARGUMENTS;
     }
 
@@ -1398,19 +1402,19 @@ BTreeStatus btree_range_result_append(BTreeRangeResult *result, BTreeCellContent
         }
 
         // Increasing the size of the cell contents array
-        BTreeCellContents *new_result_cells = 
-            (BTreeCellContents *) realloc(result->cells, new_capacity * sizeof(BTreeCellContents));
+        BTreeEntry *new_entries = 
+            (BTreeEntry *) realloc(result->entries, new_capacity * sizeof(BTreeEntry));
 
-        if (!new_result_cells) {
+        if (!new_entries) {
             return BTREE_ERROR;
         }
 
-        result->cells = new_result_cells;
+        result->entries = new_entries;
         result->capacity = new_capacity;
     }
 
     // Appending the new cell content struct
-    result->cells[result->count] = *new_cell;
+    result->entries[result->count] = *new_entry;
     result->count++;
 
     return BTREE_SUCCESS;
@@ -1432,21 +1436,33 @@ void btree_cell_contents_free(BTreeCellContents *cell) {
     }
 }
 
-void btree_range_result_free(BTreeRangeResult *result) {
-    if (!result) {
+void btree_entry_free(BTreeEntry *entry) {
+    if (!entry) {
+        return;
+    }
+
+    btree_cell_contents_free(&entry->cell);
+
+    entry->page_num = UINT32_MAX;
+    entry->cell_index = UINT16_MAX;
+}
+
+
+void btree_search_entries_free(BTreeSearchEntries *entries) {
+    if (!entries) {
         return;
     }
 
     // Free the allocate Key and Rows for each cell contents entry in the ragne result
-    for (uint32_t i = 0; i < result->count; i++) {
-        btree_cell_contents_free(&result->cells[i]);
+    for (uint32_t i = 0; i < entries->count; i++) {
+        btree_entry_free(&entries->entries[i]);
     }
 
-    free(result->cells);
+    free(entries->entries);
 
-    result->cells = NULL;
-    result->count = 0;
-    result->capacity = 0;
+    entries->entries = NULL;
+    entries->count = 0;
+    entries->capacity = 0;
 }
 
 
