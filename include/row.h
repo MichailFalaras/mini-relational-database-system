@@ -28,4 +28,7 @@ extern bool row_set_value(Row *row, uint32_t column_pos, const Value *new_val);
 
 extern void row_free(Row *row);
 
+// Compares 2 rows column-by-column
+extern bool row_equals(const Row *left, const Row *right);
+
 #endif
