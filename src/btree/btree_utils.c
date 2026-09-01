@@ -1430,7 +1430,7 @@ void btree_cell_contents_free(BTreeCellContents *cell) {
         cell->keys = NULL;
     }
 
-    if (cell->BTreePayload.row) {
+    if (cell->type == BTREE_LEAF_NODE && cell->BTreePayload.row) {
         row_free(cell->BTreePayload.row);
         cell->BTreePayload.row = NULL;
     }
@@ -1613,6 +1613,191 @@ BTreeStatus get_cell_contents_from_row(BTreeCellContents *cell_contents, BTreeIn
     
     // Assign the full row as the leaf payload
     cell_contents->BTreePayload.row = row;
+
+    return BTREE_SUCCESS;
+}
+
+// Locate the position (page number and cell index) of a Row
+BTreeStatus btree_locate_target_row(BTree *btree, BTreeSearchKey *search_key, const Row *target_row,
+    BTreeIndexSpec *index, uint32_t *page_num, uint16_t *cell_index) {
+    
+    // Validate inputs
+    if (!btree ||
+        !btree->pager ||
+        btree->pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    if (!index || 
+        !index->index_key ||
+        !index->index_key->column_index_array ||
+        index->index_key->num_columns == 0) {
+        return BTREE_INVALID_ARGUMENTS;        
+    }
+
+    if (!search_key ||
+        !search_key->target_key ||
+        !search_key->index ||
+        search_key->index != index ||
+        search_key->num_target_keys != index->index_key->num_columns) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    if (!target_row || !page_num || !cell_index) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    *page_num = UINT32_MAX;
+    *cell_index = UINT16_MAX;
+
+    BTreeSearchEntries matches = {0};    
+    BTreeStatus status;
+
+    // Distinguishing between a Unique and a Non-Unique index
+    // 1. Find exact match in unique index
+    // 2. Find all matches and then compare them column-by-column with the target row
+
+    // UNIQUE index
+    if (index->is_unique) {
+        BTreeSearchResult search_result = {0};
+
+        status = btree_find_exact_key(btree, search_key, &search_result, &matches);
+        
+        if (status != BTREE_SUCCESS) {
+            btree_search_entries_free(&matches);
+            return status;
+        }
+
+        if (matches.count != 1) {
+            BTreeStatus return_status = matches.count == 0 ? BTREE_NOT_FOUND : BTREE_CORRUPT_PAGE;
+
+            btree_search_entries_free(&matches);
+            return return_status;
+        }
+
+        *page_num = matches.entries[0].page_num;
+        *cell_index = matches.entries[0].cell_index;
+
+        btree_search_entries_free(&matches);
+        return BTREE_SUCCESS;
+    }
+
+    // NON-UNIQUE index
+    status = btree_find_range_keys(btree, index, search_key, true, search_key, true, &matches);
+
+    if (status != BTREE_SUCCESS) {
+        btree_search_entries_free(&matches);
+        return status;
+    }
+
+    for (uint32_t i = 0; i < matches.count; i++) {
+        Row *row = matches.entries[i].cell.BTreePayload.row;
+
+        if (!row) {
+            btree_search_entries_free(&matches);
+            return BTREE_CORRUPT_PAGE;
+        }
+
+        
+        // If the current row equals the target row on all Columns, we retrieve its position
+        if (row_equals(row, target_row)) {
+            *page_num = matches.entries[i].page_num;
+            *cell_index = matches.entries[i].cell_index;
+
+            btree_search_entries_free(&matches);
+            return BTREE_SUCCESS;
+        }
+    }
+
+    btree_search_entries_free(&matches);
+    return BTREE_SUCCESS;
+
+}
+
+// Delete a cell in a particular position (page number and cell index)
+BTreeStatus btree_node_delete_at(Pager *pager, BTreePage *btree_page, uint16_t cell_index,
+    BTreeDeletionResult *result, BTreeIndexSpec *index) {
+    
+    // Validate inputs
+    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    if (!btree_page || 
+        !btree_page->page || 
+        !btree_page->data ||
+        btree_page->cell_count == 0 || cell_index >= btree_page->cell_count) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    if (!index || 
+        !index->index_key ||
+        !index->index_key->column_index_array ||
+        index->index_key->num_columns == 0) {
+        return BTREE_INVALID_ARGUMENTS;        
+    }
+
+    if (!result) {
+        return BTREE_INVALID_ARGUMENTS; 
+    }
+
+    deletion_result_reset(result);
+    result->page_num = btree_page->page->page_num;
+
+    // Extract cell contents of target cell
+    BTreeCellContents cell_to_be_removed = {0};
+    
+    BTreeStatus status = get_cell_contents(btree_page, cell_index, &cell_to_be_removed, index);
+
+    if (status != BTREE_SUCCESS) {
+        btree_cell_contents_free(&cell_to_be_removed);
+        return status;
+    }
+
+    // Verify its deletion doesn't cause underflow
+    uint32_t used_space = 
+        (btree_page->cell_count - 1) * sizeof(uint32_t) +
+        (PAGE_SIZE - btree_page->free_space_offset - cell_to_be_removed.cell_size);
+
+    status = btree_check_underflow(btree_page, used_space);
+
+    btree_cell_contents_free(&cell_to_be_removed);
+
+    if (status == BTREE_NODE_UNDERFLOW) {
+        result->underflow = true;
+        return BTREE_NODE_UNDERFLOW;
+    }
+
+    if (status != BTREE_SUCCESS) {
+        return status;
+    }
+
+    // Delete cell since it doesn't cause underflow at this point
+    status = btree_remove_cell(btree_page, cell_index);
+
+    if (status != BTREE_SUCCESS) {
+        return status;
+    }
+
+    if (!btree_page_sync(pager, btree_page)) {
+        return BTREE_ERROR;
+    }
+
+    if (cell_index == 0 && btree_page->cell_count > 0) {
+        BTreeCellContents new_first_cell = {0};
+
+        status = get_cell_contents(btree_page, 0, &new_first_cell, index);
+
+        if (status != BTREE_SUCCESS) {
+            btree_cell_contents_free(&new_first_cell);
+            return status;
+        }
+
+        result->first_key_changed = true;
+        result->first_cell = new_first_cell;
+    }
+
+    result->deleted = true;
 
     return BTREE_SUCCESS;
 }

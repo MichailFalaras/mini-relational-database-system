@@ -191,6 +191,14 @@ BTreeStatus update_cell_pointers_offset(BTreePage *btree_page, uint32_t boundary
 /* Get cell contents from a Row */
 BTreeStatus get_cell_contents_from_row(BTreeCellContents *cell_contents, BTreeIndexSpec *spec, Row *row);
 
+/* Locate the position (page number and cell index) of a Row */
+BTreeStatus btree_locate_target_row(BTree *btree, BTreeSearchKey *search_key, const Row *target_row,
+    BTreeIndexSpec *index, uint32_t *page_num, uint16_t *cell_index);
+
+/* Delete a cell in a particular position (page number and cell index) */
+BTreeStatus btree_node_delete_at(Pager *pager, BTreePage *btree_page, uint16_t cell_index,
+    BTreeDeletionResult *result, BTreeIndexSpec *index);
+
 /* ---------- Inline Helpers for immediate Page Metadata Access ---------- */
 
 /* Cell Pointer now containts both the cell's offset and its length. */
