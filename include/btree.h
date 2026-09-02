@@ -246,8 +246,9 @@ extern BTreeStatus btree_node_insert(Pager *pager, BTreePage *btree_page, BTreeC
                             BTreeSplitResult *split_result, BTreeIndexSpec *index);
 
 /* BTree type agnostic deletion of cell through search key. */
-extern BTreeStatus btree_node_delete(Pager *pager, BTreePage *btree_page, BTreeSearchKey *search_key, BTreeDeletionResult *deletion_result);
-
+extern BTreeStatus btree_node_delete(BTree *btree, BTreeCellContents *target_cell, BTreeDeletionResult *deletion_result,
+    BTreeIndexSpec *index, BTreePage *target_leaf);
+    
 /* BTree Leaf Node Split.
  * Returns important split information in BTreeSplitResult. */
 extern BTreeStatus btree_leaf_node_split(Pager *pager, BTreePage *original_page, BTreeIndexSpec *index,

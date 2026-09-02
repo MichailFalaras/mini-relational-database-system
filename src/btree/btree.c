@@ -332,88 +332,85 @@ BTreeStatus btree_node_insert(Pager *pager, BTreePage *btree_page, BTreeCellCont
 /* BTree type agnostic deletion of cell through search key.
  *
  * Returns deletion result to caller. */
-BTreeStatus btree_node_delete(Pager *pager, BTreePage *btree_page, BTreeSearchKey *search_key, BTreeDeletionResult *deletion_result) {
-    if (!pager || !btree_page || !btree_page->page
-        || !btree_page->data || !search_key 
-        || !search_key->index || !deletion_result) {
+BTreeStatus btree_node_delete(BTree *btree, BTreeCellContents *target_cell, BTreeDeletionResult *deletion_result,
+    BTreeIndexSpec *index, BTreePage *target_leaf) {
+
+    // Validate inputs
+    if (!btree ||
+        !btree->pager ||
+        btree->root_page_num <= SYSTEM_CATALOG_PAGE_NUM ||
+        btree->root_page_num >= MAX_PAGES ||
+        btree->root_page_num >= btree->pager->num_pages) {
+        return BTREE_INVALID_ARGUMENTS;
+    }  
+
+    if (!target_cell ||
+        !target_cell->keys ||
+        target_cell->num_keys == 0 ||
+        !target_cell->BTreePayload.row) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+    
+    if (!index ||
+        !index->index_key ||
+        !index->index_key->column_index_array ||
+        index->index_key->num_columns == 0 ||
+        target_cell->num_keys != index->index_key->num_columns) {
         return BTREE_INVALID_ARGUMENTS;
     }
 
-    if (btree_page->cell_count == 0) {
+    if (!deletion_result || !target_leaf) {
         return BTREE_INVALID_ARGUMENTS;
     }
 
-    /* Initialize deletion result metadata. */
-    deletion_result_reset(deletion_result);
-    deletion_result->page_num = btree_page->page->page_num;
+    // Build the logical search key for the requested index entry
+    BTreeSearchKey search_key = {0};
+    search_key.index = index;
+    search_key.num_target_keys = target_cell->num_keys;
 
-    /* Find index of exact cell we want to delete.*/
-    BTreeSearchResult search_result = {0};
-    BTreeStatus status = btree_binary_search(btree_page, search_key, &search_result, BTREE_LOWER_BOUND);
-    if (status != BTREE_SUCCESS) {
-        fprintf(stderr, "btree_node_delete: Something went wrong.\n");
-        return status;
-    }
-    
-    /* We want an exact match of keys in order to delete. */
-    if (search_result.exact_match == false) {
-        return BTREE_NOT_FOUND;
-    }
-
-    /* Figure out if cell removal is going to cause underflow. */
-    BTreeCellContents cell_to_be_removed = {0};
-    status = get_cell_contents(btree_page, search_result.result_index, &cell_to_be_removed, search_key->index);
-    if (status != BTREE_SUCCESS) {
-        value_free_array(cell_to_be_removed.keys, cell_to_be_removed.num_keys);
-        if (cell_to_be_removed.type == BTREE_LEAF_NODE) { row_free(cell_to_be_removed.BTreePayload.row); }
-        return status;
-    }
-
-    uint32_t used_space = (btree_page->cell_count-1) * sizeof(uint32_t) +
-                        (PAGE_SIZE - btree_page->free_space_offset - cell_to_be_removed.cell_size);
-
-    /* Check if page is underflowing. */
-    status = btree_check_underflow(btree_page, used_space);
-    if (status == BTREE_NODE_UNDERFLOW) {
-        value_free_array(cell_to_be_removed.keys, cell_to_be_removed.num_keys);
-        if (cell_to_be_removed.type == BTREE_LEAF_NODE) { row_free(cell_to_be_removed.BTreePayload.row); }
-        deletion_result->underflow = true;
-        return status;
-    }
-    value_free_array(cell_to_be_removed.keys, cell_to_be_removed.num_keys);
-    if (cell_to_be_removed.type == BTREE_LEAF_NODE) { row_free(cell_to_be_removed.BTreePayload.row); }
-    
-    if (status != BTREE_SUCCESS) {
-        return status;
-    }
-
-    /* Remove specific cell. */
-    status = btree_remove_cell(btree_page, search_result.result_index);
-    if (status != BTREE_SUCCESS) {
-        return status;
-    }
-
-    if (!btree_page_sync(pager, btree_page)) {
+    search_key.target_key = values_to_serialized_key(target_cell->keys, target_cell->num_keys, index);
+    if (!search_key.target_key) {
         return BTREE_ERROR;
     }
 
-    /* Pass serialized first key only if everything went ok. */
-    if (search_result.result_index == 0) {
-        deletion_result->first_key_changed = true;
-        
-        if (btree_page->cell_count > 0) {
-            BTreeCellContents temp = {0};
-            status = get_cell_contents(btree_page, 0, &temp, search_key->index);
-            if (status != BTREE_SUCCESS) {
-                return status;
-            }
+    // Locate target index entry
+    uint32_t target_page_num = UINT32_MAX;
+    uint16_t target_cell_index = UINT16_MAX;
 
-            deletion_result->first_cell = temp;
-        }
+    BTreeStatus status = btree_locate_target_row(
+        btree, 
+        &search_key, 
+        target_cell->BTreePayload.row,
+        index, 
+        &target_page_num,
+        &target_cell_index
+    );
+
+    free(search_key.target_key);
+    search_key.target_key = NULL;
+
+    if (status != BTREE_SUCCESS) {
+        return status;
+    }
+
+    // Load target leaf page and validate it
+    Page *page = pager_get_page(btree->pager, target_page_num);
+    if (!page) {
+        return BTREE_ERROR;
+    }
+
+    status = btree_page_attach_load_validate(btree->pager, target_leaf, page, index);
+    if (status != BTREE_SUCCESS) {
+        return status;
+    }
+
+    if (target_leaf->type != BTREE_LEAF_NODE || 
+        target_cell_index >= target_leaf->cell_count) {
+        return BTREE_CORRUPT_PAGE;
     }
     
-    deletion_result->deleted = true;
-    return BTREE_SUCCESS;
+    // Attempt to delete the target entry in the now known cell index of the target leaf page
+    return btree_node_delete_at(btree->pager, target_leaf, target_cell_index, deletion_result, index);
 }
 
 /* BTree Leaf Node Split.
@@ -2008,44 +2005,46 @@ BTreeStatus btree_insert(BTree *btree, BTreeCellContents *cell_contents, BTreeIn
  *  
  * Returns BTreeDeletionResult. */
 BTreeStatus btree_delete(BTree *btree, BTreeCellContents *cell_contents, BTreeDeletionResult *deletion_res, BTreeIndexSpec *index) {
-    if (!btree || btree->root_page_num <= SYSTEM_CATALOG_PAGE_NUM 
-        || btree->root_page_num >= MAX_PAGES || !btree->pager
-        || !cell_contents  || !deletion_res || !index) {
+
+    // Validate inputs
+    if (!btree || 
+        btree->root_page_num <= SYSTEM_CATALOG_PAGE_NUM || 
+        btree->root_page_num >= MAX_PAGES ||
+        btree->root_page_num >= btree->pager->num_pages || 
+        !btree->pager || 
+        !deletion_res) {
         return BTREE_INVALID_ARGUMENTS;
     }
+
+    if (!cell_contents ||
+        !cell_contents->keys ||
+        cell_contents->num_keys == 0 ||
+        !cell_contents->BTreePayload.row) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    if (!index ||
+        !index->index_key ||
+        !index->index_key->column_index_array ||
+        index->index_key->num_columns == 0 ||
+        cell_contents->num_keys != index->index_key->num_columns) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
     deletion_result_reset(deletion_res);
 
-    /* Create search key and search result for root-to-leaf traversal. */
-    BTreeSearchResult search_result = {0};
-    BTreeSearchKey search_key = {0};
-    search_key.index = index;
-    search_key.num_target_keys = cell_contents->num_keys;
-    search_key.target_key = values_to_serialized_key(cell_contents->keys, search_key.num_target_keys, index);
-    if (!search_key.target_key) {
-        return BTREE_ERROR;
-    }
-
-    retry_deletion: // To restart deletion after underflow propagation
-    BTreeStatus status = btree_root_to_leaf(btree, &search_key, &search_result, BTREE_UPPER_BOUND); 
-    if (status != BTREE_SUCCESS) {
-        free(search_key.target_key);
-        return status;
-    }
-
+retry_deletion:
     BTreePage leaf_node = {0};
-    status = btree_page_attach_load_validate(btree->pager, &leaf_node, search_result.page, index);
-    if (status != BTREE_SUCCESS) {
-        free(search_key.target_key);
-        return status;
-    }
 
-    status = btree_node_delete(btree->pager, &leaf_node, &search_key, deletion_res);
+    BTreeStatus status = btree_node_delete(btree, cell_contents, deletion_res, index, &leaf_node);
+
     if (status != BTREE_SUCCESS && status != BTREE_NODE_UNDERFLOW) {
-        free(search_key.target_key);
         return status;
     }
 
-    /* If deletion fails because leaf node is going to underflow after deletion. */
+    // If deletion fails because leaf node is going to underflow after deletion,
+    // keep the target entry in place for now and repair the tree,
+    // before attempting to deletio again
     if (status == BTREE_NODE_UNDERFLOW && deletion_res->underflow) {
         BTreePage current = leaf_node;
         BTreeMergeResult merge_result = {0};
@@ -2060,7 +2059,6 @@ BTreeStatus btree_delete(BTree *btree, BTreeCellContents *cell_contents, BTreeDe
                     status = BTREE_CORRUPT_PAGE;
                 }
 
-                free(search_key.target_key);
                 return status;
             }
 
@@ -2071,7 +2069,6 @@ BTreeStatus btree_delete(BTree *btree, BTreeCellContents *cell_contents, BTreeDe
             if (merge_result.needs_merge) {
                 status = btree_node_merge(btree->pager, &merge_result, index);
                 if (status != BTREE_SUCCESS && status != BTREE_NODE_UNDERFLOW) {
-                    free(search_key.target_key);
                     return status;
                 }
             }
@@ -2079,14 +2076,12 @@ BTreeStatus btree_delete(BTree *btree, BTreeCellContents *cell_contents, BTreeDe
             /* Move upwards to parent. */
             Page *page = pager_get_page(btree->pager, merge_result.parent_page_num);
             if (!page) {
-                free(search_key.target_key);
                 return BTREE_CORRUPT_PAGE;
             }
 
             BTreePage btree_parent = {0};
             status = btree_page_attach_load_validate(btree->pager, &btree_parent, page, index);
             if (status != BTREE_SUCCESS) {
-                free(search_key.target_key);
                 return status;
             }
 
@@ -2097,7 +2092,6 @@ BTreeStatus btree_delete(BTree *btree, BTreeCellContents *cell_contents, BTreeDe
                 if (current.cell_count == 0) {
                     status = btree_root_collapse(btree, &current, index);
                     if (status != BTREE_SUCCESS) {
-                        free(search_key.target_key);
                         return status;
                     }
                 }
@@ -2107,7 +2101,6 @@ BTreeStatus btree_delete(BTree *btree, BTreeCellContents *cell_contents, BTreeDe
 
             status = btree_check_underflow(&btree_parent, UINT32_MAX);
             if (status != BTREE_SUCCESS && status != BTREE_NODE_UNDERFLOW) {
-                free(search_key.target_key);
                 return status;
             }
 
@@ -2117,12 +2110,12 @@ BTreeStatus btree_delete(BTree *btree, BTreeCellContents *cell_contents, BTreeDe
                 
         }
         
-        /* Retry deleting. */
+        // Redistribution or merge may have moved the logical target.
+        // Do not reuse its previous page_num/cell_index.
+        // btree_node_delete() will locate it again.
         deletion_result_reset(deletion_res);
-        deletion_res->underflow = false;
         goto retry_deletion;
     }
-    free(search_key.target_key);
 
     /* Update deletion result metadata. */
     deletion_res->deleted = true;
