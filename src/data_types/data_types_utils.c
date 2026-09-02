@@ -165,13 +165,6 @@ bool compare_numeric(const numeric_t *left, const numeric_t *right, int *result)
     int64_t left_value = left->val;
     int64_t right_value = right->val;
 
-    // Reversing sign if numeric value is negative
-    if (left->sign < 0)
-        left_value = -left_value;
-
-    if (right->sign < 0)
-        right_value = -right_value;
-
     uint32_t left_scale = left->scale;
     uint32_t right_scale = right->scale;
 
@@ -371,18 +364,10 @@ bool convert_to_unsigned_integer(Value *value) {
 
 // only INTEGER -> NUMERIC and UNSIGNED_INTEGER -> NUMERIC
 bool convert_to_numeric(Value *value) {
-    numeric_t converted = { .sign = 1, .val = 0, .scale = 0};
+    numeric_t converted = { .val = 0, .scale = 0};
 
     if (value->type == INTEGER) {
-        int32_t source_val = value->value.int32_val;
-
-        if (source_val < 0) {
-            converted.sign = -1;
-            converted.val = -(int64_t) source_val;
-        }
-        else {
-            converted.val = (int64_t) source_val;
-        }
+        converted.val = value->value.int32_val;
     }
     else if (value->type == UNSIGNED_INTEGER) {
         converted.val = value->value.uint32_val;
@@ -524,8 +509,15 @@ bool convert_to_timestamp(Value *value) {
     return true;
 }
 
-/* Get sizeof from DataType. */
-uint32_t get_data_type_size(DataType type) {
+/* Get serialized value size.
+ *
+ * Receives DataType and DataType parameter.
+ * Used to calculate serialized size before even serializing
+ * any information. Then store that information inside a Column
+ * for easy access through BTreeIndexSpec → Schema. 
+ * 
+ * (NOTE: BLOB/JSONB not supported yet)*/
+uint32_t get_serialized_value_size(DataType type, uint32_t type_parameter) {
 
     switch (type) {
         case INTEGER:
@@ -533,29 +525,27 @@ uint32_t get_data_type_size(DataType type) {
         case UNSIGNED_INTEGER:
             return sizeof(uint32_t);
         case NUMERIC:
-            return sizeof(numeric_t);
+            return sizeof(int64_t) + sizeof(uint32_t);
         case FLOAT:
             return sizeof(float);
         case DOUBLE:
             return sizeof(double);
         case CHAR:
-            return sizeof(char_n_t);
         case VARCHAR:
-            return sizeof(varchar_n_t);
+            return type_parameter;
         case TEXT:
-            return sizeof(char *);
+            return DATA_TYPE_TEXT_SIZE;
         case DATE:
         case TIMESTAMP:
             return sizeof(uint64_t);
-        case BLOB:
-            return sizeof(blob_t);
+        // case BLOB:
+        //     return sizeof(uint32_t) + value->value.blob_val.size;
         case BOOL:
             return sizeof(bool);
-        case JSONB:
-            return sizeof(jsonb_t);
+        // case JSONB:
+        //     return sizeof(uint32_t) + value->value.jsonb_val.size;
         default:
-            printf("get_data_type_size: Unsupported data type.\n");
+            printf("get_serialize_value_size: Unsupported data type.\n");
             return 0;
     }
 }
-

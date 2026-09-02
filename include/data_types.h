@@ -4,6 +4,9 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#define DATA_TYPE_TEXT_SIZE 512
+// TODO: BLOB list of pages in disk, probably something similar for jsonb
+
 /* All possible data types used in this database. */
 typedef enum data_types {
     INTEGER,
@@ -23,9 +26,8 @@ typedef enum data_types {
 
 /* NUMERIC/DECIMAL Data Type. */
 typedef struct numeric {
-    int sign;
     int64_t val;
-    uint32_t scale;
+    uint32_t scale; // 10^(-scale)
 } numeric_t;
 
 /* CHAR(n) */
@@ -57,7 +59,7 @@ typedef struct timestamp {
     uint8_t second;
 } timestamp_t;
 
-/* BLOB */
+/* BLOB/JSONB - NOT IN USE */
 typedef struct blob {
     uint32_t size;
     uint8_t *buffer;

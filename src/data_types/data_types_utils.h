@@ -39,6 +39,9 @@ bool convert_to_char(Value *value);
 bool convert_to_varchar(Value *value);
 bool convert_to_text(Value *value);
 bool convert_to_timestamp(Value *value);
-uint32_t get_data_type_size(DataType type);
+
+/* Get serialized value size. */
+uint32_t get_serialized_value_size(DataType type, uint32_t type_parameter);
+
 
 #endif
