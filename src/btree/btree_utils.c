@@ -368,7 +368,7 @@ BTreeStatus swap_rightmost_pointer_with_existing_cell(BTreePage *btree_page, uin
 
     uint32_t cell_pointer = get_cell_pointer(btree_page->data, cell_pointer_index);
     uint8_t *write_offset = btree_page->data + get_cell_offset(cell_pointer);
-    if (!serialize_cell_contents(write_offset, btree_page, &cell_contents)) {
+    if (!serialize_cell_contents(write_offset, btree_page, &cell_contents, index)) {
         value_free_array(cell_contents.keys, cell_contents.num_keys);
         return BTREE_ERROR;
     }
@@ -609,7 +609,7 @@ BTreeStatus insert_cell(Pager *pager, BTreePage *btree_page, BTreeIndexSpec *ind
     );
 
     /* Serialize and write payload onto page. */
-    if (!serialize_cell_contents(write_offset, btree_page, cell_contents)) {
+    if (!serialize_cell_contents(write_offset, btree_page, cell_contents, index)) {
         return BTREE_ERROR;
     }
     
@@ -671,7 +671,7 @@ BTreeStatus btree_transfer_cells(BTreePage *src, uint16_t src_idx, BTreePage *de
     }
     BTreeCellContents src_cell = {0};
     
-    if (!deserialize_cell_contents(index->schema, src->data + src_cell_view.offset, src, &src_cell_view, &src_cell, index)) {
+    if (!deserialize_cell_contents(src->data + src_cell_view.offset, src, &src_cell_view, &src_cell, index)) {
         return BTREE_ERROR;
     }
 
@@ -679,7 +679,7 @@ BTreeStatus btree_transfer_cells(BTreePage *src, uint16_t src_idx, BTreePage *de
     dest->free_space_offset -= src_cell.cell_size;
     set_cell_pointer(dest->data, dest_idx, make_cell_pointer(dest->free_space_offset, src_cell.cell_size));
     
-    if (!serialize_cell_contents(dest->data + dest->free_space_offset, dest, &src_cell)) {
+    if (!serialize_cell_contents(dest->data + dest->free_space_offset, dest, &src_cell, index)) {
         return BTREE_ERROR;
     }
 
@@ -1092,14 +1092,14 @@ Value **serialized_key_to_values(void *separator_key, uint32_t num_keys, BTreeIn
 
         bool is_null = ((bitmap[bitmap_index] & (1 << bitmap_shift)) != 0);
 
-        key_vals[i] = deserialize_value_data(index->column_types[i], is_null, key_offset);
+        key_vals[i] = deserialize_value_data(get_column(index, i), is_null, key_offset);
         if (!key_vals[i]) {
             free(bitmap);
             value_free_array(key_vals, num_keys);
             return NULL;
         }
 
-        key_offset += get_data_type_size(index->column_types[i]);
+        key_offset += get_serialized_key_size(index, i);
     }
 
     free(bitmap);
@@ -1127,12 +1127,12 @@ void *values_to_serialized_key(Value **key_vals, uint32_t num_keys, BTreeIndexSp
     }
 
     for (uint32_t i = 0; i < num_keys; i++) {
-        if (!serialize_value_data(key_vals[i], offset)) {
+        if (!serialize_value_data(key_vals[i], get_column(index, i), offset)) {
             free(serialized_key);
             return NULL;
         }
 
-        offset += get_data_type_size(index->column_types[i]);
+        offset += get_serialized_key_size(index, i);
     }
 
     return serialized_key;
@@ -1272,7 +1272,7 @@ BTreeStatus get_cell_contents(BTreePage *btree_page, uint32_t cell_pointer_index
     dest->key_size = cell_view.key.key_size;
     dest->cell_size = dest->key_size + cell_view.payload_size;
 
-    if (!deserialize_cell_contents(index->schema, btree_page->data + cell_view.offset, btree_page, &cell_view, dest, index)) {
+    if (!deserialize_cell_contents(btree_page->data + cell_view.offset, btree_page, &cell_view, dest, index)) {
         return BTREE_ERROR;
     }
 
@@ -1468,6 +1468,20 @@ BTreeStatus btree_range_result_append(BTreeRangeResult *result, BTreeCellContent
     return BTREE_SUCCESS;
 }
 
+/* Get serialized column/key size or Column pointer. */
+uint32_t get_serialized_column_size(BTreeIndexSpec *spec, uint32_t col_idx) {
+    return spec->schema->columns[col_idx]->serialized_size;
+}
+
+uint32_t get_serialized_key_size(BTreeIndexSpec *spec, uint32_t key_idx) {
+    uint32_t column_index = spec->index_key->column_index_array[key_idx];
+    return get_serialized_column_size(spec, column_index);
+}
+
+Column *get_column(BTreeIndexSpec *spec, uint32_t col_idx) {
+    return spec->schema->columns[col_idx];
+}
+
 void btree_cell_contents_free(BTreeCellContents *cell) {
     if (!cell) {
         return;
@@ -1540,7 +1554,7 @@ bool btree_index_spec_init(const Index *index, Schema *schema, BTreeIndexSpec *s
         DataType type = schema->columns[column_index]->type;
         spec->column_types[i] = type;
 
-        key_size += get_data_type_size(type);
+        key_size += get_serialized_column_size(spec, i);
 
         if (key_size > UINT16_MAX) {
             free(spec->column_types);

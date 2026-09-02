@@ -4,6 +4,7 @@
 #include "../../include/btree.h"
 #include "../../include/page.h"
 
+typedef struct column Column;
 typedef struct schema Schema;
 typedef struct index Index;
 typedef struct value Value;
@@ -61,6 +62,13 @@ extern void btree_range_result_free(BTreeRangeResult *result);
 
 // Initialize BTreeIndexSpec fields
 extern bool btree_index_spec_init(const Index *index, Schema *schema, BTreeIndexSpec *spec);
+
+/* Get serialized column/key size or Column pointer. */
+extern uint32_t get_serialized_column_size(BTreeIndexSpec *spec, uint32_t col_idx);
+
+extern uint32_t get_serialized_key_size(BTreeIndexSpec *spec, uint32_t key_idx);
+
+extern Column *get_column(BTreeIndexSpec *spec, uint32_t col_idx);
 
 // Free BTreeIndexSpec fields
 extern void index_btree_spec_free(BTreeIndexSpec *spec);

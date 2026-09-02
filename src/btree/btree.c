@@ -1072,8 +1072,7 @@ BTreeStatus btree_find_range_keys(BTree *btree, BTreeIndexSpec *index, BTreeSear
             // Deserialize cell contents entry
             BTreeCellContents cell = {0};
 
-            if (!deserialize_cell_contents(
-                    index->schema, 
+            if (!deserialize_cell_contents( 
                     btree_page.data + cell_view.offset, 
                     &btree_page, 
                     &cell_view, 
