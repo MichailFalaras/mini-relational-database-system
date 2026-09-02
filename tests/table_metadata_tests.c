@@ -17,7 +17,7 @@
 /* ---------- Column/Schema/Table/Database Creation Helpers ---------- */
 
 static Column *create_test_column(char *name, DataType type) {
-    Column *column = column_alloc(name, type, 0, 0);
+    Column *column = column_alloc(name, type, 0, 0, 0);
     return column;   
 }
 

@@ -526,7 +526,7 @@ static int test_table_create_add_secondary_index() {
     ASSERT(key != NULL);
 
     // Add it to the table
-    ASSERT(table_create_index(table, "idx_users_age", SECONDARY_INDEX, key, test_pager.pager));
+    ASSERT(table_create_index(table, "idx_users_age", SECONDARY_INDEX, key, test_pager.pager, false));
 
     // Retrieve the created index and verify its metadata
     ASSERT(table->total_secondary_indexes == 2);
@@ -1067,7 +1067,7 @@ static int test_table_drop_rmv_secondary_index() {
     key = index_key_create(age_column, 1);
     ASSERT(key != NULL);
 
-    ASSERT(table_create_index(table, "idx_users_age", SECONDARY_INDEX, key, test_pager.pager));
+    ASSERT(table_create_index(table, "idx_users_age", SECONDARY_INDEX, key, test_pager.pager, false));
 
     ASSERT(table->total_secondary_indexes == 2);
     ASSERT(strcmp(table->secondary_indexes[0]->name, "uq_users_email") == 0);
@@ -1140,7 +1140,7 @@ static int test_table_drop_rmv_secondary_index_reuse_root_page() {
     key = index_key_create(age_column, 1);
     ASSERT(key != NULL);
 
-    ASSERT(table_create_index(table, "idx_users_age", SECONDARY_INDEX, key, test_pager.pager));
+    ASSERT(table_create_index(table, "idx_users_age", SECONDARY_INDEX, key, test_pager.pager, false));
 
     age_index = table_find_index(table, "idx_users_age");
 
@@ -1211,7 +1211,7 @@ static int test_table_drop_releases_all_remaining_pages() {
     key = index_key_create(age_column, 1);
     ASSERT(key != NULL);
 
-    ASSERT(table_create_index(table, "idx_users_age", SECONDARY_INDEX, key, test_pager.pager));
+    ASSERT(table_create_index(table, "idx_users_age", SECONDARY_INDEX, key, test_pager.pager, false));
 
     ASSERT(table->total_secondary_indexes == 2);
 

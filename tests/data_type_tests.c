@@ -80,12 +80,11 @@ static int test_value_create_unsigned_integer() {
 }
 
 static int test_value_create_numeric() {
-    numeric_t input = { .sign = 1, .val = 1532, .scale = 2};
+    numeric_t input = { .val = 1532, .scale = 2};
     Value *value = value_create(NUMERIC, &input);
 
     ASSERT(value != NULL);
     ASSERT(value->type == NUMERIC);
-    ASSERT(value->value.numeric_val.sign == 1);
     ASSERT(value->value.numeric_val.val == 1532);
     ASSERT(value->value.numeric_val.scale == 2);
 
@@ -365,7 +364,7 @@ static int test_value_copy_unsigned_integer() {
 }
 
 static int test_value_copy_numeric() {
-    numeric_t input = { .sign = 1, .val = 1532, .scale = 2};
+    numeric_t input = { .val = 1532, .scale = 2};
     Value *value = value_create(NUMERIC, &input);
     ASSERT(value != NULL);
 
@@ -373,7 +372,6 @@ static int test_value_copy_numeric() {
 
     ASSERT(copy != NULL);
     ASSERT(copy->type == NUMERIC);
-    ASSERT(copy->value.numeric_val.sign == 1);
     ASSERT(copy->value.numeric_val.val == 1532);
     ASSERT(copy->value.numeric_val.scale == 2);
     ASSERT(copy != value);
@@ -959,7 +957,7 @@ static int test_value_can_assign_unsigned_integer() {
 }
 
 static int test_value_can_assign_numeric() {
-    numeric_t input = { .sign = 1, .val = 12345, .scale = 2};
+    numeric_t input = { .val = 12345, .scale = 2};
     Value *value = value_create(NUMERIC, &input);
 
     ASSERT(value != NULL);
@@ -1116,8 +1114,7 @@ static int test_value_convert_integer_to_numeric() {
     ASSERT(value_convert_data_type(NUMERIC, value));
 
     ASSERT(value->type == NUMERIC);
-    ASSERT(value->value.numeric_val.sign == -1);
-    ASSERT(value->value.numeric_val.val == 42);
+    ASSERT(value->value.numeric_val.val == -42);
     ASSERT(value->value.numeric_val.scale == 0);
 
     value_free(value);
@@ -1308,8 +1305,8 @@ static int test_value_compare_integer_double() {
 }
 
 static int test_value_compare_numeric_different_scales() {
-    numeric_t left_input = { .sign = 1, .val = 123, .scale = 1 };
-    numeric_t right_input = { .sign = 1, .val = 1230, .scale = 2 };
+    numeric_t left_input = { .val = 123, .scale = 1 };
+    numeric_t right_input = { .val = 1230, .scale = 2 };
 
     Value *left = value_create(NUMERIC, &left_input);
     Value *right = value_create(NUMERIC, &right_input);
