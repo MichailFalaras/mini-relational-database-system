@@ -1710,7 +1710,7 @@ BTreeStatus btree_locate_target_row(BTree *btree, BTreeSearchKey *search_key, co
     }
 
     btree_search_entries_free(&matches);
-    return BTREE_SUCCESS;
+    return BTREE_NOT_FOUND;
 
 }
 
@@ -1726,6 +1726,7 @@ BTreeStatus btree_node_delete_at(Pager *pager, BTreePage *btree_page, uint16_t c
     if (!btree_page || 
         !btree_page->page || 
         !btree_page->data ||
+        btree_page->type != BTREE_LEAF_NODE || 
         btree_page->cell_count == 0 || cell_index >= btree_page->cell_count) {
         return BTREE_INVALID_ARGUMENTS;
     }
