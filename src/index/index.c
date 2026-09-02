@@ -1127,3 +1127,340 @@ IndexMutationStatus index_delete_entry(Index *index, Pager *pager, Schema *schem
     index_btree_spec_free(&spec);
     return mutation_status;
 }
+
+
+// Update Index entry
+IndexMutationStatus index_update_entry(Index *index, Pager *pager, Schema *schema,
+    Row *old_row, Row *new_row) {
+    
+    // Validate inputs
+    if (!schema ||
+        !index || 
+        !index->key || 
+        !index->key->column_index_array || 
+        index->key->num_columns == 0) {
+        return INDEX_MUTATION_INVALID_ARGUMENTS;
+    }
+
+    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+        return INDEX_MUTATION_INVALID_ARGUMENTS;
+    }
+
+    if (index->root_page_num <= SYSTEM_CATALOG_PAGE_NUM ||
+        index->root_page_num >= pager->num_pages ||
+        index->root_page_num >= MAX_PAGES) {
+        return INDEX_MUTATION_INVALID_ARGUMENTS;
+    }
+
+    if (!old_row || !old_row->values || old_row->is_deleted || old_row->n_columns == 0) {
+        return INDEX_MUTATION_INVALID_ARGUMENTS;
+    }
+
+    if (!new_row || !new_row->values || new_row->is_deleted || new_row->n_columns == 0) {
+        return INDEX_MUTATION_INVALID_ARGUMENTS;
+    }
+
+    if (old_row->n_columns != new_row->n_columns) {
+        return INDEX_MUTATION_INVALID_ARGUMENTS;
+    }
+
+    // Initialize necessary structures
+    BTree btree = {0};
+    btree.pager = pager;
+    btree.root_page_num = index->root_page_num;
+
+    BTreeIndexSpec spec = {0};
+    if (!btree_index_spec_init(index, schema, &spec)) {
+        return INDEX_MUTATION_ERROR;
+    }
+
+    // Build Cell Contents struct from old Row
+    BTreeCellContents old_cell = {0};
+    BTreeStatus status = get_cell_contents_from_row(&old_cell, &spec, old_row);
+
+    if (status != BTREE_SUCCESS) {
+        index_btree_spec_free(&spec);
+        
+        return status == BTREE_INVALID_ARGUMENTS 
+            ? INDEX_MUTATION_INVALID_ARGUMENTS 
+            : INDEX_MUTATION_ERROR;
+    }
+
+    // Build Cell Contents struct from new Row
+    BTreeCellContents new_cell = {0};
+    status = get_cell_contents_from_row(&new_cell, &spec, new_row);
+
+    if (status != BTREE_SUCCESS) {
+        free(old_cell.keys);
+        old_cell.keys = NULL;
+        old_cell.BTreePayload.row = NULL;
+
+        index_btree_spec_free(&spec);
+        
+        return status == BTREE_INVALID_ARGUMENTS 
+            ? INDEX_MUTATION_INVALID_ARGUMENTS 
+            : INDEX_MUTATION_ERROR;
+    }
+
+    // Validate keys before comparing index keys
+    if (index->key->num_columns != old_cell.num_keys ||
+        index->key->num_columns != new_cell.num_keys ||
+        old_cell.num_keys != new_cell.num_keys) {
+
+        free(old_cell.keys);
+        free(new_cell.keys);
+        old_cell.keys = NULL;
+        new_cell.keys = NULL;
+        old_cell.BTreePayload.row = NULL;
+        new_cell.BTreePayload.row = NULL;
+
+        index_btree_spec_free(&spec);
+        return INDEX_MUTATION_INVALID_ARGUMENTS;
+    }
+
+    // Determine if the 2 cells have the same index key values:
+    // Find at least one different column value
+    bool same_key = true;
+    for (uint32_t i = 0; i < old_cell.num_keys; i++) {
+        int comp = 0;
+        
+        if (!value_compare(old_cell.keys[i], new_cell.keys[i], &comp)) {
+            free(old_cell.keys);
+            free(new_cell.keys);
+            old_cell.keys = NULL;
+            new_cell.keys = NULL;
+            old_cell.BTreePayload.row = NULL;
+            new_cell.BTreePayload.row = NULL;
+
+            index_btree_spec_free(&spec);
+            return INDEX_MUTATION_ERROR;
+        }
+
+        if (comp != 0) {
+            same_key = false;
+            break;
+        }
+    }
+
+    IndexMutationStatus mutation_status;  
+
+    // Checking if the old and new Rows are equal.
+    // In this case we make sure the old Row actually exists, otherwise it should return NOT_FOUND
+    if (row_equals(old_row, new_row)) {
+        BTreeSearchKey search_key = {0};
+        search_key.index = &spec;
+        search_key.num_target_keys = old_cell.num_keys;
+        
+        search_key.target_key = values_to_serialized_key(old_cell.keys, old_cell.num_keys, &spec);
+        if (!search_key.target_key) {
+            free(old_cell.keys);
+            free(new_cell.keys);
+            old_cell.keys = NULL;
+            new_cell.keys = NULL;
+            old_cell.BTreePayload.row = NULL;
+            new_cell.BTreePayload.row = NULL;
+
+            index_btree_spec_free(&spec);
+            return INDEX_MUTATION_ERROR;
+        }
+
+        uint32_t page_num = UINT32_MAX;
+        uint16_t cell_index = UINT16_MAX;
+
+        status = btree_locate_target_row(&btree, &search_key, old_row, &spec, &page_num, &cell_index);
+
+        free(search_key.target_key);
+        search_key.target_key = NULL;
+
+        switch (status) {
+            case BTREE_SUCCESS:
+                mutation_status = INDEX_MUTATION_SUCCESS;
+                break;
+            
+            case BTREE_NOT_FOUND:
+                mutation_status = INDEX_MUTATION_NOT_FOUND;
+                break;
+
+            case BTREE_INVALID_ARGUMENTS:
+                mutation_status = INDEX_MUTATION_INVALID_ARGUMENTS;
+                break;
+            
+            default:
+                mutation_status = INDEX_MUTATION_ERROR;
+                break;
+        }
+
+        free(old_cell.keys);
+        free(new_cell.keys);
+        old_cell.keys = NULL;
+        new_cell.keys = NULL;
+        old_cell.BTreePayload.row = NULL;
+        new_cell.BTreePayload.row = NULL;
+
+        index_btree_spec_free(&spec);
+        return mutation_status;
+    }
+
+
+    // If the index is Unique and the new Row has a different Index key,
+    // we have to verify that the new key value doesn't already exist in the Index,
+    // If it exists, we return a DUPLICATE_KEY
+    if (index->is_unique && !same_key) {
+        BTreeSearchKey replacement_key = {0};
+        replacement_key.index = &spec;
+        replacement_key.num_target_keys = new_cell.num_keys;
+        
+        replacement_key.target_key = values_to_serialized_key(new_cell.keys, new_cell.num_keys, &spec);
+        if (!replacement_key.target_key) {
+            free(old_cell.keys);
+            free(new_cell.keys);
+            old_cell.keys = NULL;
+            new_cell.keys = NULL;
+            old_cell.BTreePayload.row = NULL;
+            new_cell.BTreePayload.row = NULL;
+
+            index_btree_spec_free(&spec);
+            return INDEX_MUTATION_ERROR;
+        }
+
+        BTreeSearchResult search_result = {0};
+        BTreeSearchEntries entries = {0};
+
+        status = btree_find_exact_key(&btree, &replacement_key, &search_result, &entries);
+        
+        free(replacement_key.target_key);
+        replacement_key.target_key = NULL; 
+
+        // New key already exists in a unique index
+        if (status == BTREE_SUCCESS) {
+            mutation_status = INDEX_MUTATION_DUPLICATE_KEY;
+            
+            free(old_cell.keys);
+            free(new_cell.keys);
+            old_cell.keys = NULL;
+            new_cell.keys = NULL;
+            old_cell.BTreePayload.row = NULL;
+            new_cell.BTreePayload.row = NULL;
+
+            btree_search_entries_free(&entries);
+            index_btree_spec_free(&spec);
+            return mutation_status;
+        }
+
+        // Error searching for new key
+        if (status != BTREE_NOT_FOUND) {
+            mutation_status = status == BTREE_INVALID_ARGUMENTS
+                                    ? INDEX_MUTATION_INVALID_ARGUMENTS
+                                    : INDEX_MUTATION_ERROR;
+            free(old_cell.keys);
+            free(new_cell.keys);
+            old_cell.keys = NULL;
+            new_cell.keys = NULL;
+            old_cell.BTreePayload.row = NULL;
+            new_cell.BTreePayload.row = NULL;
+
+            btree_search_entries_free(&entries);
+            index_btree_spec_free(&spec);
+            return mutation_status;
+        }
+
+        btree_search_entries_free(&entries);
+    }
+
+    // Delete old Row
+    BTreeDeletionResult deletion_result = {0};
+    
+    status = btree_delete(&btree, &old_cell, &deletion_result, &spec);
+
+    switch (status) {
+        case BTREE_SUCCESS:
+            mutation_status = INDEX_MUTATION_SUCCESS;
+            break;
+        
+        case BTREE_NOT_FOUND:
+            mutation_status = INDEX_MUTATION_NOT_FOUND;
+            break;
+            
+        case BTREE_INVALID_ARGUMENTS:
+            mutation_status = INDEX_MUTATION_INVALID_ARGUMENTS;
+            break;
+        
+        default:
+            mutation_status = INDEX_MUTATION_ERROR;
+            break;
+    }
+
+    if (status != BTREE_SUCCESS) {
+        // Deletion may have changed the root before reporting failure.
+        // The BTree object carries the current root.
+        if (btree.root_page_num != index->root_page_num) {
+            index->root_page_num = btree.root_page_num;
+
+            /*
+            * TODO(catalog): Persist the updated index root page number
+            * when system-catalog metadata persistence is implemented.
+            */
+        }
+
+        free(old_cell.keys);
+        free(new_cell.keys);
+        old_cell.keys = NULL;
+        new_cell.keys = NULL;
+        old_cell.BTreePayload.row = NULL;
+        new_cell.BTreePayload.row = NULL;
+
+        index_btree_spec_free(&spec);
+        return mutation_status;
+    }
+
+    // Insert new Row
+    BTreeInsertionResult insertion_result = {0};
+
+    status = btree_insert(&btree, &new_cell, &insertion_result, &spec);
+
+    /*
+    * TODO(transaction):
+    * If replacement insertion fails after the old entry has been deleted,
+    * restore the original entry as part of transactional rollback.
+    *
+    * Until transaction/WAL support is implemented, an insertion failure
+    * may leave the old index entry deleted.
+    */
+
+    switch (status) {
+        case BTREE_SUCCESS:
+            mutation_status = INDEX_MUTATION_SUCCESS;
+            break;
+
+        case BTREE_DUPLICATE_KEY:
+            mutation_status = INDEX_MUTATION_DUPLICATE_KEY;
+            break;
+
+        case BTREE_INVALID_ARGUMENTS:
+            mutation_status = INDEX_MUTATION_INVALID_ARGUMENTS;
+            break;
+
+        default:
+            mutation_status = INDEX_MUTATION_ERROR;
+            break;
+    }
+
+    if (btree.root_page_num != index->root_page_num) {
+        index->root_page_num = btree.root_page_num;
+
+        /*
+        * TODO(catalog): Persist the updated index root page number
+        * when system-catalog metadata persistence is implemented.
+        */
+    }
+
+    free(old_cell.keys);
+    free(new_cell.keys);
+    old_cell.keys = NULL;
+    new_cell.keys = NULL;
+    old_cell.BTreePayload.row = NULL;
+    new_cell.BTreePayload.row = NULL;
+
+    index_btree_spec_free(&spec);
+    return mutation_status;   
+}

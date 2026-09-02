@@ -119,4 +119,8 @@ extern IndexMutationStatus index_insert_entry(Index *index, Pager *pager, Schema
 // Delete Index entry
 extern IndexMutationStatus index_delete_entry(Index *index, Pager *pager, Schema *schema, Row *row);
 
+// Update Index entry
+extern IndexMutationStatus index_update_entry(Index *index, Pager *pager, Schema *schema,
+    Row *old_row, Row *new_row);
+    
 #endif
