@@ -1004,13 +1004,6 @@ IndexMutationStatus index_insert_entry(Index *index, Pager *pager, Schema *schem
             index_btree_spec_free(&spec);
             return INDEX_MUTATION_INVALID_ARGUMENTS;
 
-        case BTREE_ERROR:
-        case BTREE_CORRUPT_PAGE:
-        case BTREE_INVALID_PAGE:
-        case BTREE_FREE_PAGE:
-            index_btree_spec_free(&spec);
-            return INDEX_MUTATION_ERROR;
-
         default:
             index_btree_spec_free(&spec);
             return INDEX_MUTATION_ERROR;
@@ -1030,16 +1023,21 @@ IndexMutationStatus index_insert_entry(Index *index, Pager *pager, Schema *schem
 
 
 /*
- * Delete Index entry/entries from the underlying B+ Tree.
+ * Delete one logical entry from the Index B+ Tree.
  *
- * NOTE: B+ Tree mutations are not transactional at this stage of
- * development. If deletion fails after modifying one or more pages,
- * those changes cannot currently be rolled back. This is particularly
- * relevant to non-unique indexes, where removing all entries for a key
- * can require multiple B+ Tree mutations.
+ * For UNIQUE indexes, the IndexKey uniquely identifies the entry.
+ * For NON-UNIQUE indexes, equal keys may belong to multiple rows,
+ * so both the IndexKey and target Row are used to identify the
+ * exact leaf entry.
  *
- * Atomic mutation and rollback support will be introduced by the
- * transaction/recovery layer in a later stage of development.
+ * B+ Tree mutations are not transactional at this stage.
+ * If deletion fails after structural modification, those changes
+ * cannot currently be rolled back. Transaction/recovery support
+ * will be introduced separately.
+ *
+ * Root page changes caused by root collapse are reflected in the
+ * in-memory Index metadata. Persistent catalog updates are deferred
+ * until system-catalog persistence is implemented.
  */
 IndexMutationStatus index_delete_entry(Index *index, Pager *pager, Schema *schema, Row *row) {
     // Validate inputs
@@ -1074,12 +1072,12 @@ IndexMutationStatus index_delete_entry(Index *index, Pager *pager, Schema *schem
     }
 
     // Initialized in btree_delete()
-    BTreeDeletionResult result = {0};
+    BTreeDeletionResult deletion_result = {0};
 
-    // Initialize Contents of soon-to-be-deleted Cell
-    BTreeCellContents cell_contents = {0};
+    // Initialize Contents of the target Cell
+    BTreeCellContents target_cell = {0};
 
-    BTreeStatus status = get_cell_contents_from_row(&cell_contents, &spec, row);
+    BTreeStatus status = get_cell_contents_from_row(&target_cell, &spec, row);
     
     if (status != BTREE_SUCCESS) {
         index_btree_spec_free(&spec);
@@ -1089,63 +1087,30 @@ IndexMutationStatus index_delete_entry(Index *index, Pager *pager, Schema *schem
             : INDEX_MUTATION_ERROR;
     }
 
-    // Initialization of return status
-    IndexMutationStatus mutation_status = INDEX_MUTATION_ERROR;
+    // Let btree_delete() find the exact row 
+    status = btree_delete(&btree, &target_cell, &deletion_result, &spec);
 
-    // UNIQUE Index --> looking for 1 entry
-    if (index->is_unique) {
-        status = btree_delete(&btree, &cell_contents, &result, &spec);
+    IndexMutationStatus mutation_status;
 
-        switch (status) {
-            case BTREE_SUCCESS:
-                mutation_status = INDEX_MUTATION_SUCCESS;
-                break;
-
-            case BTREE_NOT_FOUND:
-                mutation_status = INDEX_MUTATION_NOT_FOUND;
-                break;
-
-            case BTREE_INVALID_ARGUMENTS:
-                mutation_status = INDEX_MUTATION_INVALID_ARGUMENTS;
-                break;
-
-            case BTREE_ERROR:
-            case BTREE_CORRUPT_PAGE:
-            case BTREE_INVALID_PAGE:
-            case BTREE_FREE_PAGE:
-            default:
-                mutation_status = INDEX_MUTATION_ERROR;
-                break;
-        }
-    } else {
-        // Non-UNIQUE Index --> looking for 1 or more entries
-        bool deleted_any = false;
-
-        while (true) {
-            status = btree_delete(&btree, &cell_contents, &result, &spec);
-
-            if (status == BTREE_SUCCESS) {
-                deleted_any = true;
-                continue;
-            }
-
-            // Either no matching entry existed initially or all matching entries have now been deleted.
-            if (status == BTREE_NOT_FOUND) {
-                mutation_status = deleted_any ? INDEX_MUTATION_SUCCESS : INDEX_MUTATION_NOT_FOUND;
-                break;
-            }
-
-            if (status == BTREE_INVALID_ARGUMENTS) {
-                mutation_status = INDEX_MUTATION_INVALID_ARGUMENTS;
-            } else {
-                mutation_status = INDEX_MUTATION_ERROR;
-            }
-
+    switch (status) {
+        case BTREE_SUCCESS:
+            mutation_status = INDEX_MUTATION_SUCCESS;
             break;
-        }
+
+        case BTREE_NOT_FOUND:
+            mutation_status = INDEX_MUTATION_NOT_FOUND;
+            break;
+
+        case BTREE_INVALID_ARGUMENTS:
+            mutation_status = INDEX_MUTATION_INVALID_ARGUMENTS;
+            break;
+
+        default:
+            mutation_status = INDEX_MUTATION_ERROR;
+            break;
     }
 
-    
+    // Root may have changed because of merge/root collapse
     if (btree.root_page_num != index->root_page_num) {
         index->root_page_num = btree.root_page_num;
 
@@ -1155,9 +1120,9 @@ IndexMutationStatus index_delete_entry(Index *index, Pager *pager, Schema *schem
         */
     }
 
-    free(cell_contents.keys);
-    cell_contents.keys = NULL;
-    cell_contents.BTreePayload.row = NULL;
+    free(target_cell.keys);
+    target_cell.keys = NULL;
+    target_cell.BTreePayload.row = NULL;
 
     index_btree_spec_free(&spec);
     return mutation_status;

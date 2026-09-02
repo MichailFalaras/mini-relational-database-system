@@ -65,6 +65,7 @@ typedef struct index_range_result {
 typedef enum index_mutation_status {
     INDEX_MUTATION_SUCCESS,
     INDEX_MUTATION_DUPLICATE_KEY,
+    INDEX_MUTATION_NOT_FOUND,
     INDEX_MUTATION_INVALID_ARGUMENTS,
     INDEX_MUTATION_ERROR
 } IndexMutationStatus;
@@ -114,5 +115,8 @@ extern IndexLookupStatus index_scan(const Index *index, Pager *pager, Schema *sc
 
 // Insert Index entry
 extern IndexMutationStatus index_insert_entry(Index *index, Pager *pager, Schema *schema, Row *row);
+
+// Delete Index entry
+extern IndexMutationStatus index_delete_entry(Index *index, Pager *pager, Schema *schema, Row *row);
 
 #endif
