@@ -587,7 +587,7 @@ IndexLookupStatus index_find_exact(const Index *index, Pager *pager, Schema *sch
 
     // Initialize index result structure
     if (!index_range_result_init(result)) {
-        btree_cell_contents_free(&btree_result);
+        btree_search_entries_free(&btree_result);
         index_btree_spec_free(&spec);
         return INDEX_LOOKUP_ERROR;
     }

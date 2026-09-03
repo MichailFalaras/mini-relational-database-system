@@ -144,7 +144,7 @@ bool row_equals(const Row *left, const Row *right) {
             return false;
         }
 
-        if (comp == 0) {
+        if (comp != 0) {
             return false;
         }
     }

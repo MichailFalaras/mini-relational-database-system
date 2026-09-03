@@ -2008,10 +2008,10 @@ BTreeStatus btree_delete(BTree *btree, BTreeCellContents *cell_contents, BTreeDe
 
     // Validate inputs
     if (!btree || 
+        !btree->pager ||
         btree->root_page_num <= SYSTEM_CATALOG_PAGE_NUM || 
         btree->root_page_num >= MAX_PAGES ||
         btree->root_page_num >= btree->pager->num_pages || 
-        !btree->pager || 
         !deletion_res) {
         return BTREE_INVALID_ARGUMENTS;
     }
