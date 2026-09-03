@@ -212,7 +212,7 @@ bool serialize_keys(uint8_t **write_offset, BTreeCellContents *cell, BTreeIndexS
     }
 
     for (uint32_t i = 0; i < cell->num_keys; i++) {
-        if (!serialize_value_data(cell->keys[i], get_column(spec, spec->index_key->column_index_array[i]), *write_offset)) {
+        if (!serialize_value_data(cell->keys[i], get_key_column(spec, i), *write_offset)) {
             return false;
         }
 
@@ -242,7 +242,7 @@ bool deserialize_keys(uint8_t **read_offset, BTreeCellContents *cell, BTreeIndex
 
         bool is_null = ((bitmap[bitmap_spec] & (1 << bitmap_shift)) != 0);
 
-        cell->keys[i] = deserialize_value_data(get_column(spec, spec->index_key->column_index_array[i]), is_null, *read_offset);
+        cell->keys[i] = deserialize_value_data(get_key_column(spec, i), is_null, *read_offset);
         if (!cell->keys[i]) {
             value_free_array(cell->keys, cell->num_keys);
             free(bitmap);

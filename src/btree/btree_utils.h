@@ -70,6 +70,8 @@ extern uint32_t get_serialized_key_size(BTreeIndexSpec *spec, uint32_t key_idx);
 
 extern Column *get_column(BTreeIndexSpec *spec, uint32_t col_idx);
 
+extern Column *get_key_column(BTreeIndexSpec *spec, uint32_t key_idx);
+
 // Free BTreeIndexSpec fields
 extern void index_btree_spec_free(BTreeIndexSpec *spec);
 

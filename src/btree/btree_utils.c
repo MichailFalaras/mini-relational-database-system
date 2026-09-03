@@ -1468,20 +1468,6 @@ BTreeStatus btree_range_result_append(BTreeRangeResult *result, BTreeCellContent
     return BTREE_SUCCESS;
 }
 
-/* Get serialized column/key size or Column pointer. */
-uint32_t get_serialized_column_size(BTreeIndexSpec *spec, uint32_t col_idx) {
-    return spec->schema->columns[col_idx]->serialized_size;
-}
-
-uint32_t get_serialized_key_size(BTreeIndexSpec *spec, uint32_t key_idx) {
-    uint32_t column_index = spec->index_key->column_index_array[key_idx];
-    return get_serialized_column_size(spec, column_index);
-}
-
-Column *get_column(BTreeIndexSpec *spec, uint32_t col_idx) {
-    return spec->schema->columns[col_idx];
-}
-
 void btree_cell_contents_free(BTreeCellContents *cell) {
     if (!cell) {
         return;
@@ -1554,7 +1540,7 @@ bool btree_index_spec_init(const Index *index, Schema *schema, BTreeIndexSpec *s
         DataType type = schema->columns[column_index]->type;
         spec->column_types[i] = type;
 
-        key_size += get_serialized_column_size(spec, i);
+        key_size += get_serialized_key_size(spec, i);
 
         if (key_size > UINT16_MAX) {
             free(spec->column_types);
@@ -1576,6 +1562,25 @@ bool btree_index_spec_init(const Index *index, Schema *schema, BTreeIndexSpec *s
     spec->is_unique = index->is_unique;
 
     return true;
+}
+
+/* Get serialized column/key size or Column pointer. */
+uint32_t get_serialized_column_size(BTreeIndexSpec *spec, uint32_t col_idx) {
+    return spec->schema->columns[col_idx]->serialized_size;
+}
+
+uint32_t get_serialized_key_size(BTreeIndexSpec *spec, uint32_t key_idx) {
+    uint32_t column_index = spec->index_key->column_index_array[key_idx];
+    return get_serialized_column_size(spec, column_index);
+}
+
+Column *get_column(BTreeIndexSpec *spec, uint32_t col_idx) {
+    return spec->schema->columns[col_idx];
+}
+
+Column *get_key_column(BTreeIndexSpec *spec, uint32_t key_idx) {
+    uint32_t column_index = spec->index_key->column_index_array[key_idx];
+    return spec->schema->columns[column_index];
 }
 
 void index_btree_spec_free(BTreeIndexSpec *spec) {
