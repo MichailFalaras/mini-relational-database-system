@@ -28,12 +28,7 @@ Value *value_create(DataType type, const void *value) {
         return NULL;
     }
 
-    // NULL value case is checked before the other data types
-    // because the !value would falsely invalidate the NULL node
-    if (type == NULL_TYPE) {
-        new_value->value.null_val = true;
-        return new_value;
-    }
+    // NULL_TYPE removed. Cannot make value of type NULL_TYPE.
 
     if (!value) {
         printf("value_create: Value structure is NULL.\n");
@@ -228,12 +223,33 @@ Value *value_create(DataType type, const void *value) {
      return new_value;
 }
 
+/* Create Value struct of type with NULL value. */
+Value *value_create_null(DataType type) {
+    Value *value = value_alloc(type);
+    if (!value) {
+        return NULL;
+    }
+
+    value->null_val = true;
+    return value;
+}
 
 /* Copy One Value struct to another Value struct */
 Value *value_copy(const Value *src_value) {
     if (!src_value) {
         printf("value_copy: Source Value structure is NULL.\n");
         return NULL;
+    }
+
+    /* If value we are copying has NULL value: */
+    if (src_value->null_val) {
+        Value *copy = value_alloc(src_value->type);
+        if (!copy) {
+            return NULL;
+        }
+        copy->null_val = true;
+        
+        return copy;
     }
 
     // Copying a Value means creating a new value with the same data
@@ -278,9 +294,6 @@ Value *value_copy(const Value *src_value) {
         case JSONB: 
             return value_create(JSONB, &src_value->value.jsonb_val);
 
-        case NULL_TYPE:
-            return value_create(NULL_TYPE, NULL);
-
         default:
             printf("value_copy: Unsupported data type.\n");
             return NULL;
@@ -317,6 +330,7 @@ bool value_assign(Value *dest, const Value *src) {
 
     // The resources of the copy Value are assigned to the destination Value
     dest->type = copy->type;
+    dest->null_val = copy->null_val;
     dest->value = copy->value;
 
     // Only free the pointer, not the resource of the copy Value
@@ -330,6 +344,12 @@ bool value_assign(Value *dest, const Value *src) {
 bool value_compare(const Value *left, const Value *right, int *result) {
     if (!left || !right || !result) {
         printf("value_compare: Input parameters contain NULL.\n");
+        return false;
+    }
+
+    // Comparison with NULL is not possible.
+    // Return false since we can't return UNKNOWN.
+    if (left->null_val || right->null_val) {
         return false;
     }
 
@@ -442,8 +462,7 @@ bool value_compare(const Value *left, const Value *right, int *result) {
 
 /* Check if 2 Data Types are compatible */
 bool value_types_compatible(DataType left, DataType right) {
-    if (left == NULL_TYPE || right == NULL_TYPE)
-        return false;
+    // Values with null_val flag are never going to reach this function
 
     if (left == right) 
         return true;
@@ -473,6 +492,14 @@ bool value_convert_data_type(DataType target, Value *value) {
 
     if (target == value->type) 
         return true;
+
+    // Value can have null_val but still switch DataType
+    if (value->null_val) {
+        value_free_internal(value);
+        value->type = target;
+        value->null_val = true;
+        return true;
+    }
 
     if (!value_can_assign(target, value))
         return false;
@@ -525,11 +552,6 @@ bool value_can_assign(DataType target, const Value *value) {
         return false;
     }
 
-    // Any value can be converted to NULL, as long as there's no NOT NULL constraint
-    if (value->type == NULL_TYPE) {
-        return true;
-    }
-
     // Identical data types
     if (target == value->type)
         return true;
@@ -538,8 +560,11 @@ bool value_can_assign(DataType target, const Value *value) {
     // the tested data type.
     switch (target) {
         case INTEGER:
-            return (value->type == INTEGER);
+            if (value->type == UNSIGNED_INTEGER) {
+                return value->value.uint32_val <= INT32_MAX;
+            }
 
+            return (value->type == INTEGER);
         case UNSIGNED_INTEGER:
             if (value->type == INTEGER)
                 return value->value.int32_val >= 0;
@@ -574,7 +599,7 @@ bool value_can_assign(DataType target, const Value *value) {
         case BOOL:
         case BLOB:
         case JSONB:
-        case NULL_TYPE:
+        // case NULL_TYPE:
             return false;
         
         default:

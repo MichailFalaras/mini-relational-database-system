@@ -4,6 +4,7 @@
 #include "../../include/btree.h"
 #include "../../include/page.h"
 
+typedef struct column Column;
 typedef struct schema Schema;
 typedef struct index Index;
 typedef struct value Value;
@@ -21,7 +22,7 @@ typedef struct btree_search_result BTreeSearchResult;
 typedef struct btree_split_result BTreeSplitResult;
 typedef struct btree_range_result BTreeRangeResult;
 
-#define MIN_CELL_SIZE 5 // lets suppose key is a bool (uint8_t) and a child pointer (uint32_t)
+#define MIN_INTERNAL_CELL_SIZE 6 // child pointer, NULL bitmap, keys
 
 /* ---------- BTreePage Component Interface ---------- */
 
@@ -62,10 +63,22 @@ extern void btree_range_result_free(BTreeRangeResult *result);
 // Initialize BTreeIndexSpec fields
 extern bool btree_index_spec_init(const Index *index, Schema *schema, BTreeIndexSpec *spec);
 
+/* Get serialized column/key size or Column pointer. */
+extern uint32_t get_serialized_column_size(BTreeIndexSpec *spec, uint32_t col_idx);
+
+extern uint32_t get_serialized_key_size(BTreeIndexSpec *spec, uint32_t key_idx);
+
+extern Column *get_column(BTreeIndexSpec *spec, uint32_t col_idx);
+
+extern Column *get_key_column(BTreeIndexSpec *spec, uint32_t key_idx);
+
 // Free BTreeIndexSpec fields
 extern void index_btree_spec_free(BTreeIndexSpec *spec);
 
 /* ---------- Miscellaneous  ---------- */
+
+/* Check if NULL is contained in a key. */
+bool key_contains_null_val(Value **key, uint32_t num_keys);
 
 /* Reset insertion orchestration result. */
 void insertion_result_reset(BTreeInsertionResult *insertion_res);

@@ -35,7 +35,7 @@ static int test_value_alloc_0_init_union() {
 // Tests allocation of all data types
 static int test_value_alloc_all_data_types() {
     const DataType types[] = {INTEGER, UNSIGNED_INTEGER, NUMERIC, FLOAT, DOUBLE, 
-                        CHAR, VARCHAR, TEXT, DATE, TIMESTAMP, BLOB, BOOL, JSONB, NULL_TYPE};
+                        CHAR, VARCHAR, TEXT, DATE, TIMESTAMP, BLOB, BOOL, JSONB};
 
     int num_types = sizeof(types) / sizeof(DataType);
 
@@ -80,12 +80,11 @@ static int test_value_create_unsigned_integer() {
 }
 
 static int test_value_create_numeric() {
-    numeric_t input = { .sign = 1, .val = 1532, .scale = 2};
+    numeric_t input = { .val = 1532, .scale = 2};
     Value *value = value_create(NUMERIC, &input);
 
     ASSERT(value != NULL);
     ASSERT(value->type == NUMERIC);
-    ASSERT(value->value.numeric_val.sign == 1);
     ASSERT(value->value.numeric_val.val == 1532);
     ASSERT(value->value.numeric_val.scale == 2);
 
@@ -244,11 +243,11 @@ static int test_value_create_jsonb() {
 }
 
 static int test_value_create_null() {
-    Value *value = value_create(NULL_TYPE, NULL);
+    Value *value = value_create_null(INTEGER);
 
     ASSERT(value != NULL);
-    ASSERT(value->type == NULL_TYPE);
-    ASSERT(value->value.null_val == true);
+    ASSERT(value->type == INTEGER);
+    ASSERT(value->null_val == true);
 
     value_free(value);
     return 0;
@@ -365,7 +364,7 @@ static int test_value_copy_unsigned_integer() {
 }
 
 static int test_value_copy_numeric() {
-    numeric_t input = { .sign = 1, .val = 1532, .scale = 2};
+    numeric_t input = { .val = 1532, .scale = 2};
     Value *value = value_create(NUMERIC, &input);
     ASSERT(value != NULL);
 
@@ -373,7 +372,6 @@ static int test_value_copy_numeric() {
 
     ASSERT(copy != NULL);
     ASSERT(copy->type == NUMERIC);
-    ASSERT(copy->value.numeric_val.sign == 1);
     ASSERT(copy->value.numeric_val.val == 1532);
     ASSERT(copy->value.numeric_val.scale == 2);
     ASSERT(copy != value);
@@ -589,14 +587,15 @@ static int test_value_copy_jsonb() {
 }
 
 static int test_value_copy_null() {
-    Value *value = value_create(NULL_TYPE, NULL);
+    Value *value = value_create_null(INTEGER);
 
     Value *copy = value_copy(value);
 
     ASSERT(copy != NULL);
     ASSERT(value != NULL);
-    ASSERT(value->type == NULL_TYPE);
-    ASSERT(value->value.null_val == true);
+    ASSERT(value->type == INTEGER);
+    ASSERT(value->null_val == true);
+    ASSERT(copy->null_val == true);
     ASSERT(copy != value);
 
     value_free(value);
@@ -925,51 +924,6 @@ static int test_value_types_compatible_rejects_invalid() {
     return 0;
 }
 
-static int test_value_types_compatible_rejects_null_type() {
-    ASSERT(!value_types_compatible(INTEGER, NULL_TYPE));
-    ASSERT(!value_types_compatible(NULL_TYPE, INTEGER));
-
-    ASSERT(!value_types_compatible(UNSIGNED_INTEGER, NULL_TYPE));
-    ASSERT(!value_types_compatible(NULL_TYPE, UNSIGNED_INTEGER));
-
-    ASSERT(!value_types_compatible(NUMERIC, NULL_TYPE));
-    ASSERT(!value_types_compatible(NULL_TYPE, NUMERIC));
-
-    ASSERT(!value_types_compatible(FLOAT, NULL_TYPE));
-    ASSERT(!value_types_compatible(NULL_TYPE, FLOAT));
-
-    ASSERT(!value_types_compatible(DOUBLE, NULL_TYPE));
-    ASSERT(!value_types_compatible(NULL_TYPE, DOUBLE));
-
-    ASSERT(!value_types_compatible(CHAR, NULL_TYPE));
-    ASSERT(!value_types_compatible(NULL_TYPE, CHAR));
-
-    ASSERT(!value_types_compatible(VARCHAR, NULL_TYPE));
-    ASSERT(!value_types_compatible(NULL_TYPE, VARCHAR));
-
-    ASSERT(!value_types_compatible(TEXT, NULL_TYPE));
-    ASSERT(!value_types_compatible(NULL_TYPE, TEXT));
-
-    ASSERT(!value_types_compatible(DATE, NULL_TYPE));
-    ASSERT(!value_types_compatible(NULL_TYPE, DATE));
-
-    ASSERT(!value_types_compatible(TIMESTAMP, NULL_TYPE));
-    ASSERT(!value_types_compatible(NULL_TYPE, TIMESTAMP));
-
-    ASSERT(!value_types_compatible(BLOB, NULL_TYPE));
-    ASSERT(!value_types_compatible(NULL_TYPE, BLOB));
-
-    ASSERT(!value_types_compatible(JSONB, NULL_TYPE));
-    ASSERT(!value_types_compatible(NULL_TYPE, JSONB));
-
-    ASSERT(!value_types_compatible(BOOL, NULL_TYPE));
-    ASSERT(!value_types_compatible(NULL_TYPE, BOOL));
-
-    ASSERT(!value_types_compatible(NULL_TYPE, NULL_TYPE));
-
-    return 0;
-}
-
 /* ---------- value_can_assign unit tests ---------- */
 
 // Testing assignment cases for only data types allowing conversions besides the same data type
@@ -1003,7 +957,7 @@ static int test_value_can_assign_unsigned_integer() {
 }
 
 static int test_value_can_assign_numeric() {
-    numeric_t input = { .sign = 1, .val = 12345, .scale = 2};
+    numeric_t input = { .val = 12345, .scale = 2};
     Value *value = value_create(NUMERIC, &input);
 
     ASSERT(value != NULL);
@@ -1111,12 +1065,12 @@ static int test_value_can_assign_timestamp() {
 }
 
 static int test_value_can_assign_null_source() {
-    Value *value = value_create(NULL_TYPE, NULL);
+    Value *value = value_create_null(UNSIGNED_INTEGER);
 
     ASSERT(value != NULL);
     ASSERT(value_can_assign(INTEGER, value));
-    ASSERT(value_can_assign(TEXT, value));
-    ASSERT(value_can_assign(BOOL, value));
+    ASSERT(!value_can_assign(TEXT, value));
+    ASSERT(!value_can_assign(BOOL, value));
 
     value_free(value);
     return 0;
@@ -1160,8 +1114,7 @@ static int test_value_convert_integer_to_numeric() {
     ASSERT(value_convert_data_type(NUMERIC, value));
 
     ASSERT(value->type == NUMERIC);
-    ASSERT(value->value.numeric_val.sign == -1);
-    ASSERT(value->value.numeric_val.val == 42);
+    ASSERT(value->value.numeric_val.val == -42);
     ASSERT(value->value.numeric_val.scale == 0);
 
     value_free(value);
@@ -1352,8 +1305,8 @@ static int test_value_compare_integer_double() {
 }
 
 static int test_value_compare_numeric_different_scales() {
-    numeric_t left_input = { .sign = 1, .val = 123, .scale = 1 };
-    numeric_t right_input = { .sign = 1, .val = 1230, .scale = 2 };
+    numeric_t left_input = { .val = 123, .scale = 1 };
+    numeric_t right_input = { .val = 1230, .scale = 2 };
 
     Value *left = value_create(NUMERIC, &left_input);
     Value *right = value_create(NUMERIC, &right_input);
@@ -1479,7 +1432,7 @@ static int test_value_compare_incompatible_types() {
 static int test_value_compare_null_type_fails() {
     int32_t input = 10;
 
-    Value *left = value_create(NULL_TYPE, NULL);
+    Value *left = value_create_null(INTEGER);
     Value *right = value_create(INTEGER, &input);
 
     ASSERT(left != NULL);
@@ -1616,99 +1569,97 @@ int main(int argc, char *argv[]) {
     result = test_value_assign_text_deep_copy();
     generate_output(result, 45, "test_value_assign_text_deep_copy");
     result = test_value_assign_blob_deep_copy();
-    generate_output(result, 45, "test_value_assign_blob_deep_copy");
+    generate_output(result, 46, "test_value_assign_blob_deep_copy");
     result = test_value_assign_self_assignment();
-    generate_output(result, 46, "test_value_assign_self_assignment");
+    generate_output(result, 47, "test_value_assign_self_assignment");
     result = test_value_assign_null_source();
-    generate_output(result, 47, "test_value_assign_null_source");
+    generate_output(result, 48, "test_value_assign_null_source");
     result = test_value_assign_null_destination();
-    generate_output(result, 48, "test_value_assign_null_destination");
+    generate_output(result, 49, "test_value_assign_null_destination");
     result = test_value_assign_invalid_source_type();
-    generate_output(result, 49, "test_value_assign_invalid_source_type");
+    generate_output(result, 50, "test_value_assign_invalid_source_type");
 
     /* ---------- value_types_compatible unit tests ---------- */
     result = test_value_types_compatible_numerical();
-    generate_output(result, 50, "test_value_types_compatible_numerical");
-    result = test_value_types_compatible_text();
     generate_output(result, 51, "test_value_types_compatible_numerical");
+    result = test_value_types_compatible_text();
+    generate_output(result, 52, "test_value_types_compatible_numerical");
     result = test_value_types_compatible_temporal();
-    generate_output(result, 52, "test_value_types_compatible_temporal");
+    generate_output(result, 53, "test_value_types_compatible_temporal");
     result = test_value_types_compatible_rejects_invalid();
-    generate_output(result, 53, "test_value_types_compatible_rejects_invalid");
-    result = test_value_types_compatible_rejects_null_type();
-    generate_output(result, 54, "test_value_types_compatible_rejects_null_type");
-
+    generate_output(result, 54, "test_value_types_compatible_rejects_invalid");
+/*!!!!!!!!*/
     /* ---------- value_can_assign unit tests ---------- */
     result = test_value_can_assign_integer();
     generate_output(result, 55, "test_value_can_assign_integer");
     result = test_value_can_assign_unsigned_integer();
     generate_output(result, 56, "test_value_can_assign_unsigned_integer");
     result = test_value_can_assign_numeric();
-    generate_output(result, 58, "test_value_can_assign_numeric");
+    generate_output(result, 57, "test_value_can_assign_numeric");
     result = test_value_can_assign_float();
-    generate_output(result, 59, "test_value_can_assign_float");
+    generate_output(result, 58, "test_value_can_assign_float");
     result = test_value_can_assign_double();
-    generate_output(result, 60, "test_value_can_assign_double");
+    generate_output(result, 59, "test_value_can_assign_double");
     result = test_value_can_assign_char();
-    generate_output(result, 61, "test_value_can_assign_char");
+    generate_output(result, 60, "test_value_can_assign_char");
     result = test_value_can_assign_varchar();
-    generate_output(result, 62, "test_value_can_assign_varchar");
+    generate_output(result, 61, "test_value_can_assign_varchar");
     result = test_value_can_assign_text();
-    generate_output(result, 63, "test_value_can_assign_text");
+    generate_output(result, 62, "test_value_can_assign_text");
     result = test_value_can_assign_date();
-    generate_output(result, 64, "test_value_can_assign_date");
+    generate_output(result, 63, "test_value_can_assign_date");
     result = test_value_can_assign_timestamp();
-    generate_output(result, 65, "test_value_can_assign_timestamp");
+    generate_output(result, 64, "test_value_can_assign_timestamp");
     result = test_value_can_assign_null_source();
-    generate_output(result, 66, "test_value_can_assign_null_source");
+    generate_output(result, 65, "test_value_can_assign_null_source");
     result = test_value_can_assign_rejects_unrelated_type();
-    generate_output(result, 67, "test_value_can_assign_rejects_unrelated_type");
+    generate_output(result, 66, "test_value_can_assign_rejects_unrelated_type");
 
     /* ---------- value_convert_data_type unit tests ---------- */
     result = test_convert_integer_to_unsigned();
-    generate_output(result, 68, "test_convert_integer_to_unsigned");
+    generate_output(result, 67, "test_convert_integer_to_unsigned");
     result = test_value_convert_integer_to_numeric();
-    generate_output(result, 69, "test_value_convert_integer_to_numeric");
+    generate_output(result, 68, "test_value_convert_integer_to_numeric");
     result = test_value_convert_integer_to_float();
-    generate_output(result, 70, "test_value_convert_integer_to_float");
+    generate_output(result, 69, "test_value_convert_integer_to_float");
     result = test_value_convert_float_to_double();
-    generate_output(result, 71, "test_value_convert_float_to_double");
+    generate_output(result, 70, "test_value_convert_float_to_double");
     result = test_value_convert_char_to_varchar();
-    generate_output(result, 72, "test_value_convert_char_to_varchar");
+    generate_output(result, 71, "test_value_convert_char_to_varchar");
     result = test_value_convert_varchar_to_text();
-    generate_output(result, 73, "test_value_convert_varchar_to_text");
+    generate_output(result, 72, "test_value_convert_varchar_to_text");
     result = test_value_convert_date_to_timestamp();
-    generate_output(result, 74, "test_value_convert_date_to_timestamp");
+    generate_output(result, 73, "test_value_convert_date_to_timestamp");
     result = test_value_convert_identical_type();
-    generate_output(result, 75, "test_value_convert_identical_type");
+    generate_output(result, 74, "test_value_convert_identical_type");
     result = test_value_convert_negative_integer_to_unsigned_fails();
-    generate_output(result, 76, "test_value_convert_negative_integer_to_unsigned_fails");
+    generate_output(result, 75, "test_value_convert_negative_integer_to_unsigned_fails");
     result = test_value_convert_null_value();
-    generate_output(result, 77, "test_value_convert_null_value");
+    generate_output(result, 76, "test_value_convert_null_value");
     result = test_value_convert_unsupported_conversion();
-    generate_output(result, 78, "test_value_convert_unsupported_conversion");
+    generate_output(result, 77, "test_value_convert_unsupported_conversion");
 
     /* ---------- value_compare unit tests ---------- */
     result = test_value_compare_integers();
-    generate_output(result, 79, "test_value_compare_integers");
+    generate_output(result, 78, "test_value_compare_integers");
     result = test_value_compare_integer_double();
-    generate_output(result, 80, "test_value_compare_integer_double");
+    generate_output(result, 79, "test_value_compare_integer_double");
     result = test_value_compare_numeric_different_scales();
-    generate_output(result, 81, "test_value_compare_numeric_different_scales");
+    generate_output(result, 80, "test_value_compare_numeric_different_scales");
     result = test_value_compare_char_and_varchar();
-    generate_output(result, 82, "test_value_compare_char_and_varchar");
+    generate_output(result, 81, "test_value_compare_char_and_varchar");
     result = test_value_compare_date_timestamp();
-    generate_output(result, 83, "test_value_compare_date_timestamp");
+    generate_output(result, 82, "test_value_compare_date_timestamp");
     result = test_value_compare_bool();
-    generate_output(result, 84, "test_value_compare_bool");
+    generate_output(result, 83, "test_value_compare_bool");
     result = test_value_compare_blob();
-    generate_output(result, 85, "test_value_compare_blob");
+    generate_output(result, 84, "test_value_compare_blob");
+    result = test_value_compare_incompatible_types();
+    generate_output(result, 85, "test_value_compare_incompatible_types");
+    result = test_value_compare_null_type_fails();
+    generate_output(result, 85, "test_value_compare_null_type_fails");
     result = test_value_compare_incompatible_types();
     generate_output(result, 86, "test_value_compare_incompatible_types");
-    result = test_value_compare_null_type_fails();
-    generate_output(result, 87, "test_value_compare_null_type_fails");
-    result = test_value_compare_incompatible_types();
-    generate_output(result, 88, "test_value_compare_incompatible_types");
 
 
     printf("> TESTS RAN SUCCESSFULLY\n");

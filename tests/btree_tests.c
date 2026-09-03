@@ -282,7 +282,7 @@ bool populate_internal_nodes(TestBTree *test_btree, uint8_t *page_data, uint32_t
     get_key(&right_child, 0, &key_view, index_spec);
     uint8_t *offset = (uint8_t *) key_view.key;
     for (uint32_t i = 0; i < cell_contents.num_keys; i++) {
-        cell_contents.keys[i] = deserialize_value_data(UNSIGNED_INTEGER, (void *)offset);
+        cell_contents.keys[i] = deserialize_value_data(UNSIGNED_INTEGER, false,(void *)offset);
         offset += get_data_type_size(UNSIGNED_INTEGER);
     }
     

@@ -94,7 +94,7 @@ static int test_column_alloc() {
     uint32_t not_null_rows = 5;
     uint32_t null_rows = 3;
 
-    Column *column = column_alloc(column_name, type, not_null_rows, null_rows);
+    Column *column = column_alloc(column_name, type, 0, not_null_rows, null_rows);
     ASSERT(column != NULL);
 
     free(column);
@@ -116,7 +116,7 @@ static int test_schema_create() {
     int num_columns = 1;
     int num_constraints = 1;
 
-    Column *column = column_alloc("id", INTEGER, 5, 3);
+    Column *column = column_alloc("id", INTEGER, 0, 5, 3);
     ASSERT(column != NULL);
     Column **columns = create_column_array(num_columns);
     ASSERT(columns != NULL);
@@ -145,9 +145,9 @@ static int test_schema_drop_true() {
 
     /* Columns */
     Column **columns = create_column_array(num_columns);
-    Column *column = column_alloc("id", INTEGER, 5, 0);
+    Column *column = column_alloc("id", INTEGER, 0, 5, 0);
     columns[0] = column;
-    column = column_alloc("name", VARCHAR, 5, 0);
+    column = column_alloc("name", VARCHAR, 64, 5, 0);
     columns[1] = column;
 
     /* Constraints */
@@ -164,9 +164,9 @@ static int test_schema_drop_true() {
     table->table_schema = schema;
     db->tables[0] = table;
 
-    /* This shouldn't work because there are no tables with foreign keys referencing
+    /* This should work because there aren't tables with foreign keys referencing
     the schema. */
-    bool res = schema_drop(schema, db);
+    bool res = schema_can_drop(schema, db);
     ASSERT(res == true);
 
     database_free(db);
@@ -180,9 +180,9 @@ static int test_schema_drop_false() {
 
     /* Columns */
     Column **columns = create_column_array(num_columns);
-    Column *column = column_alloc("id", INTEGER, 5, 0);
+    Column *column = column_alloc("id", INTEGER, 0, 5, 0);
     columns[0] = column;
-    column = column_alloc("name", VARCHAR, 5, 0);
+    column = column_alloc("name", VARCHAR, 64, 5, 0);
     columns[1] = column;
 
     /* Constraints */
@@ -196,9 +196,9 @@ static int test_schema_drop_false() {
     Schema *schema = schema_create(columns, constraints, num_columns, num_constraints);
 
     /* Schema2 */
-    column = column_alloc("id", INTEGER, 5, 0);
+    column = column_alloc("id", INTEGER, 0, 5, 0);
     columns[0] = column;
-    column = column_alloc("department", VARCHAR, 5, 0);
+    column = column_alloc("department", VARCHAR, 64, 5, 0);
     columns[1] = column;
 
     uint32_t foreign_key_columns[1];
@@ -220,9 +220,9 @@ static int test_schema_drop_false() {
     table->table_schema = schema2;
     db->tables[1] = table;
 
-    /* This shouldn't work because there are no tables with foreign keys referencing
+    /* This shouldn't work because there are tables with foreign keys referencing
     the schema. */
-    bool res = schema_drop(schema, db);
+    bool res = schema_can_drop(schema, db);
     ASSERT(res == false);
 
     database_free(db);
@@ -237,11 +237,11 @@ static int test_schema_find_column_true() {
 
     /* Columns */
     Column **columns = create_column_array(num_columns);
-    Column *column = column_alloc("id", INTEGER, 5, 0);
+    Column *column = column_alloc("id", INTEGER, 0, 5, 0);
     columns[0] = column;
-    column = column_alloc("name", VARCHAR, 5, 0);
+    column = column_alloc("name", VARCHAR, 64, 5, 0);
     columns[1] = column;
-    column = column_alloc("height", NUMERIC, 5, 0);
+    column = column_alloc("height", NUMERIC, 0, 5, 0);
     columns[2] = column;
 
     Constraint **constraints = NULL;
@@ -262,11 +262,11 @@ static int test_schema_find_column_false() {
 
     /* Columns */
     Column **columns = create_column_array(num_columns);
-    Column *column = column_alloc("id", INTEGER, 5, 0);
+    Column *column = column_alloc("id", INTEGER, 0, 5, 0);
     columns[0] = column;
-    column = column_alloc("name", VARCHAR, 5, 0);
+    column = column_alloc("name", VARCHAR, 64, 5, 0);
     columns[1] = column;
-    column = column_alloc("height", NUMERIC, 5, 0);
+    column = column_alloc("height", NUMERIC, 0, 5, 0);
     columns[2] = column;
 
     Constraint **constraints = NULL;
@@ -286,11 +286,11 @@ static int test_schema_find_column_index() {
 
     /* Columns */
     Column **columns = create_column_array(num_columns);
-    Column *column = column_alloc("id", INTEGER, 5, 0);
+    Column *column = column_alloc("id", INTEGER, 0, 5, 0);
     columns[0] = column;
-    column = column_alloc("name", VARCHAR, 5, 0);
+    column = column_alloc("name", VARCHAR, 128, 5, 0);
     columns[1] = column;
-    column = column_alloc("height", NUMERIC, 5, 0);
+    column = column_alloc("height", NUMERIC, 0, 5, 0);
     columns[2] = column;
 
     Constraint **constraints = NULL;
@@ -310,16 +310,16 @@ static int test_schema_add_column() {
 
     /* Columns */
     Column **columns = create_column_array(num_columns);
-    Column *column = column_alloc("id", INTEGER, 5, 0);
+    Column *column = column_alloc("id", INTEGER, 0, 5, 0);
     columns[0] = column;
-    column = column_alloc("name", VARCHAR, 5, 0);
+    column = column_alloc("name", VARCHAR, 128, 5, 0);
     columns[1] = column;
-    column = column_alloc("height", NUMERIC, 5, 0);
+    column = column_alloc("height", NUMERIC, 0, 5, 0);
     columns[2] = column;
 
     Constraint **constraints = NULL;
     Schema *schema = schema_create(columns, constraints, num_columns, num_constraints);
-    Column *new_column = column_alloc("age", INTEGER, 5, 0);
+    Column *new_column = column_alloc("age", INTEGER, 0, 5, 0);
 
     bool res = schema_add_column(schema, new_column);
     ASSERT(res == true);
@@ -337,16 +337,16 @@ static int test_schema_add_duplicate_column() {
 
     /* Columns */
     Column **columns = create_column_array(num_columns);
-    Column *column = column_alloc("id", INTEGER, 5, 0);
+    Column *column = column_alloc("id", INTEGER, 0, 5, 0);
     columns[0] = column;
-    column = column_alloc("name", VARCHAR, 5, 0);
+    column = column_alloc("name", VARCHAR, 128, 5, 0);
     columns[1] = column;
-    column = column_alloc("height", NUMERIC, 5, 0);
+    column = column_alloc("height", NUMERIC, 0, 5, 0);
     columns[2] = column;
 
     Constraint **constraints = NULL;
     Schema *schema = schema_create(columns, constraints, num_columns, num_constraints);
-    Column *new_column = column_alloc("name", VARCHAR, 5, 0);
+    Column *new_column = column_alloc("name", VARCHAR, 64, 5, 0);
 
     bool res = schema_add_column(schema, new_column);
     ASSERT(res == false);
@@ -363,11 +363,11 @@ static int test_schema_drop_column() {
 
     /* Schema1: 3 columns, 1 constraint */
     Column **columns = create_column_array(num_columns);
-    Column *column = column_alloc("id", INTEGER, 5, 0);
+    Column *column = column_alloc("id", INTEGER, 0, 5, 0);
     columns[0] = column;
-    column = column_alloc("name", VARCHAR, 5, 0);
+    column = column_alloc("name", VARCHAR, 128, 5, 0);
     columns[1] = column;
-    column = column_alloc("salary", NUMERIC, 5, 0);
+    column = column_alloc("salary", NUMERIC, 0, 5, 0);
     columns[2] = column;
 
     uint32_t column_refs[1];
@@ -381,9 +381,9 @@ static int test_schema_drop_column() {
 
     /* Schema2: 2 columns, 1 constraint */
     columns = create_column_array(--num_columns);
-    column = column_alloc("id", INTEGER, 5, 0);
+    column = column_alloc("id", INTEGER, 0, 5, 0);
     columns[0] = column;
-    column = column_alloc("department", VARCHAR, 5, 0);
+    column = column_alloc("department", VARCHAR, 64, 5, 0);
     columns[1] = column;
 
     uint32_t foreign_key_columns[1];
@@ -433,11 +433,11 @@ static int test_schema_rename_column() {
 
     /* Columns */
     Column **columns = create_column_array(num_columns);
-    Column *column = column_alloc("id", INTEGER, 5, 0);
+    Column *column = column_alloc("id", INTEGER, 0, 5, 0);
     columns[0] = column;
-    column = column_alloc("name", VARCHAR, 5, 0);
+    column = column_alloc("name", VARCHAR, 64, 5, 0);
     columns[1] = column;
-    column = column_alloc("height", NUMERIC, 5, 0);
+    column = column_alloc("height", NUMERIC, 0, 5, 0);
     columns[2] = column;
 
     Constraint **constraints = NULL;
@@ -455,15 +455,15 @@ static int test_schema_modify_column() {
     int num_columns = 3;
     int num_constraints = 0;
     char *old_column_name = "height";
-    Column *new_column = column_alloc("department", CHAR, 5, 0);
+    Column *new_column = column_alloc("department", CHAR, 64, 5, 0);
 
     /* Columns */
     Column **columns = create_column_array(num_columns);
-    Column *column = column_alloc("id", INTEGER, 5, 0);
+    Column *column = column_alloc("id", INTEGER, 0, 5, 0);
     columns[0] = column;
-    column = column_alloc("name", VARCHAR, 5, 0);
+    column = column_alloc("name", VARCHAR, 128, 5, 0);
     columns[1] = column;
-    column = column_alloc("height", NUMERIC, 5, 0);
+    column = column_alloc("height", NUMERIC, 0, 5, 0);
     columns[2] = column;
 
     Constraint **constraints = NULL;
@@ -474,9 +474,13 @@ static int test_schema_modify_column() {
     table->table_schema = schema;
     db->tables[0] = table;
 
-    bool res = schema_modify_column(schema, db, old_column_name,new_column);
+    bool res = schema_modify_column(schema, db, old_column_name, new_column);
     ASSERT(res == true);
-    ASSERT(!strcasecmp(schema->columns[2]->name, new_column->name));
+    ASSERT(!strcasecmp(schema->columns[2]->name, old_column_name));
+    ASSERT(schema->columns[2]->type == CHAR);
+    ASSERT(schema->columns[2]->type_parameter == 64);
+    ASSERT(schema->columns[2]->non_null_rows == 5);
+    ASSERT(schema->columns[2]->null_rows == 0);
 
     free(new_column);
     database_free(db);
@@ -521,11 +525,11 @@ static int test_schema_add_constraint_true() {
 
     /* Columns */
     Column **columns = create_column_array(num_columns);
-    Column *column = column_alloc("id", INTEGER, 5, 0);
+    Column *column = column_alloc("id", INTEGER, 0, 5, 0);
     columns[0] = column;
-    column = column_alloc("name", VARCHAR, 5, 0);
+    column = column_alloc("name", VARCHAR, 128, 5, 0);
     columns[1] = column;
-    column = column_alloc("height", NUMERIC, 5, 0);
+    column = column_alloc("height", NUMERIC, 0, 5, 0);
     columns[2] = column;
 
     /* Constraints */
@@ -566,11 +570,11 @@ static int test_schema_add_constraint_false() {
 
     /* Columns */
     Column **columns = create_column_array(num_columns);
-    Column *column = column_alloc("id", INTEGER, 5, 0);
+    Column *column = column_alloc("id", INTEGER, 0, 5, 0);
     columns[0] = column;
-    column = column_alloc("name", VARCHAR, 5, 0);
+    column = column_alloc("name", VARCHAR, 64, 5, 0);
     columns[1] = column;
-    column = column_alloc("height", NUMERIC, 5, 0);
+    column = column_alloc("height", NUMERIC, 0, 5, 0);
     columns[2] = column;
 
     /* Constraints */
@@ -610,11 +614,11 @@ static int test_schema_add_duplicate_constraint() {
 
     /* Columns */
     Column **columns = create_column_array(num_columns);
-    Column *column = column_alloc("id", INTEGER, 5, 0);
+    Column *column = column_alloc("id", INTEGER, 0, 5, 0);
     columns[0] = column;
-    column = column_alloc("name", VARCHAR, 5, 0);
+    column = column_alloc("name", VARCHAR, 64, 5, 0);
     columns[1] = column;
-    column = column_alloc("height", NUMERIC, 5, 0);
+    column = column_alloc("height", NUMERIC, 0, 5, 0);
     columns[2] = column;
 
     /* Constraints */

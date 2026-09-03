@@ -4,6 +4,9 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#define DATA_TYPE_TEXT_SIZE 512
+// TODO: BLOB list of pages in disk, probably something similar for jsonb
+
 /* All possible data types used in this database. */
 typedef enum data_types {
     INTEGER,
@@ -18,15 +21,13 @@ typedef enum data_types {
     TIMESTAMP,
     BLOB,
     BOOL,
-    JSONB,
-    NULL_TYPE 
+    JSONB
 } DataType;
 
 /* NUMERIC/DECIMAL Data Type. */
 typedef struct numeric {
-    int sign;
     int64_t val;
-    uint32_t scale;
+    uint32_t scale; // 10^(-scale)
 } numeric_t;
 
 /* CHAR(n) */
@@ -58,7 +59,7 @@ typedef struct timestamp {
     uint8_t second;
 } timestamp_t;
 
-/* BLOB */
+/* BLOB/JSONB - NOT IN USE */
 typedef struct blob {
     uint32_t size;
     uint8_t *buffer;
@@ -67,6 +68,7 @@ typedef struct blob {
 /* Value and corresponding data type both in this struct. */
 typedef struct value {
     DataType type;
+    bool null_val;
     union {
         int32_t int32_val;
         uint32_t uint32_val;
@@ -81,7 +83,6 @@ typedef struct value {
         blob_t blob_val;
         bool bool_val;
         jsonb_t jsonb_val;
-        bool null_val;
     } value;
 } Value;
 
@@ -90,6 +91,9 @@ Value *value_alloc(DataType type);
 
 /* Create a Value struct */
 Value *value_create(DataType type, const void *value);
+
+/* Create Value struct of type with NULL value. */
+Value *value_create_null(DataType type);
 
 /* Copy One Value struct to another Value struct */
 Value *value_copy(const Value *value);
