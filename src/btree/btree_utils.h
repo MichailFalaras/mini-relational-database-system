@@ -20,7 +20,8 @@ typedef struct btree_search_key BTreeSearchKey;
 typedef struct btree_cell_contents BTreeCellContents;
 typedef struct btree_search_result BTreeSearchResult;
 typedef struct btree_split_result BTreeSplitResult;
-typedef struct btree_range_result BTreeRangeResult;
+typedef struct btree_entry BTreeEntry;
+typedef struct btree_search_entries BTreeSearchEntries;
 
 #define MIN_INTERNAL_CELL_SIZE 6 // child pointer, NULL bitmap, keys
 
@@ -43,19 +44,22 @@ bool btree_page_sync(Pager *pager, BTreePage *btree_page);
 BTreeStatus btree_page_attach_load_validate(Pager *pager, BTreePage *btree_page, Page *page, BTreeIndexSpec *index);
 
 
-/* ---------- BTreeRangeResult Helpers ---------- */
+/* ---------- BTreeSearchEntries Helpers ---------- */
 
-// Initialize BTreeRangeResult fields
-extern BTreeStatus btree_range_result_init(BTreeRangeResult *result);
+// Initialize BTreeSearchEntries fields
+extern BTreeStatus btree_search_entries_init(BTreeSearchEntries *result);
 
 // Append cell content structure to the result
-extern BTreeStatus btree_range_result_append(BTreeRangeResult *result, BTreeCellContents *new_cell);
+extern BTreeStatus btree_search_entries_append(BTreeSearchEntries *result, BTreeEntry *new_entry);
 
 // Free individual cell content structure
 extern void btree_cell_contents_free(BTreeCellContents *cell);
 
-// Free BTreeRangeResult
-extern void btree_range_result_free(BTreeRangeResult *result);
+// Free individual cell entries
+extern void btree_entry_free(BTreeEntry *entry);
+
+// Free BTreeSearchEntries
+extern void btree_search_entries_free(BTreeSearchEntries *entries);
 
 
 /* ---------- BTreeIndexSpec Helpers ---------- */
@@ -196,6 +200,17 @@ BTreeStatus shift_cell(BTreePage *btree_page, uint32_t cell_pointer, BTreeShiftD
 /* Update cell pointers offset that was affected because of shift_cell. */
 BTreeStatus update_cell_pointers_offset(BTreePage *btree_page, uint32_t boundary_cell_pointer, uint16_t cell_size, 
     BTreeShiftDirection shift_direction);
+
+/* Get cell contents from a Row */
+BTreeStatus get_cell_contents_from_row(BTreeCellContents *cell_contents, BTreeIndexSpec *spec, Row *row);
+
+/* Locate the position (page number and cell index) of a Row */
+BTreeStatus btree_locate_target_row(BTree *btree, BTreeSearchKey *search_key, const Row *target_row,
+    BTreeIndexSpec *index, uint32_t *page_num, uint16_t *cell_index);
+
+/* Delete a cell in a particular position (page number and cell index) */
+BTreeStatus btree_node_delete_at(Pager *pager, BTreePage *btree_page, uint16_t cell_index,
+    BTreeDeletionResult *result, BTreeIndexSpec *index);
 
 /* ---------- Inline Helpers for immediate Page Metadata Access ---------- */
 

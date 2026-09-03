@@ -342,88 +342,85 @@ BTreeStatus btree_node_insert(Pager *pager, BTreePage *btree_page, BTreeCellCont
 /* BTree type agnostic deletion of cell through search key.
  *
  * Returns deletion result to caller. */
-BTreeStatus btree_node_delete(Pager *pager, BTreePage *btree_page, BTreeSearchKey *search_key, BTreeDeletionResult *deletion_result) {
-    if (!pager || !btree_page || !btree_page->page
-        || !btree_page->data || !search_key 
-        || !search_key->index || !deletion_result) {
+BTreeStatus btree_node_delete(BTree *btree, BTreeCellContents *target_cell, BTreeDeletionResult *deletion_result,
+    BTreeIndexSpec *index, BTreePage *target_leaf) {
+
+    // Validate inputs
+    if (!btree ||
+        !btree->pager ||
+        btree->root_page_num <= SYSTEM_CATALOG_PAGE_NUM ||
+        btree->root_page_num >= MAX_PAGES ||
+        btree->root_page_num >= btree->pager->num_pages) {
+        return BTREE_INVALID_ARGUMENTS;
+    }  
+
+    if (!target_cell ||
+        !target_cell->keys ||
+        target_cell->num_keys == 0 ||
+        !target_cell->BTreePayload.row) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+    
+    if (!index ||
+        !index->index_key ||
+        !index->index_key->column_index_array ||
+        index->index_key->num_columns == 0 ||
+        target_cell->num_keys != index->index_key->num_columns) {
         return BTREE_INVALID_ARGUMENTS;
     }
 
-    if (btree_page->cell_count == 0) {
+    if (!deletion_result || !target_leaf) {
         return BTREE_INVALID_ARGUMENTS;
     }
 
-    /* Initialize deletion result metadata. */
-    deletion_result_reset(deletion_result);
-    deletion_result->page_num = btree_page->page->page_num;
+    // Build the logical search key for the requested index entry
+    BTreeSearchKey search_key = {0};
+    search_key.index = index;
+    search_key.num_target_keys = target_cell->num_keys;
 
-    /* Find index of exact cell we want to delete.*/
-    BTreeSearchResult search_result = {0};
-    BTreeStatus status = btree_binary_search(btree_page, search_key, &search_result, BTREE_LOWER_BOUND);
-    if (status != BTREE_SUCCESS) {
-        fprintf(stderr, "btree_node_delete: Something went wrong.\n");
-        return status;
-    }
-    
-    /* We want an exact match of keys in order to delete. */
-    if (search_result.exact_match == false) {
-        return BTREE_NOT_FOUND;
-    }
-
-    /* Figure out if cell removal is going to cause underflow. */
-    BTreeCellContents cell_to_be_removed = {0};
-    status = get_cell_contents(btree_page, search_result.result_index, &cell_to_be_removed, search_key->index);
-    if (status != BTREE_SUCCESS) {
-        value_free_array(cell_to_be_removed.keys, cell_to_be_removed.num_keys);
-        if (cell_to_be_removed.type == BTREE_LEAF_NODE) { row_free(cell_to_be_removed.BTreePayload.row); }
-        return status;
-    }
-
-    uint32_t used_space = (btree_page->cell_count-1) * sizeof(uint32_t) +
-                        (PAGE_SIZE - btree_page->free_space_offset - cell_to_be_removed.cell_size);
-
-    /* Check if page is underflowing. */
-    status = btree_check_underflow(btree_page, used_space);
-    if (status == BTREE_NODE_UNDERFLOW) {
-        value_free_array(cell_to_be_removed.keys, cell_to_be_removed.num_keys);
-        if (cell_to_be_removed.type == BTREE_LEAF_NODE) { row_free(cell_to_be_removed.BTreePayload.row); }
-        deletion_result->underflow = true;
-        return status;
-    }
-    value_free_array(cell_to_be_removed.keys, cell_to_be_removed.num_keys);
-    if (cell_to_be_removed.type == BTREE_LEAF_NODE) { row_free(cell_to_be_removed.BTreePayload.row); }
-    
-    if (status != BTREE_SUCCESS) {
-        return status;
-    }
-
-    /* Remove specific cell. */
-    status = btree_remove_cell(btree_page, search_result.result_index);
-    if (status != BTREE_SUCCESS) {
-        return status;
-    }
-
-    if (!btree_page_sync(pager, btree_page)) {
+    search_key.target_key = values_to_serialized_key(target_cell->keys, target_cell->num_keys, index);
+    if (!search_key.target_key) {
         return BTREE_ERROR;
     }
 
-    /* Pass serialized first key only if everything went ok. */
-    if (search_result.result_index == 0) {
-        deletion_result->first_key_changed = true;
-        
-        if (btree_page->cell_count > 0) {
-            BTreeCellContents temp = {0};
-            status = get_cell_contents(btree_page, 0, &temp, search_key->index);
-            if (status != BTREE_SUCCESS) {
-                return status;
-            }
+    // Locate target index entry
+    uint32_t target_page_num = UINT32_MAX;
+    uint16_t target_cell_index = UINT16_MAX;
 
-            deletion_result->first_cell = temp;
-        }
+    BTreeStatus status = btree_locate_target_row(
+        btree, 
+        &search_key, 
+        target_cell->BTreePayload.row,
+        index, 
+        &target_page_num,
+        &target_cell_index
+    );
+
+    free(search_key.target_key);
+    search_key.target_key = NULL;
+
+    if (status != BTREE_SUCCESS) {
+        return status;
+    }
+
+    // Load target leaf page and validate it
+    Page *page = pager_get_page(btree->pager, target_page_num);
+    if (!page) {
+        return BTREE_ERROR;
+    }
+
+    status = btree_page_attach_load_validate(btree->pager, target_leaf, page, index);
+    if (status != BTREE_SUCCESS) {
+        return status;
+    }
+
+    if (target_leaf->type != BTREE_LEAF_NODE || 
+        target_cell_index >= target_leaf->cell_count) {
+        return BTREE_CORRUPT_PAGE;
     }
     
-    deletion_result->deleted = true;
-    return BTREE_SUCCESS;
+    // Attempt to delete the target entry in the now known cell index of the target leaf page
+    return btree_node_delete_at(btree->pager, target_leaf, target_cell_index, deletion_result, index);
 }
 
 /* BTree Leaf Node Split.
@@ -777,17 +774,15 @@ BTreeStatus btree_traverse_reachable_pages(BTree *btree, BTreePageCollection *vi
 
 /* Find a unique B+ Tree key */
 BTreeStatus btree_find_exact_key(BTree *btree, BTreeSearchKey *search_key, BTreeSearchResult *search_result,
-                                 BTreeCellContents *cell_contents) {
+                                 BTreeSearchEntries *result) {
     // Validate inputs
-    if (!btree || !search_key || !search_result || !cell_contents) {
-        printf("btree_find_exact_key: Invalid inputs.\n");
+    if (!btree || !search_key || !search_result || !result) {
         return BTREE_INVALID_ARGUMENTS;
     }
 
     if (!btree->pager || 
         btree->root_page_num == INVALID_ROOT_PAGE ||
         btree->root_page_num >= btree->pager->num_pages) {
-        printf("btree_find_exact_key: Invalid input B+ Tree.\n");
         return BTREE_INVALID_ARGUMENTS;
     }
 
@@ -795,14 +790,12 @@ BTreeStatus btree_find_exact_key(BTree *btree, BTreeSearchKey *search_key, BTree
         !search_key->index->index_key || 
         !search_key->index->index_key->column_index_array ||
         search_key->index->index_key->num_columns == 0) {
-        printf("btree_find_exact_key: Invalid index Key.\n");
         return BTREE_INVALID_ARGUMENTS;        
     }
 
     if (!search_key->target_key ||
         search_key->num_target_keys == 0 ||
         search_key->num_target_keys != search_key->index->index_key->num_columns) {
-        printf("btree_find_exact_key: Invalid target search Key.\n");
         return BTREE_INVALID_ARGUMENTS;
     }
 
@@ -815,10 +808,17 @@ BTreeStatus btree_find_exact_key(BTree *btree, BTreeSearchKey *search_key, BTree
         .result_index = UINT16_MAX
     };
 
-    BTreeStatus status = btree_root_to_leaf(btree, search_key, search_result, BTREE_UPPER_BOUND);
+    // Initialize returned entry collection
+    BTreeStatus status = btree_search_entries_init(result);
+    if (status != BTREE_SUCCESS) {
+        return status;
+    }
+
+    status = btree_root_to_leaf(btree, search_key, search_result, BTREE_UPPER_BOUND);
     
     // Search operation failed
     if (status != BTREE_SUCCESS) {
+        btree_search_entries_free(result);
         return status;
     }
 
@@ -827,11 +827,14 @@ BTreeStatus btree_find_exact_key(BTree *btree, BTreeSearchKey *search_key, BTree
         search_result->found = false;
         search_result->page = NULL;
         search_result->result_index = UINT16_MAX;
+
+        btree_search_entries_free(result);
         return BTREE_NOT_FOUND;
     }
 
     // Search result must point to an existing (the leaf) page 
     if (!search_result->page) {
+        btree_search_entries_free(result);
         return BTREE_ERROR;
     }
 
@@ -840,18 +843,35 @@ BTreeStatus btree_find_exact_key(BTree *btree, BTreeSearchKey *search_key, BTree
 
     status = btree_page_attach_load_validate(btree->pager, &leaf, search_result->page, search_key->index);
     if (status != BTREE_SUCCESS) {
+        btree_search_entries_free(result);
         return status;
     }
 
     // Validating that the result page is actually a leaf,
     // and that the exact match result index is within the available cell count
     if (leaf.type != BTREE_LEAF_NODE || search_result->result_index >= leaf.cell_count) {
+        btree_search_entries_free(result);
         return BTREE_CORRUPT_PAGE;
     }
 
+    BTreeEntry entry = {0};
+
     // Get cell contents
-    status = get_cell_contents(&leaf, search_result->result_index, cell_contents, search_key->index);
+    status = get_cell_contents(&leaf, search_result->result_index, &entry.cell, search_key->index);
     if (status != BTREE_SUCCESS) {
+        btree_search_entries_free(result);
+        return status;
+    }
+
+    entry.page_num = leaf.page->page_num;
+    entry.cell_index = search_result->result_index;
+
+    // Add the single matching entry to the BTreeSearchEntries result structure
+    status = btree_search_entries_append(result, &entry);
+    
+    if (status != BTREE_SUCCESS) {
+        btree_cell_contents_free(&entry.cell);
+        btree_search_entries_free(result);
         return status;
     }
 
@@ -860,7 +880,7 @@ BTreeStatus btree_find_exact_key(BTree *btree, BTreeSearchKey *search_key, BTree
 
 // Find all B+ Tree Key prefixes
 BTreeStatus btree_find_prefix_keys(BTree *btree, BTreeIndexSpec *index, BTreeSearchKey *prefix_key,
-    BTreeRangeResult *result) {
+    BTreeSearchEntries *result) {
 
     if (!btree || !index || !index->index_key ||
         !index->index_key->column_index_array ||
@@ -885,7 +905,7 @@ BTreeStatus btree_find_prefix_keys(BTree *btree, BTreeIndexSpec *index, BTreeSea
  * 
 */
 BTreeStatus btree_find_range_keys(BTree *btree, BTreeIndexSpec *index, BTreeSearchKey *start_search_key, 
-    bool includes_start, BTreeSearchKey *end_search_key, bool includes_end, BTreeRangeResult *result) {
+    bool includes_start, BTreeSearchKey *end_search_key, bool includes_end, BTreeSearchEntries *result) {
 
     // Validate inputs
     if (!btree || !btree->pager || !index || !result) {
@@ -918,7 +938,7 @@ BTreeStatus btree_find_range_keys(BTree *btree, BTreeIndexSpec *index, BTreeSear
     }
 
     // Allocating Range Result structure using a helper
-    BTreeStatus status = btree_range_result_init(result);
+    BTreeStatus status = btree_search_entries_init(result);
     if (status != BTREE_SUCCESS) {
         return status;
     }
@@ -930,9 +950,9 @@ BTreeStatus btree_find_range_keys(BTree *btree, BTreeIndexSpec *index, BTreeSear
     if (start_search_key) {
         BTreeSearchResult start_result = {0};
 
-        BTreeStatus status = btree_root_to_leaf(btree, start_search_key, &start_result, BTREE_LOWER_BOUND);
+        status = btree_root_to_leaf(btree, start_search_key, &start_result, BTREE_LOWER_BOUND);
         if (status != BTREE_SUCCESS) {
-            btree_range_result_free(result);
+            btree_search_entries_free(result);
             return status;
         }
 
@@ -945,31 +965,35 @@ BTreeStatus btree_find_range_keys(BTree *btree, BTreeIndexSpec *index, BTreeSear
         // and the first cell contents entry there
         status = btree_find_leftmost_page(btree, index, &starting_page);
         if (status != BTREE_SUCCESS) {
-            btree_range_result_free(result);
+            btree_search_entries_free(result);
             return status;
         }
 
         starting_index_pos = 0;
     }
 
+    if (!starting_page) {
+        btree_search_entries_free(result);
+        return BTREE_ERROR;
+    }
+
     
     Page *page = starting_page;
     uint16_t index_pos = starting_index_pos;
 
-
     BTreePageCollection visited_pages = {0};
 
-    // Main loop where matching entries are appended in the BTreeRangeResult structure
+    // Main loop where matching entries are appended in the BTreeSearchEntries structure
     while (true) {
 
         // Detect sibling cycles (e.g., leaf 8 -> leaf 9 -> leaf 8) or duplicate leaf references
         if (btree_collection_contains(&visited_pages, page->page_num)) {
-            btree_range_result_free(result);
+            btree_search_entries_free(result);
             return BTREE_CORRUPT_PAGE;
         }
 
         if (visited_pages.count >= MAX_PAGES) {
-            btree_range_result_free(result);
+            btree_search_entries_free(result);
             return BTREE_CORRUPT_PAGE;
         }
 
@@ -982,12 +1006,12 @@ BTreeStatus btree_find_range_keys(BTree *btree, BTreeIndexSpec *index, BTreeSear
         
         status = btree_page_attach_load_validate(btree->pager, &btree_page, page, index);
         if (status != BTREE_SUCCESS) {
-            btree_range_result_free(result);
+            btree_search_entries_free(result);
             return status;
         }
 
         if (btree_page.type != BTREE_LEAF_NODE) {
-            btree_range_result_free(result);
+            btree_search_entries_free(result);
             return BTREE_CORRUPT_PAGE;
         }
         
@@ -997,14 +1021,14 @@ BTreeStatus btree_find_range_keys(BTree *btree, BTreeIndexSpec *index, BTreeSear
 
             status = get_cell(&btree_page, index_pos, &cell_view, index);
             if (status != BTREE_SUCCESS) {
-                btree_range_result_free(result);
+                btree_search_entries_free(result);
                 return status;
             }
 
             // Creating a Value ** structure from the cell view's key 
             Value **values = serialized_key_to_values(cell_view.key.key, index->index_key->num_columns, index);
             if (!values) {
-                btree_range_result_free(result);
+                btree_search_entries_free(result);
                 return BTREE_ERROR;
             }
 
@@ -1016,7 +1040,7 @@ BTreeStatus btree_find_range_keys(BTree *btree, BTreeIndexSpec *index, BTreeSear
                                             start_search_key->num_target_keys, start_search_key->index);
                 if (!start_search_key_vals) {
                     value_free_array(values, index->index_key->num_columns);
-                    btree_range_result_free(result);
+                    btree_search_entries_free(result);
                     return BTREE_ERROR;
                 }
 
@@ -1024,7 +1048,7 @@ BTreeStatus btree_find_range_keys(BTree *btree, BTreeIndexSpec *index, BTreeSear
                 if (status != BTREE_SUCCESS) {
                     value_free_array(start_search_key_vals, start_search_key->num_target_keys);
                     value_free_array(values, index->index_key->num_columns);
-                    btree_range_result_free(result);
+                    btree_search_entries_free(result);
                     return status;
                 }
                 value_free_array(start_search_key_vals, start_search_key->num_target_keys);
@@ -1046,7 +1070,7 @@ BTreeStatus btree_find_range_keys(BTree *btree, BTreeIndexSpec *index, BTreeSear
                                             end_search_key->num_target_keys, end_search_key->index);
                 if (!end_search_key_vals) {
                     value_free_array(values, index->index_key->num_columns);
-                    btree_range_result_free(result);
+                    btree_search_entries_free(result);
                     return BTREE_ERROR;
                 }
 
@@ -1054,7 +1078,7 @@ BTreeStatus btree_find_range_keys(BTree *btree, BTreeIndexSpec *index, BTreeSear
                 if (status != BTREE_SUCCESS) {
                     value_free_array(end_search_key_vals, end_search_key->num_target_keys);
                     value_free_array(values, index->index_key->num_columns);
-                    btree_range_result_free(result);
+                    btree_search_entries_free(result);
                     return status;
                 }
                 value_free_array(end_search_key_vals, end_search_key->num_target_keys);
@@ -1070,27 +1094,31 @@ BTreeStatus btree_find_range_keys(BTree *btree, BTreeIndexSpec *index, BTreeSear
             value_free_array(values, index->index_key->num_columns);
 
             // Deserialize cell contents entry
-            BTreeCellContents cell = {0};
+            //BTreeCellContents cell = {0};
+            BTreeEntry entry = {0};
 
             if (!deserialize_cell_contents( 
                     btree_page.data + cell_view.offset, 
                     &btree_page, 
                     &cell_view, 
-                    &cell, 
+                    &entry.cell, 
                     index)) {
-                btree_range_result_free(result);
+                btree_search_entries_free(result);
                 return BTREE_CORRUPT_PAGE;                  
             }
-            
-            // Add current matching entry to the range results' structure
-            status = btree_range_result_append(result, &cell);
 
+            entry.page_num = btree_page.page->page_num;
+            entry.cell_index = index_pos;
+
+            // Add current matching entry to the search entries results' structure
+            status = btree_search_entries_append(result, &entry);
+            
             if (status != BTREE_SUCCESS) {
-                btree_cell_contents_free(&cell);
-                btree_range_result_free(result);
+                btree_cell_contents_free(&entry.cell);
+                btree_search_entries_free(result);
                 return status;
             }
-
+            
             index_pos++;
         }
         
@@ -1105,7 +1133,7 @@ BTreeStatus btree_find_range_keys(BTree *btree, BTreeIndexSpec *index, BTreeSear
         if (next_page_num <= SYSTEM_CATALOG_PAGE_NUM 
             || next_page_num >= btree->pager->num_pages
             || next_page_num >= MAX_PAGES) {
-            btree_range_result_free(result);
+            btree_search_entries_free(result);
             return BTREE_CORRUPT_PAGE;
         }
 
@@ -1113,7 +1141,7 @@ BTreeStatus btree_find_range_keys(BTree *btree, BTreeIndexSpec *index, BTreeSear
         page = pager_get_page(btree->pager, next_page_num);
 
         if (!page) {
-            btree_range_result_free(result);
+            btree_search_entries_free(result);
             return BTREE_ERROR;
         }
 
@@ -1991,44 +2019,46 @@ BTreeStatus btree_insert(BTree *btree, BTreeCellContents *cell_contents, BTreeIn
  *  
  * Returns BTreeDeletionResult. */
 BTreeStatus btree_delete(BTree *btree, BTreeCellContents *cell_contents, BTreeDeletionResult *deletion_res, BTreeIndexSpec *index) {
-    if (!btree || btree->root_page_num <= SYSTEM_CATALOG_PAGE_NUM 
-        || btree->root_page_num >= MAX_PAGES || !btree->pager
-        || !cell_contents  || !deletion_res || !index) {
+
+    // Validate inputs
+    if (!btree || 
+        !btree->pager ||
+        btree->root_page_num <= SYSTEM_CATALOG_PAGE_NUM || 
+        btree->root_page_num >= MAX_PAGES ||
+        btree->root_page_num >= btree->pager->num_pages || 
+        !deletion_res) {
         return BTREE_INVALID_ARGUMENTS;
     }
+
+    if (!cell_contents ||
+        !cell_contents->keys ||
+        cell_contents->num_keys == 0 ||
+        !cell_contents->BTreePayload.row) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    if (!index ||
+        !index->index_key ||
+        !index->index_key->column_index_array ||
+        index->index_key->num_columns == 0 ||
+        cell_contents->num_keys != index->index_key->num_columns) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
     deletion_result_reset(deletion_res);
 
-    /* Create search key and search result for root-to-leaf traversal. */
-    BTreeSearchResult search_result = {0};
-    BTreeSearchKey search_key = {0};
-    search_key.index = index;
-    search_key.num_target_keys = cell_contents->num_keys;
-    search_key.target_key = values_to_serialized_key(cell_contents->keys, search_key.num_target_keys, index);
-    if (!search_key.target_key) {
-        return BTREE_ERROR;
-    }
-
-    retry_deletion: // To restart deletion after underflow propagation
-    BTreeStatus status = btree_root_to_leaf(btree, &search_key, &search_result, BTREE_UPPER_BOUND); 
-    if (status != BTREE_SUCCESS) {
-        free(search_key.target_key);
-        return status;
-    }
-
+retry_deletion:
     BTreePage leaf_node = {0};
-    status = btree_page_attach_load_validate(btree->pager, &leaf_node, search_result.page, index);
-    if (status != BTREE_SUCCESS) {
-        free(search_key.target_key);
-        return status;
-    }
 
-    status = btree_node_delete(btree->pager, &leaf_node, &search_key, deletion_res);
+    BTreeStatus status = btree_node_delete(btree, cell_contents, deletion_res, index, &leaf_node);
+
     if (status != BTREE_SUCCESS && status != BTREE_NODE_UNDERFLOW) {
-        free(search_key.target_key);
         return status;
     }
 
-    /* If deletion fails because leaf node is going to underflow after deletion. */
+    // If deletion fails because leaf node is going to underflow after deletion,
+    // keep the target entry in place for now and repair the tree,
+    // before attempting to deletio again
     if (status == BTREE_NODE_UNDERFLOW && deletion_res->underflow) {
         BTreePage current = leaf_node;
         BTreeMergeResult merge_result = {0};
@@ -2043,7 +2073,6 @@ BTreeStatus btree_delete(BTree *btree, BTreeCellContents *cell_contents, BTreeDe
                     status = BTREE_CORRUPT_PAGE;
                 }
 
-                free(search_key.target_key);
                 return status;
             }
 
@@ -2054,7 +2083,6 @@ BTreeStatus btree_delete(BTree *btree, BTreeCellContents *cell_contents, BTreeDe
             if (merge_result.needs_merge) {
                 status = btree_node_merge(btree->pager, &merge_result, index);
                 if (status != BTREE_SUCCESS && status != BTREE_NODE_UNDERFLOW) {
-                    free(search_key.target_key);
                     return status;
                 }
             }
@@ -2062,14 +2090,12 @@ BTreeStatus btree_delete(BTree *btree, BTreeCellContents *cell_contents, BTreeDe
             /* Move upwards to parent. */
             Page *page = pager_get_page(btree->pager, merge_result.parent_page_num);
             if (!page) {
-                free(search_key.target_key);
                 return BTREE_CORRUPT_PAGE;
             }
 
             BTreePage btree_parent = {0};
             status = btree_page_attach_load_validate(btree->pager, &btree_parent, page, index);
             if (status != BTREE_SUCCESS) {
-                free(search_key.target_key);
                 return status;
             }
 
@@ -2080,7 +2106,6 @@ BTreeStatus btree_delete(BTree *btree, BTreeCellContents *cell_contents, BTreeDe
                 if (current.cell_count == 0) {
                     status = btree_root_collapse(btree, &current, index);
                     if (status != BTREE_SUCCESS) {
-                        free(search_key.target_key);
                         return status;
                     }
                 }
@@ -2090,7 +2115,6 @@ BTreeStatus btree_delete(BTree *btree, BTreeCellContents *cell_contents, BTreeDe
 
             status = btree_check_underflow(&btree_parent, UINT32_MAX);
             if (status != BTREE_SUCCESS && status != BTREE_NODE_UNDERFLOW) {
-                free(search_key.target_key);
                 return status;
             }
 
@@ -2100,12 +2124,12 @@ BTreeStatus btree_delete(BTree *btree, BTreeCellContents *cell_contents, BTreeDe
                 
         }
         
-        /* Retry deleting. */
+        // Redistribution or merge may have moved the logical target.
+        // Do not reuse its previous page_num/cell_index.
+        // btree_node_delete() will locate it again.
         deletion_result_reset(deletion_res);
-        deletion_res->underflow = false;
         goto retry_deletion;
     }
-    free(search_key.target_key);
 
     /* Update deletion result metadata. */
     deletion_res->deleted = true;

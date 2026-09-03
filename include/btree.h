@@ -172,11 +172,18 @@ typedef struct btree_search_key {
 
 /* Result structure storing the matching cell contents for a range query */
 #define BTREE_RANGE_INITIAL_CAPACITY 16
-typedef struct btree_range_result {
-    BTreeCellContents *cells;
+
+// Update BTree search result entries to store the page & cell number of each matching entry
+typedef struct btree_entry {
+    BTreeCellContents cell;
+    uint32_t page_num;
+    uint16_t cell_index;
+} BTreeEntry;
+typedef struct btree_search_entries {
+    BTreeEntry *entries;
     uint32_t count;
     uint32_t capacity;
-} BTreeRangeResult;
+} BTreeSearchEntries;
 
 /* BTree Deletion Result after deletion. */
 typedef struct btree_deletion_result {
@@ -239,8 +246,9 @@ extern BTreeStatus btree_node_insert(Pager *pager, BTreePage *btree_page, BTreeC
                             BTreeSplitResult *split_result, BTreeIndexSpec *index);
 
 /* BTree type agnostic deletion of cell through search key. */
-extern BTreeStatus btree_node_delete(Pager *pager, BTreePage *btree_page, BTreeSearchKey *search_key, BTreeDeletionResult *deletion_result);
-
+extern BTreeStatus btree_node_delete(BTree *btree, BTreeCellContents *target_cell, BTreeDeletionResult *deletion_result,
+    BTreeIndexSpec *index, BTreePage *target_leaf);
+    
 /* BTree Leaf Node Split.
  * Returns important split information in BTreeSplitResult. */
 extern BTreeStatus btree_leaf_node_split(Pager *pager, BTreePage *original_page, BTreeIndexSpec *index,
@@ -261,15 +269,15 @@ extern BTreeStatus btree_traverse_reachable_pages(BTree *btree, BTreePageCollect
 
 // Find B+ Tree Key 
 extern BTreeStatus btree_find_exact_key(BTree *btree, BTreeSearchKey *search_key, BTreeSearchResult *search_result,
-    BTreeCellContents *cell_contents);
+    BTreeSearchEntries *result);
 
 // Find B+ Tree Key 
 extern BTreeStatus btree_find_prefix_keys(BTree *btree, BTreeIndexSpec *index, BTreeSearchKey *prefix_key,
-    BTreeRangeResult *result);
+    BTreeSearchEntries *result);
 
 // Find B+ Tree Range of Keys
 extern BTreeStatus btree_find_range_keys(BTree *btree, BTreeIndexSpec *index, BTreeSearchKey *start_search_key, 
-    bool includes_start, BTreeSearchKey *end_search_key, bool includes_end, BTreeRangeResult *result);
+    bool includes_start, BTreeSearchKey *end_search_key, bool includes_end, BTreeSearchEntries *result);
 
 /* Borrow a leaf cell from a sibling leaf node and
  * update parent internal node key. */

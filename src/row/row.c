@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include "../../include/row.h"
 #include "../../include/expressions.h"
 #include "../../include/data_types.h"
@@ -118,4 +119,35 @@ void row_free(Row *row) {
         free(row);
         row = NULL;
     }
+}
+
+
+// Compares 2 rows column-by-column
+bool row_equals(const Row *left, const Row *right) {
+    // Validate inputs
+    if (!left || !left->values || left->n_columns == 0 || left->is_deleted) {
+        return false;
+    }
+
+    if (!right || !right->values || right->n_columns == 0 || right->is_deleted) {
+        return false;
+    }
+
+    if (left->n_columns != right->n_columns) {
+        return false;
+    }
+
+    for (uint32_t i = 0; i < left->n_columns; i++) {
+        int comp = 0;
+
+        if (!value_compare(left->values[i], right->values[i], &comp)) {
+            return false;
+        }
+
+        if (comp != 0) {
+            return false;
+        }
+    }
+
+    return true;
 }

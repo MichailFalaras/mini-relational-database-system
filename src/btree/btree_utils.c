@@ -1414,17 +1414,21 @@ bool key_contains_null_val(Value **key, uint32_t num_keys) {
     return false;
 } 
 
-/* ---------- BTreeRangeResult Helpers ---------- */
+/* ---------- BTreeSearchEntries Helpers ---------- */
 
-/* The caller owns the BTreeRangeResult struct */
-BTreeStatus btree_range_result_init(BTreeRangeResult *result) {
+/* The caller owns the BTreeSearchEntries struct */
+BTreeStatus btree_search_entries_init(BTreeSearchEntries *result) {
     if (!result) {
         return BTREE_INVALID_ARGUMENTS;
     }
 
-    result->cells = (BTreeCellContents *) calloc(BTREE_RANGE_INITIAL_CAPACITY, sizeof(BTreeCellContents));
+    if (result->entries || result->count != 0 || result->capacity != 0) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    result->entries = (BTreeEntry *) calloc(BTREE_RANGE_INITIAL_CAPACITY, sizeof(BTreeEntry));
     
-    if(!result->cells) {
+    if(!result->entries) {
         result->count = 0;
         result->capacity = 0;
         return BTREE_ERROR;
@@ -1435,8 +1439,8 @@ BTreeStatus btree_range_result_init(BTreeRangeResult *result) {
     return BTREE_SUCCESS;
 }
 
-BTreeStatus btree_range_result_append(BTreeRangeResult *result, BTreeCellContents *new_cell) {
-    if (!result || !new_cell) {
+BTreeStatus btree_search_entries_append(BTreeSearchEntries *result, BTreeEntry *new_entry) {
+    if (!result || !new_entry) {
         return BTREE_INVALID_ARGUMENTS;
     }
 
@@ -1450,19 +1454,19 @@ BTreeStatus btree_range_result_append(BTreeRangeResult *result, BTreeCellContent
         }
 
         // Increasing the size of the cell contents array
-        BTreeCellContents *new_result_cells = 
-            (BTreeCellContents *) realloc(result->cells, new_capacity * sizeof(BTreeCellContents));
+        BTreeEntry *new_entries = 
+            (BTreeEntry *) realloc(result->entries, new_capacity * sizeof(BTreeEntry));
 
-        if (!new_result_cells) {
+        if (!new_entries) {
             return BTREE_ERROR;
         }
 
-        result->cells = new_result_cells;
+        result->entries = new_entries;
         result->capacity = new_capacity;
     }
 
     // Appending the new cell content struct
-    result->cells[result->count] = *new_cell;
+    result->entries[result->count] = *new_entry;
     result->count++;
 
     return BTREE_SUCCESS;
@@ -1478,27 +1482,39 @@ void btree_cell_contents_free(BTreeCellContents *cell) {
         cell->keys = NULL;
     }
 
-    if (cell->BTreePayload.row) {
+    if (cell->type == BTREE_LEAF_NODE && cell->BTreePayload.row) {
         row_free(cell->BTreePayload.row);
         cell->BTreePayload.row = NULL;
     }
 }
 
-void btree_range_result_free(BTreeRangeResult *result) {
-    if (!result) {
+void btree_entry_free(BTreeEntry *entry) {
+    if (!entry) {
+        return;
+    }
+
+    btree_cell_contents_free(&entry->cell);
+
+    entry->page_num = UINT32_MAX;
+    entry->cell_index = UINT16_MAX;
+}
+
+
+void btree_search_entries_free(BTreeSearchEntries *entries) {
+    if (!entries) {
         return;
     }
 
     // Free the allocate Key and Rows for each cell contents entry in the ragne result
-    for (uint32_t i = 0; i < result->count; i++) {
-        btree_cell_contents_free(&result->cells[i]);
+    for (uint32_t i = 0; i < entries->count; i++) {
+        btree_entry_free(&entries->entries[i]);
     }
 
-    free(result->cells);
+    free(entries->entries);
 
-    result->cells = NULL;
-    result->count = 0;
-    result->capacity = 0;
+    entries->entries = NULL;
+    entries->count = 0;
+    entries->capacity = 0;
 }
 
 
@@ -1590,4 +1606,290 @@ void index_btree_spec_free(BTreeIndexSpec *spec) {
 
     free(spec->column_types);
     spec->column_types = NULL;
+}
+
+
+/* Get cell contents from a Row */
+BTreeStatus get_cell_contents_from_row(BTreeCellContents *cell_contents, BTreeIndexSpec *spec, Row *row) {
+    if (!cell_contents) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    if (!spec ||
+        !spec->schema ||
+        !spec->schema->columns ||
+        !spec->index_key ||
+        !spec->index_key->column_index_array ||
+        spec->index_key->num_columns == 0 ||
+        spec->key_size == 0) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    if (!row ||
+        !row->values ||
+        row->n_columns == 0 ||
+        row->n_columns != spec->schema->num_columns) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    cell_contents->type = BTREE_LEAF_NODE;
+    cell_contents->num_keys = spec->index_key->num_columns;
+    cell_contents->key_size = spec->key_size;
+
+    cell_contents->keys = (Value **) calloc(cell_contents->num_keys, sizeof(Value *));
+
+    if (!cell_contents->keys) {
+        return BTREE_ERROR;
+    }
+
+    // Extract indexed values from the Row
+    for (uint32_t i = 0; i < cell_contents->num_keys; i++) {
+        uint32_t col_pos = spec->index_key->column_index_array[i];
+
+        if (col_pos >= row->n_columns) {
+            free(cell_contents->keys);
+            cell_contents->keys = NULL;
+            return BTREE_INVALID_ARGUMENTS;
+        }
+
+        Value *value = row_get_value(row, col_pos);
+
+        if (!value) {
+            free(cell_contents->keys);
+            cell_contents->keys = NULL;
+            return BTREE_ERROR;
+        }
+
+        if (!spec->schema->columns[col_pos] ||
+            value->type != spec->schema->columns[col_pos]->type) {
+            free(cell_contents->keys);
+            cell_contents->keys = NULL;
+            return BTREE_INVALID_ARGUMENTS;
+        }
+
+        cell_contents->keys[i] = value;
+    }
+
+    // Serialized Row: [is_deleted] [n_columns] [NULL bitmap] [column 0] ...
+    
+    uint32_t row_size = sizeof(uint8_t) + sizeof(uint32_t) + ((row->n_columns + 7) / 8);
+
+    for (uint32_t i = 0; i < row->n_columns; i++) {
+        if (!row->values[i] ||
+            !spec->schema->columns[i] ||
+            row->values[i]->type != spec->schema->columns[i]->type) {
+            free(cell_contents->keys);
+            cell_contents->keys = NULL;
+            return BTREE_INVALID_ARGUMENTS;
+        }
+
+        uint32_t serialized_size = get_serialized_column_size(spec, i);
+
+        if (row_size > UINT16_MAX - serialized_size) {
+            free(cell_contents->keys);
+            cell_contents->keys = NULL;
+            return BTREE_ERROR;
+        }
+
+        row_size += serialized_size;
+    }
+
+    if (cell_contents->key_size > UINT16_MAX - row_size) {
+        free(cell_contents->keys);
+        cell_contents->keys = NULL;
+        return BTREE_ERROR;
+    }
+
+    cell_contents->cell_size = (uint16_t)(cell_contents->key_size + row_size);
+
+    // Borrow the full Row as the leaf payload
+    cell_contents->BTreePayload.row = row;
+
+    return BTREE_SUCCESS;
+}
+
+// Locate the position (page number and cell index) of a Row
+BTreeStatus btree_locate_target_row(BTree *btree, BTreeSearchKey *search_key, const Row *target_row,
+    BTreeIndexSpec *index, uint32_t *page_num, uint16_t *cell_index) {
+    
+    // Validate inputs
+    if (!btree ||
+        !btree->pager ||
+        btree->pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    if (!index || 
+        !index->index_key ||
+        !index->index_key->column_index_array ||
+        index->index_key->num_columns == 0) {
+        return BTREE_INVALID_ARGUMENTS;        
+    }
+
+    if (!search_key ||
+        !search_key->target_key ||
+        !search_key->index ||
+        search_key->index != index ||
+        search_key->num_target_keys != index->index_key->num_columns) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    if (!target_row || !page_num || !cell_index) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    *page_num = UINT32_MAX;
+    *cell_index = UINT16_MAX;
+
+    BTreeSearchEntries matches = {0};    
+    BTreeStatus status;
+
+    // Distinguishing between a Unique and a Non-Unique index
+    // 1. Find exact match in unique index
+    // 2. Find all matches and then compare them column-by-column with the target row
+
+    // UNIQUE index
+    if (index->is_unique) {
+        BTreeSearchResult search_result = {0};
+
+        status = btree_find_exact_key(btree, search_key, &search_result, &matches);
+        
+        if (status != BTREE_SUCCESS) {
+            btree_search_entries_free(&matches);
+            return status;
+        }
+
+        if (matches.count != 1) {
+            BTreeStatus return_status = matches.count == 0 ? BTREE_NOT_FOUND : BTREE_CORRUPT_PAGE;
+
+            btree_search_entries_free(&matches);
+            return return_status;
+        }
+
+        *page_num = matches.entries[0].page_num;
+        *cell_index = matches.entries[0].cell_index;
+
+        btree_search_entries_free(&matches);
+        return BTREE_SUCCESS;
+    }
+
+    // NON-UNIQUE index
+    status = btree_find_range_keys(btree, index, search_key, true, search_key, true, &matches);
+
+    if (status != BTREE_SUCCESS) {
+        btree_search_entries_free(&matches);
+        return status;
+    }
+
+    for (uint32_t i = 0; i < matches.count; i++) {
+        Row *row = matches.entries[i].cell.BTreePayload.row;
+
+        if (!row) {
+            btree_search_entries_free(&matches);
+            return BTREE_CORRUPT_PAGE;
+        }
+
+        
+        // If the current row equals the target row on all Columns, we retrieve its position
+        if (row_equals(row, target_row)) {
+            *page_num = matches.entries[i].page_num;
+            *cell_index = matches.entries[i].cell_index;
+
+            btree_search_entries_free(&matches);
+            return BTREE_SUCCESS;
+        }
+    }
+
+    btree_search_entries_free(&matches);
+    return BTREE_NOT_FOUND;
+
+}
+
+// Delete a cell in a particular position (page number and cell index)
+BTreeStatus btree_node_delete_at(Pager *pager, BTreePage *btree_page, uint16_t cell_index,
+    BTreeDeletionResult *result, BTreeIndexSpec *index) {
+    
+    // Validate inputs
+    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    if (!btree_page || 
+        !btree_page->page || 
+        !btree_page->data ||
+        btree_page->type != BTREE_LEAF_NODE || 
+        btree_page->cell_count == 0 || cell_index >= btree_page->cell_count) {
+        return BTREE_INVALID_ARGUMENTS;
+    }
+
+    if (!index || 
+        !index->index_key ||
+        !index->index_key->column_index_array ||
+        index->index_key->num_columns == 0) {
+        return BTREE_INVALID_ARGUMENTS;        
+    }
+
+    if (!result) {
+        return BTREE_INVALID_ARGUMENTS; 
+    }
+
+    deletion_result_reset(result);
+    result->page_num = btree_page->page->page_num;
+
+    // Extract cell contents of target cell
+    BTreeCellContents cell_to_be_removed = {0};
+    
+    BTreeStatus status = get_cell_contents(btree_page, cell_index, &cell_to_be_removed, index);
+
+    if (status != BTREE_SUCCESS) {
+        btree_cell_contents_free(&cell_to_be_removed);
+        return status;
+    }
+
+    // Verify its deletion doesn't cause underflow
+    uint32_t used_space = 
+        (btree_page->cell_count - 1) * sizeof(uint32_t) +
+        (PAGE_SIZE - btree_page->free_space_offset - cell_to_be_removed.cell_size);
+
+    status = btree_check_underflow(btree_page, used_space);
+
+    btree_cell_contents_free(&cell_to_be_removed);
+
+    if (status == BTREE_NODE_UNDERFLOW) {
+        result->underflow = true;
+        return BTREE_NODE_UNDERFLOW;
+    }
+
+    if (status != BTREE_SUCCESS) {
+        return status;
+    }
+
+    // Delete cell since it doesn't cause underflow at this point
+    status = btree_remove_cell(btree_page, cell_index);
+
+    if (status != BTREE_SUCCESS) {
+        return status;
+    }
+
+    if (!btree_page_sync(pager, btree_page)) {
+        return BTREE_ERROR;
+    }
+
+    if (cell_index == 0 && btree_page->cell_count > 0) {
+        BTreeCellContents new_first_cell = {0};
+
+        status = get_cell_contents(btree_page, 0, &new_first_cell, index);
+
+        if (status != BTREE_SUCCESS) {
+            btree_cell_contents_free(&new_first_cell);
+            return status;
+        }
+
+        result->first_key_changed = true;
+        result->first_cell = new_first_cell;
+    }
+
+    result->deleted = true;
+
+    return BTREE_SUCCESS;
 }
