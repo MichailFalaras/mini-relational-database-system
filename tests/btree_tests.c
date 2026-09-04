@@ -5,6 +5,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <errno.h>
+#include <time.h>
 #include "../include/btree.h"
 #include "../src/btree/btree_utils.h"
 #include "../include/page.h"
@@ -13,6 +14,7 @@
 #include "../src/data_types/data_types_utils.h"
 #include "../include/serialize.h"
 #include "../include/schema.h"
+#include "../include/constraints.h"
 
 #define ASSERT(condition) { \
     if (!(condition)) { \
@@ -20,144 +22,334 @@
     } \
 }
 
-/* ---------- Initialization Helpers ---------- */
-
-// Temporary Test BTree Struct
-typedef struct test_btree {
+typedef struct btree_test_context {
     BTree *btree;
-    uint8_t levels;
-    uint32_t page_count;
-    uint32_t *page_nums;
-} TestBTree;
+    Pager *pager;
+    Index *index;
+    BTreeIndexSpec *index_spec;
+    Schema *schema;
+} BTreeTestContext;
 
-// Pager initialization
-bool pager_open_and_create_new_page(const char *pathname, Pager **pager, Page **page) {
-    *pager = pager_open(pathname);
-    if (!(*pager)) {
+static void free_cell_contents(BTreeCellContents *cell_contents) {
+    if (!cell_contents) {
+        return;
+    }
+
+    if (cell_contents->keys) {
+        value_free_array(cell_contents->keys, cell_contents->num_keys);
+        cell_contents->keys = NULL;
+    }
+
+    if (cell_contents->type == BTREE_LEAF_NODE
+        && cell_contents->BTreePayload.row) {
+        row_free(cell_contents->BTreePayload.row);
+        cell_contents->BTreePayload.row = NULL;
+    }
+
+    cell_contents->num_keys = 0;
+    cell_contents->key_size = 0;
+    cell_contents->cell_size = 0;
+}
+
+static void btree_test_context_free(BTreeTestContext *ctx) {
+    if (!ctx) {
+        return;
+    }
+
+    if (ctx->pager) {
+        pager_close(ctx->pager);
+        ctx->pager = NULL;
+    }
+
+    if (ctx->index) {
+        index_free(ctx->index);
+        ctx->index = NULL;
+    }
+
+    if (ctx->schema) {
+        schema_free(ctx->schema);
+        ctx->schema = NULL;
+    }
+
+    if (ctx->index_spec) {
+        index_btree_spec_free(ctx->index_spec);
+        free(ctx->index_spec);
+        ctx->index_spec = NULL;
+    }
+
+    if (ctx->btree) {
+        free(ctx->btree);
+        ctx->btree = NULL;
+    }
+
+}
+
+static bool timestamp_to_unix(timestamp_t *timestamp, uint64_t *result) {
+    if (!timestamp || !result) {
         return false;
     }
 
-    uint32_t page_num = 0;    
-    if (!pager_allocate_page(*pager, &page_num)) {
+    struct tm tm_value = {0};
+    tm_value.tm_year = (int) timestamp->year - 1900;
+    tm_value.tm_mon = (int) timestamp->month - 1;
+    tm_value.tm_mday = timestamp->day;
+    tm_value.tm_hour = timestamp->hour;
+    tm_value.tm_min  = timestamp->minute;
+    tm_value.tm_sec  = timestamp->second;
+
+    __time64_t unix_time = _mkgmtime64(&tm_value);
+    if (unix_time == (__time64_t)-1) {
         return false;
     }
 
-    *page = pager_get_page(*pager, page_num);
-    if (!(*page)) {
-        return false;
-    }
-
+    *result = (uint64_t) unix_time;
     return true;
 }
 
-bool pager_open_and_get_page_in_cache(const char *pathname, Pager **pager, Page **page, uint32_t page_num) {
-    *pager = pager_open(pathname);
-    if (!(*pager)) {
+static bool btree_test_context_init(BTreeTestContext *ctx, const char *pathname) {
+    if (!ctx || !pathname) {
         return false;
     }
+    *ctx = (BTreeTestContext){0};
 
-    *page = pager_get_page(*pager, page_num);
-    if (!(*page)) {
-        return false;
+    /* --- PAGER --- */
+    ctx->pager = pager_open(pathname);
+    if (!ctx->pager) {
+        goto cleanup;
     }
 
-    return true;
-}
-
-// Index initialization
-Index *index_init(Pager *pager, const char *name, IndexType type,
-    const uint32_t *key_columns, uint32_t amount_of_key_columns) {
-    if (!name || !key_columns) {
-        return NULL;
-    }
+    /* --- INDEX --- */
+    uint32_t amount_of_key_columns = 3;
+    uint32_t key_columns[] = {5, 1, 4};
+    bool is_unique = true;
 
     IndexKey *index_key = index_key_create(key_columns, amount_of_key_columns);
     if (!index_key) {
-        return NULL;
+        goto cleanup;
     }
 
-    Index *index = index_create(name, type, index_key, pager, false);
+    ctx->index = index_create("Index", SECONDARY_INDEX, index_key, ctx->pager, is_unique);
+    if (!ctx->index) {
+        index_key_free(index_key);
+        goto cleanup;
+    }
     index_key_free(index_key);
 
-    return index;
-}
+    /* --- SCHEMA --- */
 
-bool index_spec_init(BTreeIndexSpec *index_spec, Index *index) {
-    index_spec->index_key = index->key;
-    index_spec->is_unique = false;
-    index_spec->schema = (Schema *) calloc(1, sizeof(Schema));
-    if (!index_spec->schema) {
-        return false;
+    uint32_t amount_columns = 6;
+    Column **columns = calloc(amount_columns, sizeof(Column *));
+    if (!columns) {
+        goto cleanup;
     }
 
-    index_spec->schema->num_columns = 3;
-    index_spec->key_size = index_spec->index_key->num_columns * get_data_type_size(UNSIGNED_INTEGER);
-    index_spec->schema->columns = (Column **) calloc(index_spec->schema->num_columns, sizeof(Column *));
-    if (!index_spec->schema->columns) {
-        return false;
-    }
-
-    index_spec->column_types = (DataType *) calloc(index->key->num_columns, sizeof(DataType));
-    if (!index_spec->column_types) {
-        return false;
-    }
-
-    for (uint32_t i = 0; i < index_spec->schema->num_columns; i++) {
-        index_spec->schema->columns[i] = (Column *) calloc(1, sizeof(Column));
-        if (!index_spec->schema->columns[i]) {
-            return false;
-        }
-
-        index_spec->column_types[i] = UNSIGNED_INTEGER;
-        strcpy(index_spec->schema->columns[i]->name, "Col");
-        index_spec->schema->columns[i]->non_null_rows = 123;
-        index_spec->schema->columns[i]->null_rows = 0;
-        index_spec->schema->columns[i]->type = UNSIGNED_INTEGER;
-    }
-
-    return true;
-}
-
-// Cell Contents initialization
-bool cell_contents_init(BTreeCellContents *cell_contents) {
-    cell_contents->BTreePayload.row = (Row *) calloc(1, sizeof(Row));
-    if (!cell_contents->BTreePayload.row) {
-        return false;
+    Constraint **constraints = calloc(amount_columns, sizeof(Constraint *));
+    if (!constraints) {
+        goto cleanup;
     }
     
-    cell_contents->type = BTREE_LEAF_NODE;
-    cell_contents->num_keys = 3;
-    cell_contents->keys = (Value **) calloc(cell_contents->num_keys, sizeof(Value *));
-    if (!cell_contents->keys) {
-        return false;
+    char column_name[64] = {0};
+    DataType column_data_types[] = {UNSIGNED_INTEGER, VARCHAR, VARCHAR, NUMERIC, TIMESTAMP, BOOL};
+    uint32_t type_parameters[] = {0, 64, 128, 0, 0, 0};
+    for (uint32_t i = 0; i < amount_columns; i++) {
+        snprintf(column_name, sizeof(column_name), "%s%u", "col", i);
+
+        columns[i] = column_alloc(column_name, column_data_types[i], type_parameters[i], 0, 0);
+        if (!columns[i]) {
+            goto cleanup;
+        }
     }
 
-    cell_contents->key_size = 3 * get_data_type_size(UNSIGNED_INTEGER);
-    cell_contents->BTreePayload.row->is_deleted = false;
-    cell_contents->BTreePayload.row->n_columns = 3;
-    cell_contents->cell_size = cell_contents->key_size + sizeof(uint8_t) + sizeof(uint32_t) + 3*get_data_type_size(UNSIGNED_INTEGER); 
+    uint32_t primary_columns[] = {0};
+    constraints[0] = constraint_create_primary_key("PRIMARY_KEY_CONSTRAINT_0", primary_columns, 1);
+    if (!constraints[0]) { goto cleanup; }
 
-    cell_contents->BTreePayload.row->values = (Value **) calloc(cell_contents->num_keys, sizeof(Value *));
-    if (!cell_contents->BTreePayload.row->values) {
-        return false;
+    constraints[1] = constraint_create_not_null("NOT_NULL_CONSTRAINT_1_00", 1);
+    if (!constraints[1]) { goto cleanup; }
+    constraints[2] = constraint_create_not_null("NOT_NULL_CONSTRAINT_1_01", 2);
+    if (!constraints[2]) { goto cleanup; }
+    constraints[3] = constraint_create_not_null("NOT_NULL_CONSTRAINT_1_02", 4);
+    if (!constraints[3]) { goto cleanup; }
+    constraints[4] = constraint_create_not_null("NOT_NULL_CONSTRAINT_1_03", 5);
+    if (!constraints[4]) { goto cleanup; }
+
+    uint32_t unique_columns[] = {2};
+    constraints[5] = constraint_create_unique("UNIQUE_COLUMNS_2", unique_columns, 1);
+    if (!constraints[5]) { goto cleanup; }
+
+
+    ctx->schema = schema_create(columns, constraints, amount_columns, amount_columns);
+    if (!ctx->schema) {
+        goto cleanup;
     }
+
+    for (uint32_t i = 0; i < 6; i++) {
+        free(columns[i]);
+        constraint_free(constraints[i]);
+    }
+    free(columns);
+    free(constraints);
+    /* --- INDEX SPEC --- */
+
+    ctx->index_spec = (BTreeIndexSpec *) calloc(1, sizeof(BTreeIndexSpec));
+    if (!ctx->index_spec) {
+        goto cleanup;
+    }
+
+    if (!btree_index_spec_init(ctx->index, ctx->schema, ctx->index_spec)) {
+        goto cleanup;
+    }
+
+    /* --- BTREE --- */
+
+    ctx->btree = (BTree *) calloc(1, sizeof(BTree));
+    if (!ctx->btree) {
+        goto cleanup;
+    }
+
+    ctx->btree->pager = ctx->pager;
+    ctx->btree->root_page_num = ctx->index->root_page_num;
 
     return true;
+    
+    cleanup:
+
+    btree_test_context_free(ctx);
+    return false;
 }
 
-// Search Key initialization
-bool search_key_init(BTreeSearchKey *search_key, BTreeIndexSpec *index_spec, Value **target_key_vals) {
-    if (!search_key || !index_spec || !target_key_vals) {
+static bool create_cell_contents(BTreeCellContents *cell_contents, BTreeIndexSpec *index_spec, uint32_t user_id) {
+    if (!cell_contents || !index_spec) {
         return false;
     }
 
-    search_key->index = index_spec;
-    search_key->num_target_keys = index_spec->index_key->num_columns;
+    cell_contents->type = BTREE_LEAF_NODE;
+    cell_contents->num_keys = index_spec->index_key->num_columns;
+
+    cell_contents->BTreePayload.row = (Row *) calloc(1, sizeof(Row));
+    if (!cell_contents->BTreePayload.row) {
+        goto cleanup;
+    }
+    cell_contents->BTreePayload.row->is_deleted = false;
+    cell_contents->BTreePayload.row->n_columns = index_spec->schema->num_columns;
+
+    cell_contents->BTreePayload.row->values = (Value **) calloc(index_spec->schema->num_columns, sizeof(Value *));
+    if (!cell_contents->BTreePayload.row->values) {
+        goto cleanup;
+    }    
+
+    // id: UNSIGNED INTEGER | PRIMARY_KEY
+    cell_contents->BTreePayload.row->values[0] = value_create(index_spec->schema->columns[0]->type, &user_id);
+    if (!cell_contents->BTreePayload.row->values[0]) {
+        goto cleanup;
+    }
+
+    // username: VARCHAR | NOT_NULL
+    char buffer[128] = {0};
+    snprintf(buffer, 128, "%s%u", "user", (user_id % 5));
+    varchar_n_t username_varchar = {0};
+    username_varchar.max_n = 64;
+    username_varchar.string = buffer;
+
+    cell_contents->BTreePayload.row->values[1] = value_create(index_spec->schema->columns[1]->type, &username_varchar);
+    if (!cell_contents->BTreePayload.row->values[1]) {
+        goto cleanup;
+    }
+
+    // email: VARCHAR | UNIQUE | NOT_NULL
+    memset(buffer, 0, sizeof(buffer));
+    snprintf(buffer, 128, "%s%u@email.com", "user", user_id);
+    varchar_n_t email_varchar = {0};
+    email_varchar.max_n = 128;
+    email_varchar.string = buffer;
+
+    cell_contents->BTreePayload.row->values[2] = value_create(index_spec->schema->columns[2]->type, &email_varchar);
+    if (!cell_contents->BTreePayload.row->values[2]) {
+        goto cleanup;
+    }
+
+    // salary: NUMERIC
+    numeric_t numeric = {0};
+    numeric.scale = 2;
+    numeric.val = user_id*120000 + user_id*7500; 
+
+    cell_contents->BTreePayload.row->values[3] = value_create(index_spec->schema->columns[3]->type, &numeric);
+    if (!cell_contents->BTreePayload.row->values[3]) {
+        goto cleanup;
+    }
+
+    // created_at: TIMESTAMP | NOT_NULL
+    timestamp_t timestamp = {0};
+    timestamp.year = 2026 - (user_id % 10);
+    timestamp.month  = 1 + (user_id % 12);
+    timestamp.day    = 1 + ((user_id * 3) % 28);
+    timestamp.hour   = (user_id * 5) % 24;
+    timestamp.minute = (user_id * 2) % 60;
+    timestamp.second = (user_id * 7) % 60;
+
+    uint64_t unix_time = 0;
+    if (!timestamp_to_unix(&timestamp, &unix_time)) {
+        goto cleanup;
+    }
+
+    cell_contents->BTreePayload.row->values[4] = value_create(index_spec->schema->columns[4]->type, &unix_time);
+    if (!cell_contents->BTreePayload.row->values[4]) {
+        goto cleanup;
+    }
+
+    // active: BOOL
+    bool val = (user_id % 2);
+
+    cell_contents->BTreePayload.row->values[5] = value_create(index_spec->schema->columns[5]->type, &val);
+    if (!cell_contents->BTreePayload.row->values[5]) {
+        goto cleanup;
+    }
+
+    cell_contents->keys = (Value **) calloc(cell_contents->num_keys, sizeof(Value *));
+    if (!cell_contents->keys) {
+        goto cleanup;
+    }
+
+    for (uint32_t i = 0; i < cell_contents->num_keys; i++) {
+        cell_contents->keys[i] = value_copy(cell_contents->BTreePayload.row->values[index_spec->index_key->column_index_array[i]]);
+        if (!cell_contents->keys[i]) {
+            goto cleanup;
+        }
+    }
+
+    cell_contents->key_size = index_spec->key_size;
+
+    uint32_t bitmap_size = (index_spec->schema->num_columns + 7) / 8;
+    cell_contents->cell_size = cell_contents->key_size + bitmap_size
+                                + sizeof(uint8_t) + sizeof(uint32_t);
+    for (uint32_t i = 0; i < index_spec->schema->num_columns; i++) {
+        cell_contents->cell_size += get_serialized_column_size(index_spec, i);
+    }
+    
+    return true;
+
+    cleanup:
+
+    free_cell_contents(cell_contents);
+    return false;
+}
+
+static bool search_key_init(BTreeSearchKey *search_key, BTreeIndexSpec *index_spec,
+    Value **target_key_vals, uint32_t num_target_keys) {
+    if (!search_key || !index_spec || !target_key_vals
+        || !num_target_keys
+        || num_target_keys > index_spec->index_key->num_columns) {
+        return false;
+    }
+
     if (search_key->target_key) {
         free(search_key->target_key);
         search_key->target_key = NULL;
     }
-    search_key->target_key = values_to_serialized_key(target_key_vals, index_spec->index_key->num_columns, index_spec); 
+
+    search_key->index = index_spec;
+    search_key->num_target_keys = num_target_keys;
+    search_key->target_key = values_to_serialized_key(target_key_vals, num_target_keys, index_spec);
     if (!search_key->target_key) {
         return false;
     }
@@ -165,1233 +357,1740 @@ bool search_key_init(BTreeSearchKey *search_key, BTreeIndexSpec *index_spec, Val
     return true;
 }
 
-// Test BTree initialization helpers
-void connect_sibling_nodes(TestBTree *test_btree) {
-
-    uint32_t leaf_node_beg = (1 << (test_btree->levels-1)) - 1;
-
-    BTreePage btree_page = {0};
-    for (uint32_t i = leaf_node_beg; i < test_btree->page_count; i++) {
-        btree_page_attach(&btree_page, test_btree->btree->pager->pages[test_btree->page_nums[i]]);
-        btree_page_load(&btree_page);
-
-        if (i == leaf_node_beg) {
-            btree_page.type_specific_data.siblings.previous_leaf_pointer = UINT32_MAX;
-        } else {
-            btree_page.type_specific_data.siblings.previous_leaf_pointer = test_btree->page_nums[i-1];
-        }
-        
-        if (i == test_btree->page_count-1) {
-            btree_page.type_specific_data.siblings.next_leaf_pointer = UINT32_MAX;
-        } else {
-            btree_page.type_specific_data.siblings.next_leaf_pointer = test_btree->page_nums[i+1];
-        }
-
-        btree_page_sync(test_btree->btree->pager, &btree_page);
+static bool create_index_key_values(Value **key_values, BTreeIndexSpec *index_spec,
+    bool active, const char *username, uint64_t created_at) {
+    if (!key_values || !index_spec || !username
+        || index_spec->index_key->num_columns != 3) {
+        return false;
     }
 
+    varchar_n_t username_varchar = {0};
+    username_varchar.max_n = get_key_column(index_spec, 1)->type_parameter;
+    username_varchar.string = (char *) username;
+
+    key_values[0] = value_create(get_key_column(index_spec, 0)->type, &active);
+    if (!key_values[0]) {
+        goto cleanup;
+    }
+
+    key_values[1] = value_create(get_key_column(index_spec, 1)->type, &username_varchar);
+    if (!key_values[1]) {
+        goto cleanup;
+    }
+
+    key_values[2] = value_create(get_key_column(index_spec, 2)->type, &created_at);
+    if (!key_values[2]) {
+        goto cleanup;
+    }
+
+    return true;
+
+    cleanup:
+
+    for (uint32_t i = 0; i < index_spec->index_key->num_columns; i++) {
+        if (key_values[i]) {
+            value_free(key_values[i]);
+            key_values[i] = NULL;
+        }
+    }
+    return false;
 }
 
-bool populate_leaf_nodes(TestBTree *test_btree, uint8_t *page_data, uint32_t page_index,  BTreeIndexSpec *index_spec) {
-    BTreePage btree_page = {0};
-    btree_page_attach(&btree_page, test_btree->btree->pager->pages[test_btree->page_nums[page_index]]);
-    btree_page_load(&btree_page);
+static bool set_cell_index_values(BTreeCellContents *cell_contents, BTreeIndexSpec *index_spec,
+    bool active, const char *username, uint64_t created_at) {
+    if (!cell_contents || !cell_contents->keys
+        || !cell_contents->BTreePayload.row
+        || !cell_contents->BTreePayload.row->values
+        || !index_spec || !username
+        || cell_contents->num_keys != index_spec->index_key->num_columns) {
+        return false;
+    }
+
+    Value **new_keys = (Value **) calloc(cell_contents->num_keys, sizeof(Value *));
+    if (!new_keys) {
+        return false;
+    }
+
+    Value **new_row_values = (Value **) calloc(cell_contents->num_keys, sizeof(Value *));
+    if (!new_row_values) {
+        free(new_keys);
+        return false;
+    }
+
+    if (!create_index_key_values(new_keys, index_spec, active, username, created_at)) {
+        free(new_keys);
+        free(new_row_values);
+        return false;
+    }
+
+    for (uint32_t i = 0; i < cell_contents->num_keys; i++) {
+        new_row_values[i] = value_copy(new_keys[i]);
+        if (!new_row_values[i]) {
+            value_free_array(new_keys, cell_contents->num_keys);
+            value_free_array(new_row_values, cell_contents->num_keys);
+            return false;
+        }
+    }
+
+    for (uint32_t i = 0; i < cell_contents->num_keys; i++) {
+        uint32_t column_index = index_spec->index_key->column_index_array[i];
+
+        value_free(cell_contents->keys[i]);
+        cell_contents->keys[i] = new_keys[i];
+        new_keys[i] = NULL;
+
+        value_free(cell_contents->BTreePayload.row->values[column_index]);
+        cell_contents->BTreePayload.row->values[column_index] = new_row_values[i];
+        new_row_values[i] = NULL;
+    }
+
+    free(new_keys);
+    free(new_row_values);
+    return true;
+}
+
+static bool create_ordered_cell_contents(BTreeCellContents *cell_contents, BTreeIndexSpec *index_spec,
+    uint32_t user_id, uint32_t key_order) {
+    if (!create_cell_contents(cell_contents, index_spec, user_id)) {
+        return false;
+    }
+
+    char username[64] = {0};
+    snprintf(username, sizeof(username), "user%08u", key_order);
+
+    bool active = false;
+    uint64_t created_at = 1700000000ULL + key_order;
+
+    if (!set_cell_index_values(cell_contents, index_spec, active, username, created_at)) {
+        free_cell_contents(cell_contents);
+        return false;
+    }
+
+    return true;
+}
+
+static bool ordered_search_key_init(BTreeSearchKey *search_key, BTreeIndexSpec *index_spec,
+    uint32_t key_order) {
+    if (!search_key || !index_spec) {
+        return false;
+    }
+
+    Value **key_values = (Value **) calloc(index_spec->index_key->num_columns, sizeof(Value *));
+    if (!key_values) {
+        return false;
+    }
+
+    char username[64] = {0};
+    snprintf(username, sizeof(username), "user%08u", key_order);
+
+    bool active = false;
+    uint64_t created_at = 1700000000ULL + key_order;
+
+    if (!create_index_key_values(key_values, index_spec, active, username, created_at)) {
+        free(key_values);
+        return false;
+    }
+
+    bool result = search_key_init(search_key, index_spec, key_values, index_spec->index_key->num_columns);
+    value_free_array(key_values, index_spec->index_key->num_columns);
+
+    return result;
+}
+
+static bool search_key_from_user_id(BTreeSearchKey *search_key, BTreeTestContext *ctx, uint32_t user_id) {
+    if (!search_key || !ctx) {
+        return false;
+    }
 
     BTreeCellContents cell_contents = {0};
-    cell_contents.type = BTREE_LEAF_NODE;
-    cell_contents.num_keys = 3;
-    cell_contents.keys = (Value **) calloc(cell_contents.num_keys, sizeof(Value *));
-    if (!cell_contents.keys) {
+    if (!create_cell_contents(&cell_contents, ctx->index_spec, user_id)) {
         return false;
     }
 
-    cell_contents.BTreePayload.row = (Row *) calloc(1, sizeof(Row));
-    if (!cell_contents.BTreePayload.row) {
-        return false;
-    }
-    cell_contents.BTreePayload.row->is_deleted = false;
-    cell_contents.BTreePayload.row->n_columns = 3;
-    cell_contents.BTreePayload.row->values = (Value **) calloc(cell_contents.BTreePayload.row->n_columns, sizeof(Value *)); 
-    if (!cell_contents.BTreePayload.row->values) {
-        return false;
-    }
+    bool result = search_key_init(search_key, ctx->index_spec, cell_contents.keys, cell_contents.num_keys);
+    free_cell_contents(&cell_contents);
 
-    cell_contents.cell_size = index_spec->key_size + sizeof(uint8_t) + sizeof(uint32_t) +
-                cell_contents.BTreePayload.row->n_columns * get_data_type_size(UNSIGNED_INTEGER);
-
-    /* 3 cells created for each page. */
-    for (uint32_t k = 0; k < 3; k++) {
-        for (uint32_t j = 0; j < cell_contents.num_keys; j++) {
-            /* If it already exists, free it.
-                * Shouldn't exist the first time entering the loop. */
-            if (cell_contents.keys[j]) {
-                value_free(cell_contents.keys[j]);
-            }
-
-            if (cell_contents.BTreePayload.row->values[j]) {
-                value_free(cell_contents.BTreePayload.row->values[j]);
-            }
-
-            uint32_t key_val = page_index*15 + 10*j + 5*k;
-            cell_contents.keys[j] = value_create(UNSIGNED_INTEGER, &key_val);
-            cell_contents.BTreePayload.row->values[j] = value_copy(cell_contents.keys[j]);
-        }
-
-        btree_page.cell_count++;
-        btree_page.free_space_offset -= cell_contents.cell_size;
-
-        set_cell_pointer(page_data, k, make_cell_pointer(btree_page.free_space_offset, cell_contents.cell_size));
-        serialize_cell_contents(btree_page.data + btree_page.free_space_offset, &btree_page, &cell_contents);
-    }
-
-    value_free_array(cell_contents.keys, cell_contents.num_keys);
-    row_free(cell_contents.BTreePayload.row);
-    btree_page_sync(test_btree->btree->pager, &btree_page);
-
-    return true;
+    return result;
 }
 
-bool populate_internal_nodes(TestBTree *test_btree, uint8_t *page_data, uint32_t page_index, BTreeIndexSpec *index_spec) {
-    BTreePage btree_page = {0};
-    btree_page_attach(&btree_page, test_btree->btree->pager->pages[test_btree->page_nums[page_index]]);
-    btree_page_load(&btree_page);
+static bool insert_ordered_cell(BTreeTestContext *ctx, uint32_t user_id, uint32_t key_order,
+    BTreeInsertionResult *insertion_res) {
+    if (!ctx || !insertion_res) {
+        return false;
+    }
 
     BTreeCellContents cell_contents = {0};
-    cell_contents.type = BTREE_INTERNAL_NODE;
-    cell_contents.num_keys = 3;
-    
-    if (2*page_index + 1 >= test_btree->page_count || 2*page_index + 2 >= test_btree->page_count) {
-        return false;
-    }
-    cell_contents.BTreePayload.child_pointer = test_btree->page_nums[2*page_index + 1];
-    cell_contents.cell_size = cell_contents.num_keys*get_data_type_size(UNSIGNED_INTEGER) + sizeof(uint32_t);
-
-    btree_page.free_space_offset -= cell_contents.cell_size;
-    btree_page.cell_count++;
-    btree_page.type_specific_data.rightmost_child_pointer = test_btree->page_nums[2*page_index + 2];
-    BTreePage right_child = {0};
-    btree_page_attach(&right_child, test_btree->btree->pager->pages[test_btree->page_nums[2*page_index + 2]]);
-    btree_page_load(&right_child);
-
-    BTreeKeyView key_view = {0};
-    cell_contents.keys = (Value **) calloc(cell_contents.num_keys, sizeof(Value *));
-    if (!cell_contents.keys) {
+    if (!create_ordered_cell_contents(&cell_contents, ctx->index_spec, user_id, key_order)) {
         return false;
     }
 
-    get_key(&right_child, 0, &key_view, index_spec);
-    uint8_t *offset = (uint8_t *) key_view.key;
-    for (uint32_t i = 0; i < cell_contents.num_keys; i++) {
-        cell_contents.keys[i] = deserialize_value_data(UNSIGNED_INTEGER, false,(void *)offset);
-        offset += get_data_type_size(UNSIGNED_INTEGER);
+    BTreeStatus status = btree_insert(ctx->btree, &cell_contents, insertion_res, ctx->index_spec);
+    free_cell_contents(&cell_contents);
+
+    return status == BTREE_SUCCESS;
+}
+
+static bool insert_cell_into_page(BTreeTestContext *ctx, uint32_t page_num, uint32_t user_id) {
+    if (!ctx || page_num >= MAX_PAGES) {
+        return false;
     }
-    
-    set_cell_pointer(page_data, 0, make_cell_pointer(btree_page.free_space_offset, cell_contents.cell_size));
-    serialize_cell_contents(btree_page.data + btree_page.free_space_offset, &btree_page, &cell_contents);
 
-    value_free_array(cell_contents.keys, cell_contents.num_keys);
-    btree_page_sync(test_btree->btree->pager, &btree_page);
+    BTreeCellContents cell_to_be_inserted = {0};
+    if (!create_cell_contents(&cell_to_be_inserted, ctx->index_spec, user_id)) {
+        return false;
+    }
 
+    Page *page = pager_get_page(ctx->pager, page_num);
+    if (!page) {
+        free_cell_contents(&cell_to_be_inserted);
+        return false;
+    }
+
+    BTreePage btree_page = {0};
+    BTreeStatus status = btree_page_attach_load_validate(ctx->pager, &btree_page, page, ctx->index_spec);
+    if (status != BTREE_SUCCESS) {
+        free_cell_contents(&cell_to_be_inserted);
+        return false;
+    }
+
+    BTreeSearchResult search_result = {0};
+    search_result.result_index = btree_page.cell_count;
+
+    status = insert_cell(ctx->pager, &btree_page, &cell_to_be_inserted, search_result.result_index, ctx->index_spec);
+    if (status != BTREE_SUCCESS) {
+        free_cell_contents(&cell_to_be_inserted);
+        return false;
+    }
+
+    if (!btree_page_sync(ctx->pager, &btree_page)) {
+        free_cell_contents(&cell_to_be_inserted);
+        return false;
+    }
+
+    free_cell_contents(&cell_to_be_inserted);
     return true;
 }
 
-bool give_keys_and_connect(TestBTree *test_btree, Index *index, uint8_t levels) {
-    
-    BTreeIndexSpec index_spec = {0};
-    index_spec.key_size = 3*get_data_type_size(UNSIGNED_INTEGER);
-
-    for (int32_t i = test_btree->page_count-1; i >= 0; i--) {
-        uint8_t *page_data = test_btree->btree->pager->pages[test_btree->page_nums[i]]->page_data; 
-        if (get_node_type(page_data) == BTREE_LEAF_NODE) {
-            if (!populate_leaf_nodes(test_btree, page_data, i,  &index_spec)) {
-                return false;
-            }
-        } else {
-            if (!populate_internal_nodes(test_btree, page_data, i, &index_spec)) {
-                return false;
-            }
-        }
-    }
-    
-    if (test_btree->page_count != 1) {
-        connect_sibling_nodes(test_btree);
-    }
-
-    return true;
-}
-
-bool build_test_btree(TestBTree *test_btree, Index *index, uint8_t levels) {
-    if (!test_btree || !index || levels == 0) {
+static bool get_btree_height(BTreeTestContext *ctx, uint32_t *height) {
+    if (!ctx || !ctx->btree || !ctx->pager || !height) {
         return false;
     }
 
-    uint32_t page_count = (1 << levels) - 1;
+    *height = 0;
 
-    test_btree->btree->root_page_num = index->root_page_num;
-    test_btree->levels = levels;
-    test_btree->page_count = page_count;
-    test_btree->page_nums = calloc(page_count, sizeof(uint32_t));
-    if (!test_btree->page_nums) {
+    Page *page = pager_get_page(ctx->pager, ctx->btree->root_page_num);
+    if (!page) {
         return false;
     }
 
-    /* Allocate every page except the root (already exists). */
-    for (uint32_t i = 1; i < page_count; i++) {
-        if (!pager_allocate_page(test_btree->btree->pager,
-                                 &test_btree->page_nums[i])) {
-            return false;
-        }
-    }
-
-    /* Root page number already comes from the index. */
-    test_btree->page_nums[0] = index->root_page_num;
-
-    /* Initialize pages. */
-    for (uint32_t i = 0; i < page_count; i++) {
-
-        Page *page = pager_get_page(test_btree->btree->pager,
-                                    test_btree->page_nums[i]);
-        if (!page) {
-            return false;
-        }
-
-        if (!page_clear(test_btree->btree->pager, page)) {
-            return false;
-        }
-
+    while (true) {
         BTreePage btree_page = {0};
-        btree_page_attach(&btree_page, page);
-
-        /* Last level -> leaves. */
-        bool leaf = (i >= ((1u << (levels - 1)) - 1));
-
-        BTreeStatus status;
-        if (leaf) {
-            status = btree_page_init_empty_leaf(&btree_page);
-        } else {
-            status = btree_page_init_internal(&btree_page, UINT32_MAX);
-        }
-
+        BTreeStatus status = btree_page_attach_load_validate(ctx->pager, &btree_page, page, ctx->index_spec);
         if (status != BTREE_SUCCESS) {
             return false;
         }
 
-        /* Root metadata. */
-        if (i == 0) {
-            btree_page.is_root = 1;
-            btree_page.parent_pointer = UINT32_MAX;
-        } else {
-            btree_page.is_root = 0;
+        (*height)++;
 
-            uint32_t parent_index = (i - 1) / 2;
-            btree_page.parent_pointer = test_btree->page_nums[parent_index];
+        if (btree_page.type == BTREE_LEAF_NODE) {
+            return true;
         }
 
-        btree_page_sync(test_btree->btree->pager, &btree_page);
+        if (*height >= MAX_PAGES) {
+            return false;
+        }
+
+        page = pager_get_page(ctx->pager, btree_page.type_specific_data.rightmost_child_pointer);
+        if (!page) {
+            return false;
+        }
+    }
+}
+
+static bool create_empty_leaf_child(BTreeTestContext *ctx, uint32_t parent_page_num, uint32_t *page_num) {
+    if (!ctx || !page_num) {
+        return false;
     }
 
-    if (!give_keys_and_connect(test_btree, index, levels)) {
+    if (!pager_allocate_page(ctx->pager, page_num)) {
+        return false;
+    }
+
+    Page *page = pager_get_page(ctx->pager, *page_num);
+    if (!page) {
+        return false;
+    }
+
+    BTreePage leaf = {0};
+    btree_page_attach(&leaf, page);
+
+    BTreeStatus status = btree_page_init_empty_leaf(&leaf);
+    if (status != BTREE_SUCCESS) {
+        return false;
+    }
+
+    leaf.is_root = false;
+    leaf.parent_pointer = parent_page_num;
+
+    if (!btree_page_sync(ctx->pager, &leaf)) {
         return false;
     }
 
     return true;
 }
 
-void test_btree_free(TestBTree *test_btree, Index **index, Pager **pager) {
-    free(test_btree->page_nums);
-    test_btree->page_nums = NULL;
-
-    free(test_btree->btree);
-    test_btree->btree = NULL;
-
-    index_free(*index);
-    *index = NULL;
-
-    pager_close(*pager);
-    *pager = NULL;
-}
-
-void index_spec_free(BTreeIndexSpec *index_spec) {
-    if (!index_spec) {
-        return;
+static bool create_internal_cell_contents(BTreeCellContents *cell_contents, BTreeIndexSpec *index_spec,
+    uint32_t key_order, uint32_t child_page_num) {
+    if (!cell_contents || !index_spec
+        || child_page_num <= SYSTEM_CATALOG_PAGE_NUM
+        || child_page_num >= MAX_PAGES) {
+        return false;
     }
 
-    if (index_spec->column_types) {
-        free(index_spec->column_types);
-        index_spec->column_types = NULL;
+    cell_contents->type = BTREE_INTERNAL_NODE;
+    cell_contents->num_keys = index_spec->index_key->num_columns;
+    cell_contents->key_size = index_spec->key_size;
+    cell_contents->cell_size = cell_contents->key_size + sizeof(uint32_t);
+    cell_contents->BTreePayload.child_pointer = child_page_num;
+
+    cell_contents->keys = (Value **) calloc(cell_contents->num_keys, sizeof(Value *));
+    if (!cell_contents->keys) {
+        return false;
     }
 
-    if (index_spec->schema) {
-        free(index_spec->schema);
-        index_spec->schema = NULL;
-    }
-}
+    char username[64] = {0};
+    snprintf(username, sizeof(username), "user%08u", key_order);
 
-/* Initializes Pager, Index, TestBtree and creates a B+Tree.
- * B+Tree contains as many nodes as supported in level given.
- *
- * » All B+Tree Keys are Composite Keys containing 3 UNSIGNED_INTEGERs (columns).
- * » B+Tree Internal Nodes contain only one key each and rightmost child pointer
- * for traversing. (Keys usually promoted upwards but NOT REMOVED from original internal node).
- * » B+Tree Leaf Nodes contain 3 cell pointers and 3 cells containing THE SAME VALUES for
- * keys and row->values. */
-bool test_btree_full_init(TestBTree *test_btree, Pager **pager, Index **index, uint8_t levels, char *pathname) {
-    // only if it didn't already exist
-    if (!(*pager)) {
-        *pager = pager_open(pathname);
-        if (!(*pager)) {
-            return false;
-        }
-    }
-    
-    if (!(*index)) {
-        uint32_t amount_of_key_columns = 3;
-        uint32_t *key_columns = (uint32_t *) malloc(3*sizeof(uint32_t));
-        key_columns[0] = 0;
-        key_columns[1] = 1;
-        key_columns[2] = 2;
-        
-        *index = index_init(*pager, "TestIndex", SECONDARY_INDEX, key_columns, amount_of_key_columns);
-        if (!(*index)) {
-            return false;
-        }
-    }
-    
-    if (!(test_btree->btree)) {
-        test_btree->btree = (BTree *) calloc(1, sizeof(BTree));
-        test_btree->btree->pager = *pager;
-    }
-    
-    if (!build_test_btree(test_btree, *index, levels)) {
+    bool active = false;
+    uint64_t created_at = 1700000000ULL + key_order;
+
+    if (!create_index_key_values(cell_contents->keys, index_spec, active, username, created_at)) {
+        free(cell_contents->keys);
+        cell_contents->keys = NULL;
         return false;
     }
 
     return true;
 }
 
-bool verify_page_keys(Page *page, BTreeRangeResult *range_result, BTreeIndexSpec *index_spec, uint32_t *key_counter) {
-    if (!page || !range_result || !index_spec) {
+
+static bool initialize_test_internal_page(BTreeTestContext *ctx, uint32_t page_num,
+    uint32_t parent_page_num, bool is_root, uint32_t rightmost_child_page_num) {
+    if (!ctx || page_num >= MAX_PAGES
+        || rightmost_child_page_num <= SYSTEM_CATALOG_PAGE_NUM
+        || rightmost_child_page_num >= ctx->pager->num_pages) {
         return false;
     }
 
-    BTreePage btree_page = {0};
-    btree_page_attach(&btree_page, page);
-    btree_page_load(&btree_page);
+    Page *page = pager_get_page(ctx->pager, page_num);
+    if (!page) {
+        return false;
+    }
 
-    BTreeKeyView key_view = {0};
-    BTreeStatus status = BTREE_SUCCESS;
-    Value **page_keys = (Value **) calloc(index_spec->index_key->num_columns, sizeof(Value *));
-    if (!page_keys) {
+    if (!page_clear(ctx->pager, page)) {
+        return false;
+    }
+
+    BTreePage internal = {0};
+    btree_page_attach(&internal, page);
+
+    BTreeStatus status = btree_page_init_internal(&internal, rightmost_child_page_num);
+    if (status != BTREE_SUCCESS) {
+        return false;
+    }
+
+    internal.is_root = is_root;
+    internal.parent_pointer = is_root ? UINT32_MAX : parent_page_num;
+
+    if (!btree_page_sync(ctx->pager, &internal)) {
+        return false;
+    }
+
+    return true;
+}
+
+static bool append_test_internal_cell(BTreeTestContext *ctx, BTreePage *internal,
+    uint32_t key_order, uint32_t left_child_page_num, uint32_t right_child_page_num) {
+    if (!ctx || !internal || !internal->page || !internal->data
+        || internal->type != BTREE_INTERNAL_NODE
+        || left_child_page_num <= SYSTEM_CATALOG_PAGE_NUM
+        || right_child_page_num <= SYSTEM_CATALOG_PAGE_NUM
+        || left_child_page_num >= ctx->pager->num_pages
+        || right_child_page_num >= ctx->pager->num_pages) {
+        return false;
+    }
+
+    BTreeCellContents cell_contents = {0};
+    if (!create_internal_cell_contents(
+            &cell_contents,
+            ctx->index_spec,
+            key_order,
+            left_child_page_num)) {
+        return false;
+    }
+
+    internal->type_specific_data.rightmost_child_pointer = right_child_page_num;
+
+    BTreeSearchResult search_result = {0};
+    search_result.result_index = internal->cell_count;
+
+    BTreeStatus status = insert_cell(
+        ctx->pager,
+        internal,
+        &cell_contents,
+        search_result.result_index,
+        ctx->index_spec
+    );
+
+    free_cell_contents(&cell_contents);
+
+    if (status != BTREE_SUCCESS) {
+        return false;
+    }
+
+    if (!btree_page_sync(ctx->pager, internal)) {
+        return false;
+    }
+
+    return true;
+}
+
+static bool append_test_leaf_cell(BTreeTestContext *ctx, BTreePage *leaf,
+    uint32_t user_id, uint32_t key_order) {
+    if (!ctx || !leaf || !leaf->page || !leaf->data
+        || leaf->type != BTREE_LEAF_NODE) {
+        return false;
+    }
+
+    BTreeCellContents cell_contents = {0};
+    if (!create_ordered_cell_contents(&cell_contents, ctx->index_spec, user_id, key_order)) {
+        return false;
+    }
+
+    BTreeSearchResult search_result = {0};
+    search_result.result_index = leaf->cell_count;
+
+    BTreeStatus status = insert_cell(ctx->pager, leaf, &cell_contents, search_result.result_index, ctx->index_spec);
+    free_cell_contents(&cell_contents);
+
+    if (status != BTREE_SUCCESS) {
+        return false;
+    }
+
+    if (!btree_page_sync(ctx->pager, leaf)) {
+        return false;
+    }
+
+    return true;
+}
+
+static bool page_cell_matches_key_order(BTreePage *btree_page, BTreeIndexSpec *index_spec,
+    uint32_t cell_index, uint32_t key_order) {
+    if (!btree_page || !index_spec || cell_index >= btree_page->cell_count) {
+        return false;
+    }
+
+    BTreeCellContents cell_contents = {0};
+    BTreeStatus status = get_cell_contents(btree_page, cell_index, &cell_contents, index_spec);
+    if (status != BTREE_SUCCESS) {
+        return false;
+    }
+
+    Value **expected_keys = (Value **) calloc(index_spec->index_key->num_columns, sizeof(Value *));
+    if (!expected_keys) {
+        free_cell_contents(&cell_contents);
+        return false;
+    }
+
+    char username[64] = {0};
+    snprintf(username, sizeof(username), "user%08u", key_order);
+
+    bool active = false;
+    uint64_t created_at = 1700000000ULL + key_order;
+
+    if (!create_index_key_values(expected_keys, index_spec, active, username, created_at)) {
+        free(expected_keys);
+        free_cell_contents(&cell_contents);
         return false;
     }
 
     int result = 0;
-    for (uint32_t i = 0; i < btree_page.cell_count; i++) {
-        if (*key_counter == range_result->count) {
-            break;
-        }
+    status = btree_compare(cell_contents.keys, expected_keys, index_spec->index_key->num_columns, &result);
 
-        status = get_key(&btree_page, i, &key_view, index_spec);
-        if (status != BTREE_SUCCESS) {
-            value_free_array(page_keys, index_spec->index_key->num_columns);
-            return false;
-        }
+    value_free_array(expected_keys, index_spec->index_key->num_columns);
+    free_cell_contents(&cell_contents);
 
-        bool equal_key = true;
-        uint8_t *offset = (uint8_t *) key_view.key;
-        for (uint32_t j = 0; j < index_spec->index_key->num_columns; j++) {
-            page_keys[j] = value_create(index_spec->column_types[j], (void *) offset);
+    return status == BTREE_SUCCESS && result == 0;
+}
 
-            offset += get_data_type_size(index_spec->column_types[j]);
-
-            if (!value_compare(range_result->cells[*key_counter].keys[j], page_keys[j], &result)) {
-                value_free_array(page_keys, index_spec->index_key->num_columns);
-                return false;
-            }
-
-            if (result != 0) {
-                equal_key = false;
-                break;
-            }
-        }
-
-        if (equal_key) {
-            (*key_counter)++;
-        }
+static bool get_test_free_list_head(BTreeTestContext *ctx, uint32_t *free_list_head) {
+    if (!ctx || !free_list_head) {
+        return false;
     }
 
-    value_free_array(page_keys, index_spec->index_key->num_columns);
+    Page *zero = pager_get_page(ctx->pager, 0);
+    if (!zero) {
+        return false;
+    }
+
+    memcpy(free_list_head, zero->page_data + FREE_LIST_HEAD_OFFSET, sizeof(uint32_t));
     return true;
 }
 
-/* ---------- Unit Tests ---------- 
- *
- * (NOTE) Tests need to be ran with MAX_PAGES macro
- * equal to over 20 thousand, preferably 25000 pages.*/
-
-/* Initialization of BTreePage always requires more than just btree_page_init_empty_leaf.
- * btree_page_init_empty_leaf only initializes the header metadata. Anything about the page
- * stored in a btree_page requires further checking. */
-static int test_empty_leaf_init() {
-    BTreePage btree_page = {0};
-    Pager *pager; Page *page;
-    ASSERT(pager_open_and_create_new_page("build/database1.db", &pager, &page));
-    
-    btree_page_attach(&btree_page, page);
-    ASSERT(btree_page.page == page);
-    ASSERT(btree_page.data == page->page_data);
-
-    BTreeStatus status = btree_page_init_empty_leaf(&btree_page);
-    ASSERT(status == BTREE_SUCCESS);
-    ASSERT(btree_page.type == BTREE_LEAF_NODE);
-    ASSERT(btree_page.is_root == 1);
-    ASSERT(btree_page.parent_pointer == UINT32_MAX);
-    ASSERT(btree_page.cell_count == 0);
-    ASSERT(btree_page.free_space_offset == PAGE_SIZE);
-    ASSERT(btree_page.type_specific_data.siblings.previous_leaf_pointer == UINT32_MAX);
-    ASSERT(btree_page.type_specific_data.siblings.next_leaf_pointer == UINT32_MAX);
-
-    btree_page_sync(pager, &btree_page);
-    ASSERT(btree_page.page->is_dirty == true);
-
-    bool res = pager_close(pager);
-    ASSERT(res == true);
-    
-    return 0;
-}
-
-/* So does btree_page_init_internal, only initializes header metadata and rightmost pointer. */
-static int test_init_internal() {
-    BTreePage btree_page = {0};
-    Pager *pager; Page *page;
-    ASSERT(pager_open_and_create_new_page("build/database2.db", &pager, &page));
-
-    btree_page_attach(&btree_page, page);
-    ASSERT(btree_page.page == page);
-    ASSERT(btree_page.data == page->page_data);
-
-    BTreeStatus status = btree_page_init_internal(&btree_page, UINT32_MAX);
-    ASSERT(status == BTREE_SUCCESS);
-    ASSERT(btree_page.type == BTREE_INTERNAL_NODE);
-    ASSERT(btree_page.is_root == 1);
-    ASSERT(btree_page.parent_pointer == UINT32_MAX);
-    ASSERT(btree_page.cell_count == 0);
-    ASSERT(btree_page.free_space_offset == PAGE_SIZE);
-    ASSERT(btree_page.type_specific_data.rightmost_child_pointer == UINT32_MAX);
-
-    btree_page_sync(pager, &btree_page);
-    ASSERT(btree_page.page->is_dirty == true);
-
-    bool res = pager_close(pager);
-    ASSERT(res == true);
-
-    return 0;
-}
-
-/* Binary search (with BTREE_LOWER_BOUND) ran on an empty leaf node or 
- * a leaf node of a 2-level test B+Tree.
- *
- * Search for cases with result_index being at the beginning, in the middle,
- * at the end and an exact match of keys.  */
-static int test_binary_search() {
-    /* ---- SEARCH IN EMPTY ROOT ---- */
-    BTreePage btree_page = {0};
-    Pager *pager; Page *page;
-    // Already existing page empty root leaf node created in TEST[00]
-    ASSERT(pager_open_and_get_page_in_cache("build/database1.db", &pager, &page, 2));
-
-    // Don't actually need to initialize these for this test
-    BTreeSearchKey search_key = {0}; 
-    BTreeSearchResult search_result = {0};
-    BTreeIndexSpec index_spec = {0};
-
-    BTreeStatus status = btree_page_attach_load_validate(pager, &btree_page, page, &index_spec);
-    ASSERT(status == BTREE_SUCCESS);
-
-    status = btree_binary_search(&btree_page, &search_key, &search_result, BTREE_LOWER_BOUND);
-    ASSERT(status == BTREE_SUCCESS);
-    ASSERT(search_result.found == true);
-    ASSERT(search_result.exact_match == false);
-    ASSERT(search_result.page == btree_page.page);
-    ASSERT(search_result.result_index == 0);
-
-    if (!pager_close(pager)) {
-        return -1;
-    }
-    
-    /* ---- SEARCH IN LEAF NODE WITH CONTENTS ---- */
-    TestBTree test_btree = {0};
-    pager = NULL;
-    Index *index = NULL;
-    uint8_t levels = 2;
-    char *pathname = "build/database3.db";
-    ASSERT(test_btree_full_init(&test_btree, &pager, &index, levels, pathname));
-
-    /* ---- SEARCH BEFORE THE FIRST KEY: ---- */
-    ASSERT(index_spec_init(&index_spec, index));
-
-    Value **target_key_vals = (Value **) calloc(index_spec.index_key->num_columns, sizeof(Value *));
-    if (!target_key_vals) {
-        return -1;
+static bool build_two_level_test_tree(BTreeTestContext *ctx, uint32_t separator_key_order,
+    uint32_t *left_leaf_page_num, uint32_t *right_leaf_page_num) {
+    if (!ctx || !left_leaf_page_num || !right_leaf_page_num) {
+        return false;
     }
 
-    for (uint32_t i = 0; i < index_spec.index_key->num_columns; i++) {
-        index_spec.column_types[i] = UNSIGNED_INTEGER;
-        
-        uint32_t val = i * 9;
-        target_key_vals[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
-    }
-    ASSERT(search_key_init(&search_key, &index_spec, target_key_vals));
+    uint32_t root_page_num = ctx->btree->root_page_num;
 
-    search_result.page = pager->pages[test_btree.page_nums[1]]; // First leaf node 
-
-    btree_page_attach(&btree_page, pager->pages[test_btree.page_nums[1]]);
-    btree_page_load(&btree_page);
-
-    status = btree_binary_search(&btree_page, &search_key, &search_result, BTREE_LOWER_BOUND);
-    ASSERT(status == BTREE_SUCCESS);
-    ASSERT(search_result.found == true);
-    ASSERT(search_result.exact_match == false);
-    ASSERT(search_result.result_index == 0);
-
-    /* ---- SEARCH AFTER THE LAST KEY: ---- */
-    for (uint32_t i = 0; i < index_spec.index_key->num_columns; i++) {        
-        uint32_t val = i + 26;
-
-        if (target_key_vals[i]) {
-            value_free(target_key_vals[i]);
-        }
-        target_key_vals[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
-    }
-    ASSERT(search_key_init(&search_key, &index_spec, target_key_vals));
-
-    status = btree_binary_search(&btree_page, &search_key, &search_result, BTREE_LOWER_BOUND);
-    ASSERT(status == BTREE_SUCCESS);
-    ASSERT(search_result.found == true);
-    ASSERT(search_result.exact_match == false);
-    ASSERT(search_result.result_index == 3);
-
-    /* ---- SEARCH FOR AN EXACT MATCH: ---- */
-    for (uint32_t i = 0; i < index_spec.index_key->num_columns; i++) {        
-        uint32_t val = i*10 + 15;
-        
-        if (target_key_vals[i]) {
-            value_free(target_key_vals[i]);
-        }
-        target_key_vals[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
-    }
-    ASSERT(search_key_init(&search_key, &index_spec, target_key_vals));
-
-    status = btree_binary_search(&btree_page, &search_key, &search_result, BTREE_LOWER_BOUND);
-    ASSERT(status == BTREE_SUCCESS);
-    ASSERT(search_result.found == true);
-    ASSERT(search_result.exact_match == true);
-    ASSERT(search_result.result_index == 0);
-
-    /* ---- SEARCH BETWEEN KEYS: ---- */
-    for (uint32_t i = 0; i < index_spec.index_key->num_columns; i++) {        
-        uint32_t val = i*10 + 16;
-
-        if (target_key_vals[i]) {
-            value_free(target_key_vals[i]);
-        }
-        target_key_vals[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
-    }
-    ASSERT(search_key_init(&search_key, &index_spec, target_key_vals));
-
-    status = btree_binary_search(&btree_page, &search_key, &search_result, BTREE_LOWER_BOUND);
-    ASSERT(status == BTREE_SUCCESS);
-    ASSERT(search_result.found == true);
-    ASSERT(search_result.exact_match == false);
-    ASSERT(search_result.result_index == 1);
-
-    index_spec_free(&index_spec);
-    value_free_array(target_key_vals, index->key->num_columns);
-    test_btree_free(&test_btree, &index, &pager);
-    free(search_key.target_key);
-    return 0;
-}
-
-/* Test multi-level root-to-leaf traversal. */
-static int test_root_to_leaf() {
-    TestBTree test_btree = {0};
-    Pager *pager = NULL;
-    Index *index = NULL;
-    uint8_t levels = 1;
-    char *pathname = "build/database4_1.db";
-    ASSERT(test_btree_full_init(&test_btree, &pager, &index, levels, pathname));
-
-    BTreeIndexSpec index_spec = {0};
-    ASSERT(index_spec_init(&index_spec, index));
-
-    BTreeSearchKey search_key = {0};
-    Value **target_key_vals = (Value **) calloc(index_spec.index_key->num_columns, sizeof(Value *));
-    if (!target_key_vals) {
-        return -1;
-    };
-
-    BTreeSearchResult search_result = {0};
-
-    for (uint32_t i = 0; i < index->key->num_columns; i++) {
-        uint32_t val = i * 10;
-
-        target_key_vals[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
-    }
-    
-
-    /* ---- ROOT-TO-LEAF WITH ROOT ONLY: ---- */
-    for (uint32_t i = 0; i < index_spec.index_key->num_columns; i++) {
-        index_spec.column_types[i] = UNSIGNED_INTEGER;
-        
-        if (target_key_vals[i]) {
-            value_free(target_key_vals[i]);
-        }
-        uint32_t val = i * 9;
-        target_key_vals[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
-    }
-    ASSERT(search_key_init(&search_key, &index_spec, target_key_vals));
-
-    BTreeStatus status = btree_root_to_leaf(test_btree.btree, &search_key, &search_result, BTREE_UPPER_BOUND);
-    ASSERT(status == BTREE_SUCCESS);
-    ASSERT(search_result.found == true);
-    ASSERT(search_result.exact_match == false);
-    ASSERT(search_result.page == pager->pages[test_btree.page_nums[0]]);
-    ASSERT(search_result.result_index == 0);
-
-    /* ---- TWO-LEVEL TREE TRAVERSAL: ---- */
-    test_btree_free(&test_btree, &index, &pager);
-    pathname = "build/database4_2.db";
-    levels = 2;
-    ASSERT(test_btree_full_init(&test_btree, &pager, &index, levels, pathname));
-    index_spec.index_key = index->key;
-
-    status = btree_root_to_leaf(test_btree.btree, &search_key, &search_result, BTREE_UPPER_BOUND);
-    ASSERT(status == BTREE_SUCCESS);
-    ASSERT(search_result.found == true);
-    ASSERT(search_result.exact_match == false);
-    ASSERT(search_result.page == pager->pages[test_btree.page_nums[1]]);
-    ASSERT(search_result.result_index == 0);
-
-    /* ---- THREE LEVEL TREE & TRAVERSE THROUGH RIGHTMOST CHILD: ----*/
-    test_btree_free(&test_btree, &index, &pager);
-    pathname = "build/database4_3.db";
-    levels = 3;
-    ASSERT(test_btree_full_init(&test_btree, &pager, &index, levels, pathname));
-    index_spec.index_key = index->key;
-
-    for (uint32_t i = 0; i < index_spec.index_key->num_columns; i++) {        
-        uint32_t val = i*10 + 91;
-
-        if (target_key_vals[i]) {
-            value_free(target_key_vals[i]);
-        }
-        target_key_vals[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
-    }
-    ASSERT(search_key_init(&search_key, &index_spec, target_key_vals));
-
-    status = btree_root_to_leaf(test_btree.btree, &search_key, &search_result, BTREE_UPPER_BOUND);
-    ASSERT(status == BTREE_SUCCESS);
-    ASSERT(search_result.found == true);
-    ASSERT(search_result.exact_match == false);
-    ASSERT(search_result.page == pager->pages[test_btree.page_nums[6]]);
-    ASSERT(search_result.result_index == 1);
-
-    index_spec_free(&index_spec);
-    value_free_array(target_key_vals, index->key->num_columns);
-    test_btree_free(&test_btree, &index, &pager);
-    free(search_key.target_key);
-    return 0;
-}
-
-/* Test leaf node insertion. 
- * Cases:
- * • Insert key into empty page
- * • Insert a UNIQUE, NOT DUPLICATE key in the beginning
- * • Insert key in the middle
- * • Insert UNIQUE, DUPLICATE key & cell
- * • Insert accepted NON-UNIQUE, DUPLICATE key & cell
- * • Insert key at the end
- * • Insert until page gets full
- * • Insert UNIQUE, DUPLICATE key after the page gets full*/
-static int test_node_insert() {
-    Pager *pager = NULL;
-    Index *index = NULL;
-    Page *page = NULL;
-    ASSERT(pager_open_and_create_new_page("build/database5.db", &pager, &page));
-    
-    uint32_t amount_of_key_columns = 3;
-    uint32_t *key_columns = (uint32_t *) malloc(3*sizeof(uint32_t));
-    key_columns[0] = 0;
-    key_columns[1] = 1;
-    key_columns[2] = 2;
-    index = index_init(pager, "index", SECONDARY_INDEX, key_columns, amount_of_key_columns);
-
-    BTreePage btree_page = {0};
-    btree_page_attach(&btree_page, page);
-    btree_page_init_empty_leaf(&btree_page);
-    btree_page_sync(pager, &btree_page);
-
-    BTreeIndexSpec index_spec = {0};
-    ASSERT(index_spec_init(&index_spec, index));
-
-    BTreeCellContents cell_contents = {0};
-    ASSERT(cell_contents_init(&cell_contents));
-    
-    BTreeSearchKey search_key = {0};
-    Value **target_key_vals = (Value **) calloc(index_spec.index_key->num_columns, sizeof(Value *));
-    if (!target_key_vals) {
-        return -1;
+    if (!create_empty_leaf_child(ctx, root_page_num, left_leaf_page_num)) {
+        return false;
     }
 
-    BTreeSplitResult split_result = {0}; 
-    BTreeSearchResult search_result = {0};
-
-    for (uint32_t i = 0; i < cell_contents.num_keys; i++) {
-        uint32_t val = i * 10;
-        cell_contents.keys[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
-        target_key_vals[i] = cell_contents.keys[i];
-        cell_contents.BTreePayload.row->values[i] = value_copy(cell_contents.keys[i]);
-    }
-    ASSERT(search_key_init(&search_key, &index_spec, target_key_vals));
-
-    /* ---- INSERT INTO EMPTY: ---- */
-    uint16_t old_free_space_offset = btree_page.free_space_offset;
-    BTreeStatus status = btree_node_insert(pager, &btree_page, &cell_contents, &split_result, &index_spec);
-    ASSERT(status == BTREE_SUCCESS);
-
-    ASSERT(btree_page.cell_count == 1);
-    ASSERT(btree_page.free_space_offset == old_free_space_offset - cell_contents.cell_size);
-    ASSERT(split_result.split == false);
-
-    status = btree_binary_search(&btree_page, &search_key, &search_result, BTREE_LOWER_BOUND);
-    ASSERT(status == BTREE_SUCCESS);
-    ASSERT(search_result.found == true);
-    ASSERT(search_result.exact_match == true);
-    ASSERT(search_result.result_index == 0);
-
-    /* ---- INSERT UNIQUE (NOT DUPLICATE) IN BEGINNING: ---- */
-    for (uint32_t i = 0; i < cell_contents.num_keys; i++) {
-        uint32_t val = i * 8;
-
-        if (cell_contents.keys[i]) {
-            value_free(cell_contents.keys[i]);
-        }
-        
-        if (cell_contents.BTreePayload.row->values[i]) {
-            value_free(cell_contents.BTreePayload.row->values[i]);
-        }
-        cell_contents.keys[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
-        target_key_vals[i] = cell_contents.keys[i];
-        cell_contents.BTreePayload.row->values[i] = value_copy(cell_contents.keys[i]);
-    }
-    ASSERT(search_key_init(&search_key, &index_spec, target_key_vals));
-
-    old_free_space_offset = btree_page.free_space_offset;
-
-    index_spec.is_unique = true;
-    status = btree_node_insert(pager, &btree_page, &cell_contents, &split_result, &index_spec);
-    index_spec.is_unique = false;
-    ASSERT(status == BTREE_SUCCESS);
-    ASSERT(btree_page.cell_count == 2);
-    ASSERT(btree_page.free_space_offset == old_free_space_offset - cell_contents.cell_size);
-    ASSERT(split_result.split == false);
-
-    status = btree_binary_search(&btree_page, &search_key, &search_result, BTREE_LOWER_BOUND);
-    ASSERT(status == BTREE_SUCCESS);
-    ASSERT(search_result.found == true);
-    ASSERT(search_result.exact_match == true);
-    ASSERT(search_result.result_index == 0);
-
-    /* ---- INSERT INTO MIDDLE: ---- */
-    for (uint32_t i = 0; i < cell_contents.num_keys; i++) {
-        uint32_t val = i * 9;
-
-        if (cell_contents.keys[i]) {
-            value_free(cell_contents.keys[i]);
-        } 
-        if (cell_contents.BTreePayload.row->values[i]) {
-            value_free(cell_contents.BTreePayload.row->values[i]);
-        }
-        cell_contents.keys[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
-        cell_contents.BTreePayload.row->values[i] = value_copy(cell_contents.keys[i]);
-        target_key_vals[i] = cell_contents.keys[i];
-    }
-    ASSERT(search_key_init(&search_key, &index_spec, target_key_vals));
-
-    old_free_space_offset = btree_page.free_space_offset;
-
-    status = btree_node_insert(pager, &btree_page, &cell_contents, &split_result, &index_spec);
-    ASSERT(status == BTREE_SUCCESS);
-    ASSERT(btree_page.cell_count == 3);
-    ASSERT(btree_page.free_space_offset == old_free_space_offset - cell_contents.cell_size);
-    ASSERT(split_result.split == false);
-
-    status = btree_binary_search(&btree_page, &search_key, &search_result, BTREE_LOWER_BOUND);
-    ASSERT(status == BTREE_SUCCESS);
-    ASSERT(search_result.found == true);
-    ASSERT(search_result.exact_match == true);
-    ASSERT(search_result.result_index == 1);
-
-    /* ---- INSERT ALREADY INSERTED KEY FOR DUPLICATE CHECK: ---- */
-    index_spec.is_unique = true;
-    status = btree_node_insert(pager, &btree_page, &cell_contents, &split_result, &index_spec);
-    ASSERT(status == BTREE_DUPLICATE_KEY);
-    index_spec.is_unique = false;
-
-    /* ---- INSERT DUPLICATE KEY WITHOUT is_unique FLAG: ---- */
-    status = btree_node_insert(pager, &btree_page, &cell_contents, &split_result, &index_spec);
-    ASSERT(status == BTREE_SUCCESS);
-
-    /* ---- INSERT AT THE END: ---- */
-    for (uint32_t i = 0; i < cell_contents.num_keys; i++) {
-        uint32_t val = i * 15;
-        
-        if (cell_contents.keys[i]) {
-            value_free(cell_contents.keys[i]);
-        }
-        if (cell_contents.BTreePayload.row->values[i]) {
-            value_free(cell_contents.BTreePayload.row->values[i]);
-        }
-        cell_contents.keys[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
-        cell_contents.BTreePayload.row->values[i] = value_copy(cell_contents.keys[i]);
-        target_key_vals[i] = cell_contents.keys[i];
-    }
-    ASSERT(search_key_init(&search_key, &index_spec, target_key_vals));
-
-    old_free_space_offset = btree_page.free_space_offset;
-    status = btree_node_insert(pager, &btree_page, &cell_contents, &split_result, &index_spec);
-    ASSERT(status == BTREE_SUCCESS);
-    ASSERT(btree_page.cell_count == 5);
-    ASSERT(btree_page.free_space_offset == old_free_space_offset - cell_contents.cell_size);
-    ASSERT(split_result.split == false);
-
-    status = btree_binary_search(&btree_page, &search_key, &search_result, BTREE_LOWER_BOUND);
-    ASSERT(status == BTREE_SUCCESS);
-    ASSERT(search_result.found == true);
-    ASSERT(search_result.exact_match == true);
-    ASSERT(search_result.result_index == 4);
-
-    /* ---- INSERT UNTIL FULL: (upper limit was found to be 123) ---- */
-    for (uint32_t i = 0; i < 123; i++) {
-        for (uint32_t j = 0; j < cell_contents.num_keys; j++) {
-            uint32_t val = j * 20 + i * 5;
-   
-            if (cell_contents.keys[j]) {
-                value_free(cell_contents.keys[j]);
-            } 
-            if (cell_contents.BTreePayload.row->values[j]) {
-                value_free(cell_contents.BTreePayload.row->values[j]);
-            }
-            cell_contents.keys[j] = value_create(UNSIGNED_INTEGER, (void *) &val);
-            cell_contents.BTreePayload.row->values[j] = value_copy(cell_contents.keys[j]);
-
-        }
-
-        status = btree_node_insert(pager, &btree_page, &cell_contents, &split_result, &index_spec);
-    }
-    ASSERT(status == BTREE_NEEDS_SPLIT);
-    ASSERT(split_result.split == true);
-
-
-    /* ---- DUPLICATE KEY INSERTION AFTER FULL LEAF NODE ---- */
-    index_spec.is_unique = true;
-    for (uint32_t i = 0; i < cell_contents.num_keys; i++) {
-        uint32_t val = i * 10;
-
-        if (cell_contents.keys[i]) {
-            value_free(cell_contents.keys[i]);
-        } 
-        if (cell_contents.BTreePayload.row->values[i]) {
-            value_free(cell_contents.BTreePayload.row->values[i]);
-        }
-        cell_contents.keys[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
-        target_key_vals[i] = cell_contents.keys[i];
-        cell_contents.BTreePayload.row->values[i] = value_copy(cell_contents.keys[i]);
-
-    }
-    ASSERT(search_key_init(&search_key, &index_spec, target_key_vals));
-    status = btree_node_insert(pager, &btree_page, &cell_contents, &split_result, &index_spec);
-    ASSERT(status == BTREE_DUPLICATE_KEY);
-    
-    index_spec_free(&index_spec);
-    value_free_array(cell_contents.keys, index->key->num_columns);
-    value_free_array(cell_contents.BTreePayload.row->values, index->key->num_columns);
-    free(target_key_vals);
-    index_free(index);
-    pager_close(pager);
-    free(search_key.target_key);
-    return 0;
-}
-
-/* Test if leaf node splitted correctly. */
-static int test_leaf_node_split() {
-    Pager *pager = NULL;
-    Index *index = NULL;
-    Page *page = NULL;
-    ASSERT(pager_open_and_get_page_in_cache("build/database5.db", &pager, &page, 2));
-
-    uint32_t amount_of_key_columns = 3;
-    uint32_t *key_columns = (uint32_t *) malloc(3*sizeof(uint32_t));
-    key_columns[0] = 0;
-    key_columns[1] = 1;
-    key_columns[2] = 2;
-    index = index_init(pager, "index", SECONDARY_INDEX, key_columns, amount_of_key_columns);
-
-    BTreePage btree_page = {0};
-    btree_page_attach(&btree_page, page);
-    btree_page_load(&btree_page);
-
-    BTreeIndexSpec index_spec = {0};
-    ASSERT(index_spec_init(&index_spec, index));
-
-    BTreeCellContents cell_contents = {0};
-    ASSERT(cell_contents_init(&cell_contents));    
-
-    Value **target_key_vals = (Value **) calloc(index_spec.index_key->num_columns, sizeof(Value *));
-    if (!target_key_vals) {
-        return -1;
-    }
-    BTreeSearchKey search_key = {0};
-
-    /* Since we are opening a database with one full page. */
-    BTreeSplitResult split_result = {0};
-    split_result.split = true;
-
-    for (uint32_t i = 0; i < cell_contents.num_keys; i++) {
-        uint32_t val = i * 10;
-
-        cell_contents.keys[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
-        target_key_vals[i] = cell_contents.keys[i];
-        cell_contents.BTreePayload.row->values[i] = value_copy(cell_contents.keys[i]);
-    }
-    ASSERT(search_key_init(&search_key, &index_spec, target_key_vals));
-
-    /* Check metadata. */
-    uint16_t cell_count = btree_page.cell_count;
-    BTreeStatus status = btree_leaf_node_split(pager, &btree_page, &index_spec, &split_result);
-    ASSERT(status == BTREE_SUCCESS);
-
-    BTreePage right_page = {0};
-    status = btree_page_attach_load_validate(pager, &right_page, pager->pages[5], &index_spec);
-    ASSERT(status == BTREE_SUCCESS);
-
-    ASSERT(split_result.right_page == pager->pages[5]->page_num);
-    ASSERT(btree_page.cell_count == (cell_count / 2));
-    ASSERT(right_page.cell_count ==  cell_count - (cell_count / 2));
-    ASSERT(btree_page.free_space_offset == PAGE_SIZE - (btree_page.cell_count * 29));
-    ASSERT(right_page.free_space_offset == PAGE_SIZE - (right_page.cell_count * 29));
-    ASSERT(btree_page.parent_pointer == right_page.parent_pointer);    
-    ASSERT(btree_page.type_specific_data.siblings.next_leaf_pointer == 5);
-    ASSERT(btree_page.type_specific_data.siblings.previous_leaf_pointer == UINT32_MAX);
-    ASSERT(right_page.type_specific_data.siblings.next_leaf_pointer == UINT32_MAX);
-    ASSERT(right_page.type_specific_data.siblings.previous_leaf_pointer == 2);
-
-    BTreeKeyView key_view = {0};
-    status = get_key(&right_page, 0, &key_view, &index_spec);
-    ASSERT(status == BTREE_SUCCESS);
-    BTreeCellView cell_view = {0};
-
-    /* Check if correct key was moved as separator key to the node above. */
-    Value **separator_key = (Value **) calloc(index_spec.index_key->num_columns, sizeof(Value *));
-    ASSERT(separator_key);
-    Value *split_result_separator_key = NULL;   
-    uint8_t *separator_offset = split_result.separator_key; 
-    for (uint32_t i = 0; i < index_spec.index_key->num_columns; i++) {
-        if (separator_key[i]) {
-            value_free(separator_key[i]);
-        }
-        separator_key[i] = value_create(UNSIGNED_INTEGER, key_view.key);
-        key_view.key += get_data_type_size(UNSIGNED_INTEGER);
-
-        if (split_result_separator_key) {
-            value_free(split_result_separator_key);
-        }
-        split_result_separator_key = value_create(UNSIGNED_INTEGER, separator_offset);
-        int result = 0;
-        value_compare(split_result_separator_key, separator_key[i], &result);
-        ASSERT(result == 0);
-
-        separator_offset += get_data_type_size(UNSIGNED_INTEGER);
-    }
-    value_free(split_result_separator_key);
-    ASSERT(split_result.separator_size == key_view.key_size);
-    ASSERT(split_result.right_page == right_page.page->page_num);
-    
-    /* Check if original page's keys are all smaller than the first key of the right child. */
-    Value **original_page_keys = (Value **) calloc(index_spec.index_key->num_columns, sizeof(Value *));
-    ASSERT(original_page_keys);
-    for (uint32_t i = 0; i < btree_page.cell_count; i++) {
-        status = get_key(&btree_page, i, &key_view, &index_spec);
-        status = get_cell(&btree_page, i, &cell_view, &index_spec);
-        ASSERT(status == BTREE_SUCCESS);
-        
-        for (uint32_t j = 0; j < index_spec.index_key->num_columns; j++) {
-            if (original_page_keys[j]) {
-                value_free(original_page_keys[j]);
-            }
-            original_page_keys[j] = value_create(UNSIGNED_INTEGER, key_view.key);
-            key_view.key += get_data_type_size(UNSIGNED_INTEGER);
-
-            int result = 0;
-            value_compare(original_page_keys[j], separator_key[j], &result);
-            ASSERT(result == -1);
-        }
+    if (!create_empty_leaf_child(ctx, root_page_num, right_leaf_page_num)) {
+        return false;
     }
 
-    index_spec_free(&index_spec);
-    split_result_reset(&split_result);
-    value_free_array(cell_contents.keys, index->key->num_columns);
-    value_free_array(cell_contents.BTreePayload.row->values, index->key->num_columns);
-    value_free_array(original_page_keys, index->key->num_columns);
-    value_free_array(separator_key, index->key->num_columns);
-    free(target_key_vals);
-    index_free(index);
-    pager_close(pager);
-    free(search_key.target_key);
-    return 0;
-}
+    if (!initialize_test_internal_page(
+            ctx,
+            root_page_num,
+            UINT32_MAX,
+            true,
+            *right_leaf_page_num)) {
+        return false;
+    }
 
-/* Test internal node splitting. */
-static int test_internal_node_split() {
-    TestBTree test_btree = {0};
-    Pager *pager = NULL;
-    Index *index = NULL;
-    uint8_t levels = 2;
-    char *pathname = "build/database12.db";
+    Page *root_page = pager_get_page(ctx->pager, root_page_num);
+    if (!root_page) {
+        return false;
+    }
 
-    ASSERT(test_btree_full_init(
-        &test_btree,
-        &pager,
-        &index,
-        levels,
-        pathname
-    ));
-
-    BTreeIndexSpec index_spec = {0};
-    ASSERT(index_spec_init(&index_spec, index));
-
-    BTreeCellContents cell_contents = {0};
-    ASSERT(cell_contents_init(&cell_contents));
-
-    BTreeSplitResult split_result = {0};
-
-    BTreePage leaf_page = {0};
-
-    /* Start from initial rightmost leaf. */
+    BTreePage root = {0};
     BTreeStatus status = btree_page_attach_load_validate(
-        pager,
-        &leaf_page,
-        pager->pages[test_btree.page_nums[2]],
-        &index_spec
+        ctx->pager,
+        &root,
+        root_page,
+        ctx->index_spec
     );
-    ASSERT(status == BTREE_SUCCESS);
-    ASSERT(leaf_page.type == BTREE_LEAF_NODE);
+    if (status != BTREE_SUCCESS) {
+        return false;
+    }
 
-    uint32_t old_root_page_num =
-        test_btree.btree->root_page_num;
+    if (!append_test_internal_cell(
+            ctx,
+            &root,
+            separator_key_order,
+            *left_leaf_page_num,
+            *right_leaf_page_num)) {
+        return false;
+    }
 
-    uint16_t full_internal_cell_count = 0;
-    bool internal_split = false;
+    return true;
+}
 
-    /*
-     * Repeatedly fill the rightmost leaf.
-     *
-     * Each leaf split promotes one separator into the root.
-     * Eventually the root internal node becomes full and splits.
-     */
-    for (uint32_t k = 0; k < 500; k++) {
+static bool expand_test_tree_to_three_levels(BTreeTestContext *ctx,
+    uint32_t left_internal_page_num, uint32_t right_internal_page_num,
+    uint32_t left_separator_key_order, uint32_t right_separator_key_order,
+    uint32_t *rightmost_leaf_page_num) {
+    if (!ctx || !rightmost_leaf_page_num) {
+        return false;
+    }
 
-        status = BTREE_SUCCESS;
+    uint32_t left_left_leaf = 0;
+    uint32_t left_right_leaf = 0;
+    uint32_t right_left_leaf = 0;
+    uint32_t right_right_leaf = 0;
 
-        /* Fill current rightmost leaf. */
-        for (uint32_t i = 0; i < 121; i++) {
+    if (!create_empty_leaf_child(ctx, left_internal_page_num, &left_left_leaf)
+        || !create_empty_leaf_child(ctx, left_internal_page_num, &left_right_leaf)
+        || !create_empty_leaf_child(ctx, right_internal_page_num, &right_left_leaf)
+        || !create_empty_leaf_child(ctx, right_internal_page_num, &right_right_leaf)) {
+        return false;
+    }
 
-            for (uint32_t j = 0;
-                 j < cell_contents.num_keys;
-                 j++) {
+    if (!initialize_test_internal_page(
+            ctx,
+            left_internal_page_num,
+            ctx->btree->root_page_num,
+            false,
+            left_right_leaf)) {
+        return false;
+    }
 
-                if (cell_contents.keys[j]) {
-                    value_free(cell_contents.keys[j]);
-                }
+    if (!initialize_test_internal_page(
+            ctx,
+            right_internal_page_num,
+            ctx->btree->root_page_num,
+            false,
+            right_right_leaf)) {
+        return false;
+    }
 
-                if (cell_contents.BTreePayload.row->values[j]) {
-                    value_free(
-                        cell_contents.BTreePayload.row->values[j]
-                    );
-                }
+    Page *left_page = pager_get_page(ctx->pager, left_internal_page_num);
+    Page *right_page = pager_get_page(ctx->pager, right_internal_page_num);
+    if (!left_page || !right_page) {
+        return false;
+    }
 
-                /*
-                 * Always increasing values so insertion remains
-                 * on the rightmost path of the tree.
-                 */
-                uint32_t val =
-                    100000 +
-                    k * 10000 +
-                    i * 10 +
-                    j;
+    BTreePage left_internal = {0};
+    BTreePage right_internal = {0};
 
-                cell_contents.keys[j] =
-                    value_create(
-                        UNSIGNED_INTEGER,
-                        (void *) &val
-                    );
+    BTreeStatus status = btree_page_attach_load_validate(
+        ctx->pager,
+        &left_internal,
+        left_page,
+        ctx->index_spec
+    );
+    if (status != BTREE_SUCCESS) {
+        return false;
+    }
 
-                if (!cell_contents.keys[j]) {
-                    return -1;
-                }
+    status = btree_page_attach_load_validate(
+        ctx->pager,
+        &right_internal,
+        right_page,
+        ctx->index_spec
+    );
+    if (status != BTREE_SUCCESS) {
+        return false;
+    }
 
-                cell_contents.BTreePayload.row->values[j] =
-                    value_copy(cell_contents.keys[j]);
+    if (!append_test_internal_cell(
+            ctx,
+            &left_internal,
+            left_separator_key_order,
+            left_left_leaf,
+            left_right_leaf)) {
+        return false;
+    }
 
-                if (!cell_contents.BTreePayload.row->values[j]) {
-                    return -1;
-                }
-            }
+    if (!append_test_internal_cell(
+            ctx,
+            &right_internal,
+            right_separator_key_order,
+            right_left_leaf,
+            right_right_leaf)) {
+        return false;
+    }
 
-            status = btree_node_insert(
-                pager,
-                &leaf_page,
-                &cell_contents,
-                &split_result,
-                &index_spec
-            );
-        }
+    *rightmost_leaf_page_num = right_right_leaf;
+    return true;
+}
 
-        ASSERT(status == BTREE_NEEDS_SPLIT);
-        ASSERT(split_result.split == true);
+static bool build_full_internal_root(BTreeTestContext *ctx,
+    uint32_t *rightmost_leaf_page_num, uint32_t *next_separator_key_order) {
+    if (!ctx || !rightmost_leaf_page_num || !next_separator_key_order) {
+        return false;
+    }
 
-        /*
-         * Keep root cell count before propagation.
-         * If root changes below, this was the full internal
-         * node that was split.
-         */
-        Page *root_page = pager_get_page(
-            pager,
-            test_btree.btree->root_page_num
-        );
-        if (!root_page) {
-            return -1;
-        }
+    uint32_t root_page_num = ctx->btree->root_page_num;
+    uint32_t first_leaf_page_num = 0;
 
-        BTreePage root_before = {0};
+    if (!create_empty_leaf_child(ctx, root_page_num, &first_leaf_page_num)) {
+        return false;
+    }
 
-        status = btree_page_attach_load_validate(
-            pager,
-            &root_before,
-            root_page,
-            &index_spec
-        );
-        ASSERT(status == BTREE_SUCCESS);
-        ASSERT(root_before.type == BTREE_INTERNAL_NODE);
+    if (!initialize_test_internal_page(
+            ctx,
+            root_page_num,
+            UINT32_MAX,
+            true,
+            first_leaf_page_num)) {
+        return false;
+    }
 
-        uint32_t root_before_split =
-            test_btree.btree->root_page_num;
+    Page *root_page = pager_get_page(ctx->pager, root_page_num);
+    if (!root_page) {
+        return false;
+    }
 
-        uint16_t root_cell_count_before =
-            root_before.cell_count;
+    BTreePage root = {0};
+    BTreeStatus status = btree_page_attach_load_validate(
+        ctx->pager,
+        &root,
+        root_page,
+        ctx->index_spec
+    );
+    if (status != BTREE_SUCCESS) {
+        return false;
+    }
 
-        BTreeInsertionResult insertion_res = {0};
-        insertion_result_reset(&insertion_res);
-        /* Propagate leaf split into parent. */
-        status = btree_split_propagation(
-            test_btree.btree,
-            &leaf_page,
-            &cell_contents,
-            &split_result,
-            &index_spec,
-            &insertion_res
-        );
-        ASSERT(status == BTREE_SUCCESS);
+    uint16_t internal_cell_size = ctx->index_spec->key_size + sizeof(uint32_t);
+    uint32_t key_order = 0;
 
-        /*
-         * Root page number changed =>
-         *
-         * old internal root split and a new root was created.
-         */
-        if (test_btree.btree->root_page_num !=
-            root_before_split) {
+    while (true) {
+        status = btree_page_has_enough_space(&root, internal_cell_size);
 
-            full_internal_cell_count =
-                root_cell_count_before;
-
-            internal_split = true;
+        if (status == BTREE_NEEDS_SPLIT) {
             break;
         }
 
-        /*
-         * Root hasn't split yet.
-         * Follow its rightmost pointer to continue filling
-         * the newest rightmost leaf.
-         */
-        root_page = pager_get_page(
-            pager,
-            test_btree.btree->root_page_num
-        );
-        if (!root_page) {
-            return -1;
+        if (status != BTREE_SUCCESS) {
+            return false;
         }
 
-        BTreePage current_root = {0};
+        uint32_t old_rightmost_page_num =
+            root.type_specific_data.rightmost_child_pointer;
 
-        status = btree_page_attach_load_validate(
-            pager,
-            &current_root,
-            root_page,
-            &index_spec
-        );
-        ASSERT(status == BTREE_SUCCESS);
-
-        ASSERT(current_root.type == BTREE_INTERNAL_NODE);
-        ASSERT(current_root.is_root == true);
-
-        Page *next_leaf_page = pager_get_page(
-            pager,
-            current_root
-                .type_specific_data
-                .rightmost_child_pointer
-        );
-        if (!next_leaf_page) {
-            return -1;
+        uint32_t new_rightmost_page_num = 0;
+        if (!create_empty_leaf_child(
+                ctx,
+                root_page_num,
+                &new_rightmost_page_num)) {
+            return false;
         }
 
-        status = btree_page_attach_load_validate(
-            pager,
-            &leaf_page,
-            next_leaf_page,
-            &index_spec
-        );
-        ASSERT(status == BTREE_SUCCESS);
-        ASSERT(leaf_page.type == BTREE_LEAF_NODE);
+        if (!append_test_internal_cell(
+                ctx,
+                &root,
+                key_order,
+                old_rightmost_page_num,
+                new_rightmost_page_num)) {
+            return false;
+        }
+
+        key_order++;
     }
 
-    /* Internal node must actually have split. */
-    ASSERT(internal_split == true);
+    if (root.cell_count == 0) {
+        return false;
+    }
 
-    /*
-     * With the current internal cell layout the root should
-     * have reached its real capacity before splitting.
-     */
-    ASSERT(full_internal_cell_count > 0);
+    *rightmost_leaf_page_num =
+        root.type_specific_data.rightmost_child_pointer;
 
-    /* ---------------------------------------------------------
-     * VERIFY NEW ROOT
-     * --------------------------------------------------------- */
+    *next_separator_key_order = key_order;
+    return true;
+}
 
-    Page *new_root_page = pager_get_page(
-        pager,
-        test_btree.btree->root_page_num
+static bool verify_ordered_entries(BTreeSearchEntries *entries, BTreeIndexSpec *index_spec,
+    uint32_t first_key_order, uint32_t expected_count) {
+    if (!entries || !index_spec || entries->count != expected_count) {
+        return false;
+    }
+
+    for (uint32_t i = 0; i < entries->count; i++) {
+        Value **expected_keys = (Value **) calloc(index_spec->index_key->num_columns, sizeof(Value *));
+        if (!expected_keys) {
+            return false;
+        }
+
+        char username[64] = {0};
+        snprintf(username, sizeof(username), "user%08u", first_key_order + i);
+
+        bool active = false;
+        uint64_t created_at = 1700000000ULL + first_key_order + i;
+
+        if (!create_index_key_values(expected_keys, index_spec, active, username, created_at)) {
+            free(expected_keys);
+            return false;
+        }
+
+        int result = 0;
+        BTreeStatus status = btree_compare(
+            entries->entries[i].cell.keys,
+            expected_keys,
+            index_spec->index_key->num_columns,
+            &result
+        );
+
+        value_free_array(expected_keys, index_spec->index_key->num_columns);
+
+        if (status != BTREE_SUCCESS || result != 0) {
+            return false;
+        }
+
+        if (i > 0) {
+            result = 0;
+            status = btree_compare(
+                entries->entries[i-1].cell.keys,
+                entries->entries[i].cell.keys,
+                index_spec->index_key->num_columns,
+                &result
+            );
+
+            if (status != BTREE_SUCCESS || result != -1) {
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+static int test_empty_leaf_init() {
+    BTreeTestContext ctx = {0};
+    ASSERT(btree_test_context_init(&ctx, "build/database1.db"));
+
+    BTreePage leaf = {0};
+    Page *root_leaf_page = pager_get_page(ctx.btree->pager, ctx.btree->root_page_num);
+    if (!root_leaf_page) { return -1; }
+
+    BTreeStatus status = btree_page_attach_load_validate(ctx.pager, &leaf, root_leaf_page, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+
+    ASSERT(leaf.type == BTREE_LEAF_NODE);
+    ASSERT(leaf.is_root == true);
+    ASSERT(leaf.parent_pointer == UINT32_MAX);
+    ASSERT(leaf.cell_count == 0);
+    ASSERT(leaf.free_space_offset == PAGE_SIZE);
+    ASSERT(leaf.type_specific_data.siblings.previous_leaf_pointer == UINT32_MAX);
+    ASSERT(leaf.type_specific_data.siblings.next_leaf_pointer == UINT32_MAX);
+
+    if (!btree_page_sync(ctx.pager, &leaf)) { return -1; }
+
+    btree_test_context_free(&ctx);
+    return 0;
+}
+
+static int test_empty_internal_init() {
+    Pager *pager = pager_open("build/database2.db");
+    if (!pager) { return -1; }
+
+    uint32_t page_num = 0;
+    if (!pager_allocate_page(pager, &page_num)) { return -1; }
+
+    Page *page = pager_get_page(pager, page_num);
+    if (!page) { return -1; }
+
+    BTreePage internal = {0};
+
+    btree_page_attach(&internal, page);
+    BTreeStatus status = btree_page_init_internal(&internal, UINT32_MAX);
+    ASSERT(status == BTREE_SUCCESS);
+
+    ASSERT(internal.type == BTREE_INTERNAL_NODE);
+    ASSERT(internal.is_root == 1);
+    ASSERT(internal.parent_pointer == UINT32_MAX);
+    ASSERT(internal.cell_count == 0);
+    ASSERT(internal.free_space_offset == PAGE_SIZE);
+    ASSERT(internal.type_specific_data.rightmost_child_pointer == UINT32_MAX);
+
+    if (!btree_page_sync(pager, &internal)) { return -1; }
+    if (!pager_close(pager)) { return -1; }
+
+    return 0;
+}
+
+static int test_btree_binary_search() {
+    BTreeTestContext ctx = {0};
+    ASSERT(btree_test_context_init(&ctx, "build/database3.db"));
+
+    Page *root_leaf_page = pager_get_page(ctx.btree->pager, ctx.btree->root_page_num);
+    if (!root_leaf_page) { return -1; }
+
+    BTreePage leaf = {0};
+    BTreeStatus status = btree_page_attach_load_validate(ctx.pager, &leaf, root_leaf_page, ctx.index_spec);
+    if (status != BTREE_SUCCESS) { return -1; }
+
+    BTreeSearchKey search_key = {0};
+    BTreeSearchResult search_result = {0};
+
+    /* --- EMPTY LEAF ROOT --- */
+    ASSERT(search_key_from_user_id(&search_key, &ctx, 0));
+
+    status = btree_binary_search(&leaf, &search_key, &search_result, BTREE_LOWER_BOUND);
+    ASSERT(status == BTREE_SUCCESS);
+
+    ASSERT(search_result.found == true);
+    ASSERT(search_result.exact_match == false);
+    ASSERT(search_result.result_index == 0);
+    ASSERT(search_result.page == root_leaf_page);
+
+    /* --- INSERT SORTED CELLS DIRECTLY ONTO LEAF --- */
+    uint32_t user_ids[] = {2, 4, 1};
+    for (uint32_t i = 0; i < 3; i++) {
+        ASSERT(insert_cell_into_page(&ctx, ctx.btree->root_page_num, user_ids[i]));
+    }
+
+    btree_page_load(&leaf);
+    ASSERT(leaf.cell_count == 3);
+
+    /* --- SEARCH BEFORE FIRST KEY --- */
+    ASSERT(search_key_from_user_id(&search_key, &ctx, 0));
+
+    status = btree_binary_search(&leaf, &search_key, &search_result, BTREE_LOWER_BOUND);
+    ASSERT(status == BTREE_SUCCESS);
+
+    ASSERT(search_result.found == true);
+    ASSERT(search_result.exact_match == false);
+    ASSERT(search_result.result_index == 0);
+    ASSERT(search_result.page == root_leaf_page);
+
+    /* --- SEARCH FIRST EXACT KEY --- */
+    ASSERT(search_key_from_user_id(&search_key, &ctx, 2));
+
+    status = btree_binary_search(&leaf, &search_key, &search_result, BTREE_LOWER_BOUND);
+    ASSERT(status == BTREE_SUCCESS);
+
+    ASSERT(search_result.found == true);
+    ASSERT(search_result.exact_match == true);
+    ASSERT(search_result.result_index == 0);
+    ASSERT(search_result.page == root_leaf_page);
+
+    /* --- SEARCH BETWEEN FIRST AND SECOND KEY --- */
+    ASSERT(search_key_from_user_id(&search_key, &ctx, 8));
+
+    status = btree_binary_search(&leaf, &search_key, &search_result, BTREE_LOWER_BOUND);
+    ASSERT(status == BTREE_SUCCESS);
+
+    ASSERT(search_result.found == true);
+    ASSERT(search_result.exact_match == false);
+    ASSERT(search_result.result_index == 1);
+    ASSERT(search_result.page == root_leaf_page);
+
+    /* --- SEARCH MIDDLE EXACT KEY --- */
+    ASSERT(search_key_from_user_id(&search_key, &ctx, 4));
+
+    status = btree_binary_search(&leaf, &search_key, &search_result, BTREE_LOWER_BOUND);
+    ASSERT(status == BTREE_SUCCESS);
+
+    ASSERT(search_result.found == true);
+    ASSERT(search_result.exact_match == true);
+    ASSERT(search_result.result_index == 1);
+    ASSERT(search_result.page == root_leaf_page);
+
+    /* --- SEARCH LAST EXACT KEY --- */
+    ASSERT(search_key_from_user_id(&search_key, &ctx, 1));
+
+    status = btree_binary_search(&leaf, &search_key, &search_result, BTREE_LOWER_BOUND);
+    ASSERT(status == BTREE_SUCCESS);
+
+    ASSERT(search_result.found == true);
+    ASSERT(search_result.exact_match == true);
+    ASSERT(search_result.result_index == 2);
+    ASSERT(search_result.page == root_leaf_page);
+
+    /* --- SEARCH AFTER LAST KEY --- */
+    ASSERT(search_key_from_user_id(&search_key, &ctx, 3));
+
+    status = btree_binary_search(&leaf, &search_key, &search_result, BTREE_LOWER_BOUND);
+    ASSERT(status == BTREE_SUCCESS);
+
+    ASSERT(search_result.found == true);
+    ASSERT(search_result.exact_match == false);
+    ASSERT(search_result.result_index == 3);
+    ASSERT(search_result.page == root_leaf_page);
+
+    free(search_key.target_key);
+    search_key.target_key = NULL;
+
+    btree_test_context_free(&ctx);
+    return 0;
+}
+
+static int test_root_to_leaf() {
+    BTreeTestContext ctx = {0};
+    ASSERT(btree_test_context_init(&ctx, "build/database4.db"));
+
+    BTreeSearchKey search_key = {0};
+    BTreeSearchResult search_result = {0};
+
+    /* --- ROOT-ONLY TREE --- */
+    ASSERT(ordered_search_key_init(&search_key, ctx.index_spec, 0));
+
+    BTreeStatus status = btree_root_to_leaf(
+        ctx.btree,
+        &search_key,
+        &search_result,
+        BTREE_UPPER_BOUND
     );
-    if (!new_root_page) {
-        return -1;
+    ASSERT(status == BTREE_SUCCESS);
+
+    ASSERT(search_result.found == true);
+    ASSERT(search_result.exact_match == false);
+    ASSERT(search_result.page);
+    ASSERT(search_result.page->page_num == ctx.btree->root_page_num);
+    ASSERT(search_result.result_index == 0);
+
+    /* --- TWO-LEVEL TREE --- */
+    uint32_t left_leaf_page_num = 0;
+    uint32_t right_leaf_page_num = 0;
+
+    ASSERT(build_two_level_test_tree(
+        &ctx,
+        50,
+        &left_leaf_page_num,
+        &right_leaf_page_num
+    ));
+
+    ASSERT(ordered_search_key_init(&search_key, ctx.index_spec, 10));
+
+    status = btree_root_to_leaf(
+        ctx.btree,
+        &search_key,
+        &search_result,
+        BTREE_UPPER_BOUND
+    );
+    ASSERT(status == BTREE_SUCCESS);
+
+    ASSERT(search_result.found == true);
+    ASSERT(search_result.exact_match == false);
+    ASSERT(search_result.page);
+    ASSERT(search_result.page->page_num == left_leaf_page_num);
+    ASSERT(search_result.result_index == 0);
+
+    ASSERT(ordered_search_key_init(&search_key, ctx.index_spec, 70));
+
+    status = btree_root_to_leaf(
+        ctx.btree,
+        &search_key,
+        &search_result,
+        BTREE_UPPER_BOUND
+    );
+    ASSERT(status == BTREE_SUCCESS);
+
+    ASSERT(search_result.found == true);
+    ASSERT(search_result.exact_match == false);
+    ASSERT(search_result.page);
+    ASSERT(search_result.page->page_num == right_leaf_page_num);
+    ASSERT(search_result.result_index == 0);
+
+    /* --- THREE-LEVEL TREE & RIGHTMOST PATH --- */
+    uint32_t rightmost_leaf_page_num = 0;
+
+    ASSERT(expand_test_tree_to_three_levels(
+        &ctx,
+        left_leaf_page_num,
+        right_leaf_page_num,
+        25,
+        75,
+        &rightmost_leaf_page_num
+    ));
+
+    ASSERT(ordered_search_key_init(&search_key, ctx.index_spec, 90));
+
+    status = btree_root_to_leaf(
+        ctx.btree,
+        &search_key,
+        &search_result,
+        BTREE_UPPER_BOUND
+    );
+    ASSERT(status == BTREE_SUCCESS);
+
+    ASSERT(search_result.found == true);
+    ASSERT(search_result.exact_match == false);
+    ASSERT(search_result.page);
+    ASSERT(search_result.page->page_num == rightmost_leaf_page_num);
+    ASSERT(search_result.result_index == 0);
+
+    Page *parent_page = pager_get_page(
+        ctx.pager,
+        right_leaf_page_num
+    );
+    if (!parent_page) { return -1; }
+
+    BTreePage parent = {0};
+    status = btree_page_attach_load_validate(
+        ctx.pager,
+        &parent,
+        parent_page,
+        ctx.index_spec
+    );
+    ASSERT(status == BTREE_SUCCESS);
+
+    ASSERT(parent.type == BTREE_INTERNAL_NODE);
+    ASSERT(parent.is_root == false);
+    ASSERT(parent.parent_pointer == ctx.btree->root_page_num);
+
+    free(search_key.target_key);
+    search_key.target_key = NULL;
+
+    btree_test_context_free(&ctx);
+    return 0;
+}
+
+static int test_node_insert() {
+    BTreeTestContext ctx = {0};
+    ASSERT(btree_test_context_init(&ctx, "build/database5.db"));
+
+    Page *root_page = pager_get_page(ctx.pager, ctx.btree->root_page_num);
+    if (!root_page) { return -1; }
+
+    BTreePage leaf = {0};
+    BTreeStatus status = btree_page_attach_load_validate(
+        ctx.pager,
+        &leaf,
+        root_page,
+        ctx.index_spec
+    );
+    ASSERT(status == BTREE_SUCCESS);
+
+    BTreeSplitResult split_result = {0};
+    BTreeSearchKey search_key = {0};
+    BTreeSearchResult search_result = {0};
+    BTreeCellContents cell_contents = {0};
+
+    /* --- INSERT INTO EMPTY PAGE --- */
+    ASSERT(create_ordered_cell_contents(&cell_contents, ctx.index_spec, 20, 20));
+
+    uint16_t old_free_space_offset = leaf.free_space_offset;
+
+    status = btree_node_insert(
+        ctx.pager,
+        &leaf,
+        &cell_contents,
+        &split_result,
+        ctx.index_spec
+    );
+    ASSERT(status == BTREE_SUCCESS);
+
+    ASSERT(leaf.cell_count == 1);
+    ASSERT(leaf.free_space_offset == old_free_space_offset - cell_contents.cell_size);
+    ASSERT(split_result.split == false);
+
+    free_cell_contents(&cell_contents);
+
+    ASSERT(ordered_search_key_init(&search_key, ctx.index_spec, 20));
+
+    status = btree_binary_search(&leaf, &search_key, &search_result, BTREE_LOWER_BOUND);
+    ASSERT(status == BTREE_SUCCESS);
+    ASSERT(search_result.exact_match == true);
+    ASSERT(search_result.result_index == 0);
+
+    /* --- INSERT AT THE BEGINNING --- */
+    ASSERT(create_ordered_cell_contents(&cell_contents, ctx.index_spec, 10, 10));
+
+    status = btree_node_insert(
+        ctx.pager,
+        &leaf,
+        &cell_contents,
+        &split_result,
+        ctx.index_spec
+    );
+    ASSERT(status == BTREE_SUCCESS);
+    ASSERT(leaf.cell_count == 2);
+
+    free_cell_contents(&cell_contents);
+
+    ASSERT(ordered_search_key_init(&search_key, ctx.index_spec, 10));
+
+    status = btree_binary_search(&leaf, &search_key, &search_result, BTREE_LOWER_BOUND);
+    ASSERT(status == BTREE_SUCCESS);
+    ASSERT(search_result.exact_match == true);
+    ASSERT(search_result.result_index == 0);
+
+    /* --- INSERT IN THE MIDDLE --- */
+    ASSERT(create_ordered_cell_contents(&cell_contents, ctx.index_spec, 15, 15));
+
+    status = btree_node_insert(
+        ctx.pager,
+        &leaf,
+        &cell_contents,
+        &split_result,
+        ctx.index_spec
+    );
+    ASSERT(status == BTREE_SUCCESS);
+    ASSERT(leaf.cell_count == 3);
+
+    free_cell_contents(&cell_contents);
+
+    ASSERT(ordered_search_key_init(&search_key, ctx.index_spec, 15));
+
+    status = btree_binary_search(&leaf, &search_key, &search_result, BTREE_LOWER_BOUND);
+    ASSERT(status == BTREE_SUCCESS);
+    ASSERT(search_result.exact_match == true);
+    ASSERT(search_result.result_index == 1);
+
+    /* --- REJECT UNIQUE DUPLICATE KEY --- */
+    ASSERT(create_ordered_cell_contents(&cell_contents, ctx.index_spec, 115, 15));
+
+    ctx.index_spec->is_unique = true;
+
+    status = btree_node_insert(
+        ctx.pager,
+        &leaf,
+        &cell_contents,
+        &split_result,
+        ctx.index_spec
+    );
+    ASSERT(status == BTREE_DUPLICATE_KEY);
+    ASSERT(leaf.cell_count == 3);
+
+    free_cell_contents(&cell_contents);
+
+    /* --- ACCEPT NON-UNIQUE DUPLICATE KEY --- */
+    ASSERT(create_ordered_cell_contents(&cell_contents, ctx.index_spec, 215, 15));
+
+    ctx.index_spec->is_unique = false;
+
+    status = btree_node_insert(
+        ctx.pager,
+        &leaf,
+        &cell_contents,
+        &split_result,
+        ctx.index_spec
+    );
+    ASSERT(status == BTREE_SUCCESS);
+    ASSERT(leaf.cell_count == 4);
+
+    free_cell_contents(&cell_contents);
+
+    /* --- INSERT AT THE END --- */
+    ASSERT(create_ordered_cell_contents(&cell_contents, ctx.index_spec, 30, 30));
+
+    status = btree_node_insert(
+        ctx.pager,
+        &leaf,
+        &cell_contents,
+        &split_result,
+        ctx.index_spec
+    );
+    ASSERT(status == BTREE_SUCCESS);
+    ASSERT(leaf.cell_count == 5);
+
+    free_cell_contents(&cell_contents);
+
+    ASSERT(ordered_search_key_init(&search_key, ctx.index_spec, 30));
+
+    status = btree_binary_search(&leaf, &search_key, &search_result, BTREE_LOWER_BOUND);
+    ASSERT(status == BTREE_SUCCESS);
+    ASSERT(search_result.exact_match == true);
+    ASSERT(search_result.result_index == 4);
+
+    /* --- INSERT UNTIL PAGE GETS FULL --- */
+    ctx.index_spec->is_unique = true;
+
+    uint32_t key_order = 40;
+    for (; key_order < 1000; key_order++) {
+        ASSERT(create_ordered_cell_contents(&cell_contents, ctx.index_spec, key_order, key_order));
+
+        status = btree_node_insert(
+            ctx.pager,
+            &leaf,
+            &cell_contents,
+            &split_result,
+            ctx.index_spec
+        );
+
+        free_cell_contents(&cell_contents);
+
+        if (status == BTREE_NEEDS_SPLIT) {
+            break;
+        }
+
+        ASSERT(status == BTREE_SUCCESS);
     }
+
+    ASSERT(status == BTREE_NEEDS_SPLIT);
+    ASSERT(split_result.split == true);
+    ASSERT(split_result.left_page == leaf.page->page_num);
+
+    /* --- DUPLICATE CHECK STILL HAPPENS BEFORE FULL-PAGE CHECK --- */
+    ASSERT(create_ordered_cell_contents(&cell_contents, ctx.index_spec, 320, 20));
+
+    status = btree_node_insert(
+        ctx.pager,
+        &leaf,
+        &cell_contents,
+        &split_result,
+        ctx.index_spec
+    );
+    ASSERT(status == BTREE_DUPLICATE_KEY);
+
+    free_cell_contents(&cell_contents);
+    split_result_reset(&split_result);
+
+    free(search_key.target_key);
+    search_key.target_key = NULL;
+
+    btree_test_context_free(&ctx);
+    return 0;
+}
+
+static int test_leaf_node_split() {
+    BTreeTestContext ctx = {0};
+    ASSERT(btree_test_context_init(&ctx, "build/database6.db"));
+
+    Page *root_page = pager_get_page(ctx.pager, ctx.btree->root_page_num);
+    if (!root_page) { return -1; }
+
+    BTreePage leaf = {0};
+    BTreeStatus status = btree_page_attach_load_validate(
+        ctx.pager,
+        &leaf,
+        root_page,
+        ctx.index_spec
+    );
+    ASSERT(status == BTREE_SUCCESS);
+
+    BTreeSplitResult split_result = {0};
+    BTreeCellContents cell_contents = {0};
+
+    /* --- FILL LEAF UNTIL NEXT CELL REQUIRES SPLIT --- */
+    uint32_t key_order = 0;
+
+    for (; key_order < 1000; key_order++) {
+        ASSERT(create_ordered_cell_contents(&cell_contents, ctx.index_spec, key_order, key_order));
+
+        status = btree_node_insert(
+            ctx.pager,
+            &leaf,
+            &cell_contents,
+            &split_result,
+            ctx.index_spec
+        );
+
+        free_cell_contents(&cell_contents);
+
+        if (status == BTREE_NEEDS_SPLIT) {
+            break;
+        }
+
+        ASSERT(status == BTREE_SUCCESS);
+    }
+
+    ASSERT(status == BTREE_NEEDS_SPLIT);
+    ASSERT(split_result.split == true);
+
+    uint16_t old_cell_count = leaf.cell_count;
+    uint32_t old_parent_pointer = leaf.parent_pointer;
+    uint32_t old_previous_pointer = leaf.type_specific_data.siblings.previous_leaf_pointer;
+    uint32_t old_next_pointer = leaf.type_specific_data.siblings.next_leaf_pointer;
+
+    /* --- SPLIT LEAF --- */
+    status = btree_leaf_node_split(
+        ctx.pager,
+        &leaf,
+        ctx.index_spec,
+        &split_result
+    );
+    ASSERT(status == BTREE_SUCCESS);
+
+    Page *right_page = pager_get_page(ctx.pager, split_result.right_page);
+    if (!right_page) { return -1; }
+
+    BTreePage right_leaf = {0};
+    status = btree_page_attach_load_validate(
+        ctx.pager,
+        &right_leaf,
+        right_page,
+        ctx.index_spec
+    );
+    ASSERT(status == BTREE_SUCCESS);
+
+    ASSERT(leaf.type == BTREE_LEAF_NODE);
+    ASSERT(right_leaf.type == BTREE_LEAF_NODE);
+
+    ASSERT(leaf.cell_count > 0);
+    ASSERT(right_leaf.cell_count > 0);
+    ASSERT(leaf.cell_count + right_leaf.cell_count == old_cell_count);
+
+    ASSERT(leaf.parent_pointer == old_parent_pointer);
+    ASSERT(right_leaf.parent_pointer == old_parent_pointer);
+
+    ASSERT(leaf.type_specific_data.siblings.previous_leaf_pointer == old_previous_pointer);
+    ASSERT(leaf.type_specific_data.siblings.next_leaf_pointer == right_leaf.page->page_num);
+    ASSERT(right_leaf.type_specific_data.siblings.previous_leaf_pointer == leaf.page->page_num);
+    ASSERT(right_leaf.type_specific_data.siblings.next_leaf_pointer == old_next_pointer);
+
+    ASSERT(split_result.left_page == leaf.page->page_num);
+    ASSERT(split_result.right_page == right_leaf.page->page_num);
+    ASSERT(split_result.separator_key);
+    ASSERT(split_result.separator_size == ctx.index_spec->key_size);
+
+    /* --- SEPARATOR KEY == FIRST KEY OF RIGHT LEAF --- */
+    Value **separator_key = serialized_key_to_values(
+        split_result.separator_key,
+        ctx.index_spec->index_key->num_columns,
+        ctx.index_spec
+    );
+    if (!separator_key) { return -1; }
+
+    BTreeKeyView key_view = {0};
+    status = get_key(
+        &right_leaf,
+        0,
+        &key_view,
+        ctx.index_spec
+    );
+    ASSERT(status == BTREE_SUCCESS);
+
+    Value **right_first_key = serialized_key_to_values(
+        key_view.key,
+        ctx.index_spec->index_key->num_columns,
+        ctx.index_spec
+    );
+    if (!right_first_key) { return -1; }
+
+    int result = 0;
+    status = btree_compare(
+        separator_key,
+        right_first_key,
+        ctx.index_spec->index_key->num_columns,
+        &result
+    );
+    ASSERT(status == BTREE_SUCCESS);
+    ASSERT(result == 0);
+
+    /* --- LAST LEFT KEY < SEPARATOR KEY --- */
+    status = get_key(
+        &leaf,
+        leaf.cell_count-1,
+        &key_view,
+        ctx.index_spec
+    );
+    ASSERT(status == BTREE_SUCCESS);
+
+    Value **left_last_key = serialized_key_to_values(
+        key_view.key,
+        ctx.index_spec->index_key->num_columns,
+        ctx.index_spec
+    );
+    if (!left_last_key) { return -1; }
+
+    result = 0;
+    status = btree_compare(
+        left_last_key,
+        separator_key,
+        ctx.index_spec->index_key->num_columns,
+        &result
+    );
+    ASSERT(status == BTREE_SUCCESS);
+    ASSERT(result == -1);
+
+    ASSERT(leaf.page->is_dirty == true);
+    ASSERT(right_leaf.page->is_dirty == true);
+
+    value_free_array(separator_key, ctx.index_spec->index_key->num_columns);
+    value_free_array(right_first_key, ctx.index_spec->index_key->num_columns);
+    value_free_array(left_last_key, ctx.index_spec->index_key->num_columns);
+
+    split_result_reset(&split_result);
+
+    btree_test_context_free(&ctx);
+    return 0;
+}
+
+static int test_internal_node_split() {
+    BTreeTestContext ctx = {0};
+    ASSERT(btree_test_context_init(&ctx, "build/database7.db"));
+
+    Page *root_page = pager_get_page(ctx.pager, ctx.btree->root_page_num);
+    if (!root_page) { return -1; }
+
+    if (!page_clear(ctx.pager, root_page)) { return -1; }
+
+    /* --- CREATE FIRST CHILD & INITIALIZE ROOT AS INTERNAL --- */
+    uint32_t first_child_page_num = 0;
+    ASSERT(create_empty_leaf_child(
+        &ctx,
+        ctx.btree->root_page_num,
+        &first_child_page_num
+    ));
+
+    BTreePage internal = {0};
+    btree_page_attach(&internal, root_page);
+
+    BTreeStatus status = btree_page_init_internal(
+        &internal,
+        first_child_page_num
+    );
+    ASSERT(status == BTREE_SUCCESS);
+
+    if (!btree_page_sync(ctx.pager, &internal)) { return -1; }
+
+    /* --- FILL INTERNAL NODE TO ITS REAL CAPACITY --- */
+    uint16_t internal_cell_size = ctx.index_spec->key_size + sizeof(uint32_t);
+    uint32_t key_order = 0;
+
+    while (btree_page_has_enough_space(&internal, internal_cell_size) == BTREE_SUCCESS) {
+        uint32_t child_page_num = 0;
+        ASSERT(create_empty_leaf_child(
+            &ctx,
+            internal.page->page_num,
+            &child_page_num
+        ));
+
+        BTreeCellContents internal_cell = {0};
+        ASSERT(create_internal_cell_contents(
+            &internal_cell,
+            ctx.index_spec,
+            key_order,
+            child_page_num
+        ));
+
+        BTreeSplitResult insert_split_result = {0};
+
+        status = btree_node_insert(
+            ctx.pager,
+            &internal,
+            &internal_cell,
+            &insert_split_result,
+            ctx.index_spec
+        );
+        ASSERT(status == BTREE_SUCCESS);
+        ASSERT(insert_split_result.split == false);
+
+        free_cell_contents(&internal_cell);
+        key_order++;
+    }
+
+    ASSERT(internal.cell_count > 1);
+    ASSERT(
+        btree_page_has_enough_space(&internal, internal_cell_size)
+        == BTREE_NEEDS_SPLIT
+    );
+
+    uint16_t old_cell_count = internal.cell_count;
+
+    /* --- SPLIT INTERNAL NODE --- */
+    BTreeSplitResult split_result = {0};
+
+    status = btree_internal_node_split(
+        ctx.pager,
+        &internal,
+        ctx.index_spec,
+        &split_result
+    );
+    ASSERT(status == BTREE_SUCCESS);
+
+    Page *right_page = pager_get_page(ctx.pager, split_result.right_page);
+    if (!right_page) { return -1; }
+
+    BTreePage right_internal = {0};
+    status = btree_page_attach_load_validate(
+        ctx.pager,
+        &right_internal,
+        right_page,
+        ctx.index_spec
+    );
+    ASSERT(status == BTREE_SUCCESS);
+
+    ASSERT(internal.type == BTREE_INTERNAL_NODE);
+    ASSERT(right_internal.type == BTREE_INTERNAL_NODE);
+
+    ASSERT(internal.cell_count > 0);
+    ASSERT(right_internal.cell_count > 0);
+    ASSERT(internal.cell_count + right_internal.cell_count + 1 == old_cell_count);
+
+    ASSERT(split_result.left_page == internal.page->page_num);
+    ASSERT(split_result.right_page == right_internal.page->page_num);
+    ASSERT(split_result.separator_key);
+    ASSERT(split_result.separator_size == ctx.index_spec->key_size);
+
+    /* --- LEFT LAST KEY < PROMOTED KEY < RIGHT FIRST KEY --- */
+    Value **separator_key = serialized_key_to_values(
+        split_result.separator_key,
+        ctx.index_spec->index_key->num_columns,
+        ctx.index_spec
+    );
+    if (!separator_key) { return -1; }
+
+    BTreeKeyView key_view = {0};
+
+    status = get_key(
+        &internal,
+        internal.cell_count-1,
+        &key_view,
+        ctx.index_spec
+    );
+    ASSERT(status == BTREE_SUCCESS);
+
+    Value **left_last_key = serialized_key_to_values(
+        key_view.key,
+        ctx.index_spec->index_key->num_columns,
+        ctx.index_spec
+    );
+    if (!left_last_key) { return -1; }
+
+    status = get_key(
+        &right_internal,
+        0,
+        &key_view,
+        ctx.index_spec
+    );
+    ASSERT(status == BTREE_SUCCESS);
+
+    Value **right_first_key = serialized_key_to_values(
+        key_view.key,
+        ctx.index_spec->index_key->num_columns,
+        ctx.index_spec
+    );
+    if (!right_first_key) { return -1; }
+
+    int result = 0;
+    status = btree_compare(
+        left_last_key,
+        separator_key,
+        ctx.index_spec->index_key->num_columns,
+        &result
+    );
+    ASSERT(status == BTREE_SUCCESS);
+    ASSERT(result == -1);
+
+    result = 0;
+    status = btree_compare(
+        separator_key,
+        right_first_key,
+        ctx.index_spec->index_key->num_columns,
+        &result
+    );
+    ASSERT(status == BTREE_SUCCESS);
+    ASSERT(result == -1);
+
+    /* --- VERIFY LEFT CHILD PARENT POINTERS --- */
+    for (uint32_t i = 0; i < internal.cell_count + 1; i++) {
+        uint32_t child_page_num = 0;
+
+        if (i == internal.cell_count) {
+            child_page_num = internal.type_specific_data.rightmost_child_pointer;
+        } else {
+            uint32_t cell_pointer = get_cell_pointer(internal.data, i);
+            child_page_num = get_cell_child_pointer(
+                internal.data,
+                get_cell_offset(cell_pointer)
+            );
+        }
+
+        Page *child_page = pager_get_page(ctx.pager, child_page_num);
+        if (!child_page) { return -1; }
+
+        BTreePage child = {0};
+        status = btree_page_attach_load_validate(
+            ctx.pager,
+            &child,
+            child_page,
+            ctx.index_spec
+        );
+        ASSERT(status == BTREE_SUCCESS);
+
+        ASSERT(child.type == BTREE_LEAF_NODE);
+        ASSERT(child.is_root == false);
+        ASSERT(child.parent_pointer == internal.page->page_num);
+    }
+
+    /* --- VERIFY RIGHT CHILD PARENT POINTERS --- */
+    for (uint32_t i = 0; i < right_internal.cell_count + 1; i++) {
+        uint32_t child_page_num = 0;
+
+        if (i == right_internal.cell_count) {
+            child_page_num = right_internal.type_specific_data.rightmost_child_pointer;
+        } else {
+            uint32_t cell_pointer = get_cell_pointer(right_internal.data, i);
+            child_page_num = get_cell_child_pointer(
+                right_internal.data,
+                get_cell_offset(cell_pointer)
+            );
+        }
+
+        Page *child_page = pager_get_page(ctx.pager, child_page_num);
+        if (!child_page) { return -1; }
+
+        BTreePage child = {0};
+        status = btree_page_attach_load_validate(
+            ctx.pager,
+            &child,
+            child_page,
+            ctx.index_spec
+        );
+        ASSERT(status == BTREE_SUCCESS);
+
+        ASSERT(child.type == BTREE_LEAF_NODE);
+        ASSERT(child.is_root == false);
+        ASSERT(child.parent_pointer == right_internal.page->page_num);
+    }
+
+    ASSERT(internal.page->is_dirty == true);
+    ASSERT(right_internal.page->is_dirty == true);
+
+    value_free_array(separator_key, ctx.index_spec->index_key->num_columns);
+    value_free_array(left_last_key, ctx.index_spec->index_key->num_columns);
+    value_free_array(right_first_key, ctx.index_spec->index_key->num_columns);
+
+    split_result_reset(&split_result);
+
+    btree_test_context_free(&ctx);
+    return 0;
+}
+
+static int test_root_node_split() {
+    BTreeTestContext ctx = {0};
+    ASSERT(btree_test_context_init(&ctx, "build/database8.db"));
+
+    uint32_t old_root_page_num = ctx.btree->root_page_num;
+
+    Page *root_page = pager_get_page(ctx.pager, old_root_page_num);
+    if (!root_page) { return -1; }
+
+    BTreePage old_root = {0};
+    BTreeStatus status = btree_page_attach_load_validate(
+        ctx.pager,
+        &old_root,
+        root_page,
+        ctx.index_spec
+    );
+    ASSERT(status == BTREE_SUCCESS);
+
+    BTreeCellContents cell_contents = {0};
+    BTreeSplitResult split_result = {0};
+
+    /* --- FILL ROOT LEAF UNTIL SPLIT IS NEEDED --- */
+    uint32_t key_order = 0;
+
+    for (; key_order < 1000; key_order++) {
+        ASSERT(create_ordered_cell_contents(&cell_contents, ctx.index_spec, key_order, key_order));
+
+        status = btree_node_insert(
+            ctx.pager,
+            &old_root,
+            &cell_contents,
+            &split_result,
+            ctx.index_spec
+        );
+
+        free_cell_contents(&cell_contents);
+
+        if (status == BTREE_NEEDS_SPLIT) {
+            break;
+        }
+
+        ASSERT(status == BTREE_SUCCESS);
+    }
+
+    ASSERT(status == BTREE_NEEDS_SPLIT);
+    ASSERT(split_result.split == true);
+
+    /* --- SPLIT OLD ROOT LEAF --- */
+    status = btree_leaf_node_split(
+        ctx.pager,
+        &old_root,
+        ctx.index_spec,
+        &split_result
+    );
+    ASSERT(status == BTREE_SUCCESS);
+
+    uint32_t right_page_num = split_result.right_page;
+
+    Value **separator_key = serialized_key_to_values(
+        split_result.separator_key,
+        ctx.index_spec->index_key->num_columns,
+        ctx.index_spec
+    );
+    if (!separator_key) { return -1; }
+
+    /* --- CREATE NEW ROOT --- */
+    status = btree_root_split(
+        ctx.btree,
+        &old_root,
+        &split_result,
+        ctx.index_spec
+    );
+    ASSERT(status == BTREE_SUCCESS);
+
+    ASSERT(ctx.btree->root_page_num != old_root_page_num);
+
+    Page *new_root_page = pager_get_page(ctx.pager, ctx.btree->root_page_num);
+    if (!new_root_page) { return -1; }
 
     BTreePage new_root = {0};
-
     status = btree_page_attach_load_validate(
-        pager,
+        ctx.pager,
         &new_root,
         new_root_page,
-        &index_spec
+        ctx.index_spec
     );
     ASSERT(status == BTREE_SUCCESS);
 
@@ -1399,80 +2098,1336 @@ static int test_internal_node_split() {
     ASSERT(new_root.is_root == true);
     ASSERT(new_root.parent_pointer == UINT32_MAX);
     ASSERT(new_root.cell_count == 1);
+
+    uint32_t root_cell_pointer = get_cell_pointer(new_root.data, 0);
+    uint32_t left_child_page_num = get_cell_child_pointer(
+        new_root.data,
+        get_cell_offset(root_cell_pointer)
+    );
+
+    ASSERT(left_child_page_num == old_root_page_num);
+    ASSERT(new_root.type_specific_data.rightmost_child_pointer == right_page_num);
+
+    /* --- VERIFY CHILD METADATA --- */
+    Page *left_page = pager_get_page(ctx.pager, old_root_page_num);
+    Page *right_page = pager_get_page(ctx.pager, right_page_num);
+    if (!left_page || !right_page) { return -1; }
+
+    BTreePage left_child = {0};
+    BTreePage right_child = {0};
+
+    status = btree_page_attach_load_validate(
+        ctx.pager,
+        &left_child,
+        left_page,
+        ctx.index_spec
+    );
+    ASSERT(status == BTREE_SUCCESS);
+
+    status = btree_page_attach_load_validate(
+        ctx.pager,
+        &right_child,
+        right_page,
+        ctx.index_spec
+    );
+    ASSERT(status == BTREE_SUCCESS);
+
+    ASSERT(left_child.type == BTREE_LEAF_NODE);
+    ASSERT(right_child.type == BTREE_LEAF_NODE);
+
+    ASSERT(left_child.is_root == false);
+    ASSERT(right_child.is_root == false);
+
+    ASSERT(left_child.parent_pointer == new_root.page->page_num);
+    ASSERT(right_child.parent_pointer == new_root.page->page_num);
+
+    /* --- NEW ROOT KEY == SPLIT SEPARATOR KEY --- */
+    BTreeKeyView key_view = {0};
+    status = get_key(
+        &new_root,
+        0,
+        &key_view,
+        ctx.index_spec
+    );
+    ASSERT(status == BTREE_SUCCESS);
+
+    Value **new_root_key = serialized_key_to_values(
+        key_view.key,
+        ctx.index_spec->index_key->num_columns,
+        ctx.index_spec
+    );
+    if (!new_root_key) { return -1; }
+
+    int result = 0;
+    status = btree_compare(
+        new_root_key,
+        separator_key,
+        ctx.index_spec->index_key->num_columns,
+        &result
+    );
+    ASSERT(status == BTREE_SUCCESS);
+    ASSERT(result == 0);
+
     ASSERT(new_root.page->is_dirty == true);
+    ASSERT(left_child.page->is_dirty == true);
+    ASSERT(right_child.page->is_dirty == true);
 
-    /*
-     *                  new root
-     *                 [separator]
-     *                  /       \
-     *          old root       right internal
-     */
+    value_free_array(separator_key, ctx.index_spec->index_key->num_columns);
+    value_free_array(new_root_key, ctx.index_spec->index_key->num_columns);
 
-    uint32_t root_cell_pointer =
-        get_cell_pointer(new_root.data, 0);
+    btree_test_context_free(&ctx);
+    return 0;
+}
 
-    uint32_t left_internal_page_num =
-        get_cell_child_pointer(
-            new_root.data,
-            get_cell_offset(root_cell_pointer)
+static int test_reachable_page_traversal() {
+    BTreeTestContext ctx = {0};
+    ASSERT(btree_test_context_init(&ctx, "build/database9.db"));
+
+    BTreePageCollection visited_pages = {0};
+
+    /* --- ONE-LEVEL TREE --- */
+    BTreeStatus status = btree_traverse_reachable_pages(
+        ctx.btree,
+        &visited_pages
+    );
+    ASSERT(status == BTREE_SUCCESS);
+
+    ASSERT(visited_pages.count == 1);
+    ASSERT(visited_pages.page_numbers[0] == ctx.btree->root_page_num);
+
+    /* --- TWO-LEVEL TREE --- */
+    uint32_t left_leaf_page_num = 0;
+    uint32_t right_leaf_page_num = 0;
+
+    ASSERT(build_two_level_test_tree(
+        &ctx,
+        50,
+        &left_leaf_page_num,
+        &right_leaf_page_num
+    ));
+
+    status = btree_traverse_reachable_pages(
+        ctx.btree,
+        &visited_pages
+    );
+    ASSERT(status == BTREE_SUCCESS);
+
+    ASSERT(visited_pages.count == 3);
+    ASSERT(visited_pages.page_numbers[0] == ctx.btree->root_page_num);
+    ASSERT(visited_pages.page_numbers[1] == left_leaf_page_num);
+    ASSERT(visited_pages.page_numbers[2] == right_leaf_page_num);
+
+    /* --- THREE-LEVEL TREE --- */
+    uint32_t rightmost_leaf_page_num = 0;
+
+    ASSERT(expand_test_tree_to_three_levels(
+        &ctx,
+        left_leaf_page_num,
+        right_leaf_page_num,
+        25,
+        75,
+        &rightmost_leaf_page_num
+    ));
+
+    status = btree_traverse_reachable_pages(
+        ctx.btree,
+        &visited_pages
+    );
+    ASSERT(status == BTREE_SUCCESS);
+
+    ASSERT(visited_pages.count == 7);
+
+    for (uint32_t i = SYSTEM_CATALOG_PAGE_NUM + 1;
+         i < ctx.pager->num_pages;
+         i++) {
+        ASSERT(btree_collection_contains(&visited_pages, i));
+    }
+
+    ASSERT(visited_pages.page_numbers[0] == ctx.btree->root_page_num);
+    ASSERT(btree_collection_contains(
+        &visited_pages,
+        rightmost_leaf_page_num
+    ));
+
+    btree_test_context_free(&ctx);
+    return 0;
+}
+
+static int test_exact_key_lookup() {
+    BTreeTestContext ctx = {0};
+    ASSERT(btree_test_context_init(&ctx, "build/database10_1.db"));
+
+    /* --- BUILD MULTI-LEAF TREE --- */
+    for (uint32_t i = 0; i < 40; i++) {
+        BTreeInsertionResult insertion_res = {0};
+        ASSERT(insert_ordered_cell(&ctx, i, i, &insertion_res));
+    }
+
+    BTreeSearchKey search_key = {0};
+    BTreeSearchResult search_result = {0};
+
+    /* --- LOOKUP EXISTING KEYS --- */
+    uint32_t exact_key_orders[] = {0, 20, 39};
+
+    for (uint32_t i = 0; i < 3; i++) {
+        uint32_t key_order = exact_key_orders[i];
+
+        ASSERT(ordered_search_key_init(
+            &search_key,
+            ctx.index_spec,
+            key_order
+        ));
+
+        BTreeSearchEntries entries = {0};
+
+        BTreeStatus status = btree_find_exact_key(
+            ctx.btree,
+            &search_key,
+            &search_result,
+            &entries
+        );
+        ASSERT(status == BTREE_SUCCESS);
+
+        ASSERT(search_result.found == true);
+        ASSERT(search_result.exact_match == true);
+        ASSERT(search_result.page);
+        ASSERT(search_result.result_index != UINT16_MAX);
+
+        ASSERT(entries.count == 1);
+        ASSERT(entries.entries);
+        ASSERT(entries.entries[0].page_num == search_result.page->page_num);
+        ASSERT(entries.entries[0].cell_index == search_result.result_index);
+
+        ASSERT(verify_ordered_entries(
+            &entries,
+            ctx.index_spec,
+            key_order,
+            1
+        ));
+
+        BTreeCellContents expected_cell = {0};
+        ASSERT(create_ordered_cell_contents(
+            &expected_cell,
+            ctx.index_spec,
+            key_order,
+            key_order
+        ));
+
+        ASSERT(row_equals(
+            entries.entries[0].cell.BTreePayload.row,
+            expected_cell.BTreePayload.row
+        ));
+
+        free_cell_contents(&expected_cell);
+        btree_search_entries_free(&entries);
+    }
+
+    /* --- LOOKUP MISSING KEY --- */
+    ASSERT(ordered_search_key_init(
+        &search_key,
+        ctx.index_spec,
+        1000
+    ));
+
+    BTreeSearchEntries entries = {0};
+
+    BTreeStatus status = btree_find_exact_key(
+        ctx.btree,
+        &search_key,
+        &search_result,
+        &entries
+    );
+    ASSERT(status == BTREE_NOT_FOUND);
+
+    ASSERT(search_result.found == false);
+    ASSERT(search_result.exact_match == false);
+    ASSERT(search_result.page == NULL);
+    ASSERT(search_result.result_index == UINT16_MAX);
+
+    ASSERT(entries.entries == NULL);
+    ASSERT(entries.count == 0);
+    ASSERT(entries.capacity == 0);
+
+    free(search_key.target_key);
+    search_key.target_key = NULL;
+
+    btree_test_context_free(&ctx);
+
+    /* --- EMPTY BTREE LOOKUP --- */
+    ASSERT(btree_test_context_init(&ctx, "build/database10_2.db"));
+
+    ASSERT(ordered_search_key_init(
+        &search_key,
+        ctx.index_spec,
+        0
+    ));
+
+    entries = (BTreeSearchEntries){0};
+
+    status = btree_find_exact_key(
+        ctx.btree,
+        &search_key,
+        &search_result,
+        &entries
+    );
+    ASSERT(status == BTREE_NOT_FOUND);
+
+    ASSERT(search_result.found == false);
+    ASSERT(search_result.exact_match == false);
+    ASSERT(search_result.page == NULL);
+    ASSERT(search_result.result_index == UINT16_MAX);
+
+    ASSERT(entries.entries == NULL);
+    ASSERT(entries.count == 0);
+    ASSERT(entries.capacity == 0);
+
+    free(search_key.target_key);
+    search_key.target_key = NULL;
+
+    btree_test_context_free(&ctx);
+    return 0;
+}
+
+static int test_range_query() {
+    BTreeTestContext ctx = {0};
+    ASSERT(btree_test_context_init(&ctx, "build/database11.db"));
+
+    /* --- BUILD ORDERED MULTI-LEAF TREE --- */
+    for (uint32_t i = 0; i < 40; i++) {
+        BTreeInsertionResult insertion_res = {0};
+        ASSERT(insert_ordered_cell(&ctx, i, i, &insertion_res));
+    }
+
+    BTreeSearchKey start_search_key = {0};
+    BTreeSearchKey end_search_key = {0};
+    BTreeSearchEntries range_result = {0};
+
+    /* --- INCLUSIVE BOUNDS --- */
+    ASSERT(ordered_search_key_init(
+        &start_search_key,
+        ctx.index_spec,
+        10
+    ));
+    ASSERT(ordered_search_key_init(
+        &end_search_key,
+        ctx.index_spec,
+        20
+    ));
+
+    BTreeStatus status = btree_find_range_keys(
+        ctx.btree,
+        ctx.index_spec,
+        &start_search_key,
+        true,
+        &end_search_key,
+        true,
+        &range_result
+    );
+    ASSERT(status == BTREE_SUCCESS);
+    ASSERT(verify_ordered_entries(
+        &range_result,
+        ctx.index_spec,
+        10,
+        11
+    ));
+
+    btree_search_entries_free(&range_result);
+
+    /* --- EXCLUSIVE BOUNDS --- */
+    status = btree_find_range_keys(
+        ctx.btree,
+        ctx.index_spec,
+        &start_search_key,
+        false,
+        &end_search_key,
+        false,
+        &range_result
+    );
+    ASSERT(status == BTREE_SUCCESS);
+    ASSERT(verify_ordered_entries(
+        &range_result,
+        ctx.index_spec,
+        11,
+        9
+    ));
+
+    btree_search_entries_free(&range_result);
+
+    /* --- UNBOUNDED LOWER RANGE --- */
+    ASSERT(ordered_search_key_init(
+        &end_search_key,
+        ctx.index_spec,
+        5
+    ));
+
+    status = btree_find_range_keys(
+        ctx.btree,
+        ctx.index_spec,
+        NULL,
+        false,
+        &end_search_key,
+        true,
+        &range_result
+    );
+    ASSERT(status == BTREE_SUCCESS);
+    ASSERT(verify_ordered_entries(
+        &range_result,
+        ctx.index_spec,
+        0,
+        6
+    ));
+
+    btree_search_entries_free(&range_result);
+
+    /* --- UNBOUNDED UPPER RANGE --- */
+    ASSERT(ordered_search_key_init(
+        &start_search_key,
+        ctx.index_spec,
+        35
+    ));
+
+    status = btree_find_range_keys(
+        ctx.btree,
+        ctx.index_spec,
+        &start_search_key,
+        true,
+        NULL,
+        false,
+        &range_result
+    );
+    ASSERT(status == BTREE_SUCCESS);
+    ASSERT(verify_ordered_entries(
+        &range_result,
+        ctx.index_spec,
+        35,
+        5
+    ));
+
+    btree_search_entries_free(&range_result);
+
+    /* --- EMPTY MATCHING RANGE --- */
+    ASSERT(ordered_search_key_init(
+        &start_search_key,
+        ctx.index_spec,
+        30
+    ));
+    ASSERT(ordered_search_key_init(
+        &end_search_key,
+        ctx.index_spec,
+        20
+    ));
+
+    status = btree_find_range_keys(
+        ctx.btree,
+        ctx.index_spec,
+        &start_search_key,
+        true,
+        &end_search_key,
+        true,
+        &range_result
+    );
+    ASSERT(status == BTREE_SUCCESS);
+    ASSERT(range_result.count == 0);
+
+    btree_search_entries_free(&range_result);
+
+    /* --- RANGE CONTAINING ONE KEY --- */
+    ASSERT(ordered_search_key_init(
+        &start_search_key,
+        ctx.index_spec,
+        17
+    ));
+    ASSERT(ordered_search_key_init(
+        &end_search_key,
+        ctx.index_spec,
+        17
+    ));
+
+    status = btree_find_range_keys(
+        ctx.btree,
+        ctx.index_spec,
+        &start_search_key,
+        true,
+        &end_search_key,
+        true,
+        &range_result
+    );
+    ASSERT(status == BTREE_SUCCESS);
+    ASSERT(verify_ordered_entries(
+        &range_result,
+        ctx.index_spec,
+        17,
+        1
+    ));
+
+    btree_search_entries_free(&range_result);
+
+    /* --- START KEY LOWER THAN FIRST TREE KEY --- */
+    Value **outside_key_vals = (Value **) calloc(
+        ctx.index_spec->index_key->num_columns,
+        sizeof(Value *)
+    );
+    if (!outside_key_vals) { return -1; }
+
+    bool outside_active = false;
+    char outside_username[64] = "aaa";
+    uint64_t outside_created_at = 0;
+
+    ASSERT(create_index_key_values(
+        outside_key_vals,
+        ctx.index_spec,
+        outside_active,
+        outside_username,
+        outside_created_at
+    ));
+
+    ASSERT(search_key_init(
+        &start_search_key,
+        ctx.index_spec,
+        outside_key_vals,
+        ctx.index_spec->index_key->num_columns
+    ));
+
+    value_free_array(
+        outside_key_vals,
+        ctx.index_spec->index_key->num_columns
+    );
+
+    ASSERT(ordered_search_key_init(
+        &end_search_key,
+        ctx.index_spec,
+        5
+    ));
+
+    status = btree_find_range_keys(
+        ctx.btree,
+        ctx.index_spec,
+        &start_search_key,
+        false,
+        &end_search_key,
+        false,
+        &range_result
+    );
+    ASSERT(status == BTREE_SUCCESS);
+    ASSERT(verify_ordered_entries(
+        &range_result,
+        ctx.index_spec,
+        0,
+        5
+    ));
+
+    btree_search_entries_free(&range_result);
+
+    /* --- START KEY BIGGER THAN LAST TREE KEY --- */
+    outside_key_vals = (Value **) calloc(
+        ctx.index_spec->index_key->num_columns,
+        sizeof(Value *)
+    );
+    if (!outside_key_vals) { return -1; }
+
+    outside_active = true;
+    strcpy(outside_username, "zzz");
+    outside_created_at = UINT64_MAX;
+
+    ASSERT(create_index_key_values(
+        outside_key_vals,
+        ctx.index_spec,
+        outside_active,
+        outside_username,
+        outside_created_at
+    ));
+
+    ASSERT(search_key_init(
+        &start_search_key,
+        ctx.index_spec,
+        outside_key_vals,
+        ctx.index_spec->index_key->num_columns
+    ));
+
+    ASSERT(search_key_init(
+        &end_search_key,
+        ctx.index_spec,
+        outside_key_vals,
+        ctx.index_spec->index_key->num_columns
+    ));
+
+    value_free_array(
+        outside_key_vals,
+        ctx.index_spec->index_key->num_columns
+    );
+
+    status = btree_find_range_keys(
+        ctx.btree,
+        ctx.index_spec,
+        &start_search_key,
+        true,
+        &end_search_key,
+        true,
+        &range_result
+    );
+    ASSERT(status == BTREE_SUCCESS);
+    ASSERT(range_result.count == 0);
+
+    btree_search_entries_free(&range_result);
+
+    /* --- FULL UNBOUNDED RANGE ACROSS LINKED LEAVES --- */
+    status = btree_find_range_keys(
+        ctx.btree,
+        ctx.index_spec,
+        NULL,
+        false,
+        NULL,
+        false,
+        &range_result
+    );
+    ASSERT(status == BTREE_SUCCESS);
+    ASSERT(verify_ordered_entries(
+        &range_result,
+        ctx.index_spec,
+        0,
+        40
+    ));
+
+    ASSERT(range_result.entries[0].page_num
+        != range_result.entries[range_result.count-1].page_num);
+
+    btree_search_entries_free(&range_result);
+
+    /* --- INVALID NEXT SIBLING POINTER --- */
+    Page *leftmost_page = NULL;
+    status = btree_find_leftmost_page(
+        ctx.btree,
+        ctx.index_spec,
+        &leftmost_page
+    );
+    ASSERT(status == BTREE_SUCCESS);
+    ASSERT(leftmost_page);
+
+    BTreePage leftmost_leaf = {0};
+    status = btree_page_attach_load_validate(
+        ctx.pager,
+        &leftmost_leaf,
+        leftmost_page,
+        ctx.index_spec
+    );
+    ASSERT(status == BTREE_SUCCESS);
+
+    ASSERT(leftmost_leaf.type == BTREE_LEAF_NODE);
+    ASSERT(leftmost_leaf.type_specific_data.siblings.next_leaf_pointer != UINT32_MAX);
+
+    uint32_t old_next_page_num = leftmost_leaf.type_specific_data.siblings.next_leaf_pointer;
+
+    set_leaf_next(leftmost_leaf.data, MAX_PAGES);
+
+    status = btree_find_range_keys(
+        ctx.btree,
+        ctx.index_spec,
+        NULL,
+        false,
+        NULL,
+        false,
+        &range_result
+    );
+    ASSERT(status == BTREE_CORRUPT_PAGE);
+
+    set_leaf_next(leftmost_leaf.data, old_next_page_num);
+
+    /* --- CYCLIC LEAF CHAIN --- */
+    Page *second_leaf_page = pager_get_page(
+        ctx.pager,
+        old_next_page_num
+    );
+    if (!second_leaf_page) { return -1; }
+
+    BTreePage second_leaf = {0};
+    status = btree_page_attach_load_validate(
+        ctx.pager,
+        &second_leaf,
+        second_leaf_page,
+        ctx.index_spec
+    );
+    ASSERT(status == BTREE_SUCCESS);
+
+    uint32_t old_second_next = second_leaf.type_specific_data.siblings.next_leaf_pointer;
+
+    set_leaf_next(
+        second_leaf.data,
+        leftmost_leaf.page->page_num
+    );
+
+    status = btree_find_range_keys(
+        ctx.btree,
+        ctx.index_spec,
+        NULL,
+        false,
+        NULL,
+        false,
+        &range_result
+    );
+    ASSERT(status == BTREE_CORRUPT_PAGE);
+
+    set_leaf_next(second_leaf.data, old_second_next);
+
+    free(start_search_key.target_key);
+    start_search_key.target_key = NULL;
+
+    free(end_search_key.target_key);
+    end_search_key.target_key = NULL;
+
+    btree_test_context_free(&ctx);
+    return 0;
+}
+
+static int test_find_prefix_keys() {
+    BTreeTestContext ctx = {0};
+    ASSERT(btree_test_context_init(&ctx, "build/database12.db"));
+
+    /* --- INSERT ORDERED KEYS WITH SHARED PREFIXES --- */
+    for (uint32_t i = 0; i < 60; i++) {
+        BTreeCellContents cell_contents = {0};
+        ASSERT(create_cell_contents(
+            &cell_contents,
+            ctx.index_spec,
+            i
+        ));
+
+        char username[64] = {0};
+        snprintf(
+            username,
+            sizeof(username),
+            "group%02u",
+            i / 5
         );
 
+        bool active = false;
+        uint64_t created_at = 1700000000ULL + (i % 5);
+
+        ASSERT(set_cell_index_values(
+            &cell_contents,
+            ctx.index_spec,
+            active,
+            username,
+            created_at
+        ));
+
+        BTreeInsertionResult insertion_res = {0};
+        BTreeStatus status = btree_insert(
+            ctx.btree,
+            &cell_contents,
+            &insertion_res,
+            ctx.index_spec
+        );
+        ASSERT(status == BTREE_SUCCESS);
+
+        free_cell_contents(&cell_contents);
+    }
+
+    BTreeSearchKey prefix_key = {0};
+    BTreeSearchEntries prefix_result = {0};
+
+    Value **prefix_key_vals = (Value **) calloc(
+        ctx.index_spec->index_key->num_columns,
+        sizeof(Value *)
+    );
+    if (!prefix_key_vals) { return -1; }
+
+    /* --- ONE-COMPONENT PREFIX: ALL FALSE KEYS --- */
+    bool active = false;
+    char username[64] = "group00";
+    uint64_t created_at = 1700000000ULL;
+
+    ASSERT(create_index_key_values(
+        prefix_key_vals,
+        ctx.index_spec,
+        active,
+        username,
+        created_at
+    ));
+
+    ASSERT(search_key_init(
+        &prefix_key,
+        ctx.index_spec,
+        prefix_key_vals,
+        ctx.index_spec->index_key->num_columns
+    ));
+
+    prefix_key.num_target_keys = 1;
+
+    BTreeStatus status = btree_find_prefix_keys(
+        ctx.btree,
+        ctx.index_spec,
+        &prefix_key,
+        &prefix_result
+    );
+    ASSERT(status == BTREE_SUCCESS);
+    ASSERT(prefix_result.count == 60);
+
+    ASSERT(prefix_result.entries[0].page_num
+        != prefix_result.entries[prefix_result.count-1].page_num);
+
+    for (uint32_t i = 0; i < prefix_result.count; i++) {
+        int result = 0;
+
+        ASSERT(value_compare(
+            prefix_result.entries[i].cell.keys[0],
+            prefix_key_vals[0],
+            &result
+        ));
+        ASSERT(result == 0);
+
+        if (i > 0) {
+            result = 0;
+
+            status = btree_compare(
+                prefix_result.entries[i-1].cell.keys,
+                prefix_result.entries[i].cell.keys,
+                ctx.index_spec->index_key->num_columns,
+                &result
+            );
+            ASSERT(status == BTREE_SUCCESS);
+            ASSERT(result == -1);
+        }
+    }
+
+    btree_search_entries_free(&prefix_result);
+
+    /* --- TWO-COMPONENT PREFIX: FIVE MATCHES --- */
+    for (uint32_t i = 0; i < ctx.index_spec->index_key->num_columns; i++) {
+        value_free(prefix_key_vals[i]);
+        prefix_key_vals[i] = NULL;
+    }
+
+    strcpy(username, "group05");
+    created_at = 1700000000ULL;
+
+    ASSERT(create_index_key_values(
+        prefix_key_vals,
+        ctx.index_spec,
+        active,
+        username,
+        created_at
+    ));
+
+    ASSERT(search_key_init(
+        &prefix_key,
+        ctx.index_spec,
+        prefix_key_vals,
+        ctx.index_spec->index_key->num_columns
+    ));
+
+    prefix_key.num_target_keys = 2;
+
+    status = btree_find_prefix_keys(
+        ctx.btree,
+        ctx.index_spec,
+        &prefix_key,
+        &prefix_result
+    );
+    ASSERT(status == BTREE_SUCCESS);
+    ASSERT(prefix_result.count == 5);
+
+    for (uint32_t i = 0; i < prefix_result.count; i++) {
+        int result = 0;
+
+        ASSERT(value_compare(
+            prefix_result.entries[i].cell.keys[0],
+            prefix_key_vals[0],
+            &result
+        ));
+        ASSERT(result == 0);
+
+        result = 0;
+        ASSERT(value_compare(
+            prefix_result.entries[i].cell.keys[1],
+            prefix_key_vals[1],
+            &result
+        ));
+        ASSERT(result == 0);
+
+        uint64_t expected_timestamp = 1700000000ULL + i;
+        Value *expected = value_create(
+            get_key_column(ctx.index_spec, 2)->type,
+            &expected_timestamp
+        );
+        if (!expected) { return -1; }
+
+        result = 0;
+        ASSERT(value_compare(
+            prefix_result.entries[i].cell.keys[2],
+            expected,
+            &result
+        ));
+        ASSERT(result == 0);
+
+        value_free(expected);
+    }
+
+    btree_search_entries_free(&prefix_result);
+
+    /* --- FULL KEY PREFIX: ONE EXACT MATCH --- */
+    for (uint32_t i = 0; i < ctx.index_spec->index_key->num_columns; i++) {
+        value_free(prefix_key_vals[i]);
+        prefix_key_vals[i] = NULL;
+    }
+
+    strcpy(username, "group05");
+    created_at = 1700000002ULL;
+
+    ASSERT(create_index_key_values(
+        prefix_key_vals,
+        ctx.index_spec,
+        active,
+        username,
+        created_at
+    ));
+
+    ASSERT(search_key_init(
+        &prefix_key,
+        ctx.index_spec,
+        prefix_key_vals,
+        ctx.index_spec->index_key->num_columns
+    ));
+
+    prefix_key.num_target_keys = ctx.index_spec->index_key->num_columns;
+
+    status = btree_find_prefix_keys(
+        ctx.btree,
+        ctx.index_spec,
+        &prefix_key,
+        &prefix_result
+    );
+    ASSERT(status == BTREE_SUCCESS);
+    ASSERT(prefix_result.count == 1);
+
+    int result = 0;
+    status = btree_compare(
+        prefix_result.entries[0].cell.keys,
+        prefix_key_vals,
+        ctx.index_spec->index_key->num_columns,
+        &result
+    );
+    ASSERT(status == BTREE_SUCCESS);
+    ASSERT(result == 0);
+
+    btree_search_entries_free(&prefix_result);
+
+    /* --- PREFIX MATCHING NO ENTRIES --- */
+    for (uint32_t i = 0; i < ctx.index_spec->index_key->num_columns; i++) {
+        value_free(prefix_key_vals[i]);
+        prefix_key_vals[i] = NULL;
+    }
+
+    active = true;
+    strcpy(username, "group00");
+    created_at = 1700000000ULL;
+
+    ASSERT(create_index_key_values(
+        prefix_key_vals,
+        ctx.index_spec,
+        active,
+        username,
+        created_at
+    ));
+
+    ASSERT(search_key_init(
+        &prefix_key,
+        ctx.index_spec,
+        prefix_key_vals,
+        ctx.index_spec->index_key->num_columns
+    ));
+
+    prefix_key.num_target_keys = 1;
+
+    status = btree_find_prefix_keys(
+        ctx.btree,
+        ctx.index_spec,
+        &prefix_key,
+        &prefix_result
+    );
+    ASSERT(status == BTREE_SUCCESS);
+    ASSERT(prefix_result.count == 0);
+
+    btree_search_entries_free(&prefix_result);
+
+    /* --- INVALID ARGUMENTS --- */
+    prefix_key.num_target_keys = 1;
+
+    status = btree_find_prefix_keys(
+        ctx.btree,
+        ctx.index_spec,
+        NULL,
+        &prefix_result
+    );
+    ASSERT(status == BTREE_INVALID_ARGUMENTS);
+
+    void *valid_target_key = prefix_key.target_key;
+    prefix_key.target_key = NULL;
+
+    status = btree_find_prefix_keys(
+        ctx.btree,
+        ctx.index_spec,
+        &prefix_key,
+        &prefix_result
+    );
+    ASSERT(status == BTREE_INVALID_ARGUMENTS);
+
+    prefix_key.target_key = valid_target_key;
+
+    BTreeIndexSpec different_index_spec = *ctx.index_spec;
+    prefix_key.index = &different_index_spec;
+
+    status = btree_find_prefix_keys(
+        ctx.btree,
+        ctx.index_spec,
+        &prefix_key,
+        &prefix_result
+    );
+    ASSERT(status == BTREE_INVALID_ARGUMENTS);
+
+    prefix_key.index = ctx.index_spec;
+    prefix_key.num_target_keys = 0;
+
+    status = btree_find_prefix_keys(
+        ctx.btree,
+        ctx.index_spec,
+        &prefix_key,
+        &prefix_result
+    );
+    ASSERT(status == BTREE_INVALID_ARGUMENTS);
+
+    prefix_key.num_target_keys = ctx.index_spec->index_key->num_columns + 1;
+
+    status = btree_find_prefix_keys(
+        ctx.btree,
+        ctx.index_spec,
+        &prefix_key,
+        &prefix_result
+    );
+    ASSERT(status == BTREE_INVALID_ARGUMENTS);
+
+    prefix_key.num_target_keys = ctx.index_spec->index_key->num_columns;
+
+    status = btree_find_prefix_keys(
+        ctx.btree,
+        ctx.index_spec,
+        &prefix_key,
+        NULL
+    );
+    ASSERT(status == BTREE_INVALID_ARGUMENTS);
+
+    status = btree_find_prefix_keys(
+        NULL,
+        ctx.index_spec,
+        &prefix_key,
+        &prefix_result
+    );
+    ASSERT(status == BTREE_INVALID_ARGUMENTS);
+
+    status = btree_find_prefix_keys(
+        ctx.btree,
+        NULL,
+        &prefix_key,
+        &prefix_result
+    );
+    ASSERT(status == BTREE_INVALID_ARGUMENTS);
+
+    for (uint32_t i = 0; i < ctx.index_spec->index_key->num_columns; i++) {
+        value_free(prefix_key_vals[i]);
+        prefix_key_vals[i] = NULL;
+    }
+    free(prefix_key_vals);
+
+    free(prefix_key.target_key);
+    prefix_key.target_key = NULL;
+
+    btree_test_context_free(&ctx);
+    return 0;
+}
+
+static int test_split_propagation() {
+    BTreeTestContext ctx = {0};
+    ASSERT(btree_test_context_init(&ctx, "build/database13_1.db"));
+
+    /* --- ONE-LEVEL SPLIT PROPAGATION --- */
+    Page *root_page = pager_get_page(
+        ctx.pager,
+        ctx.btree->root_page_num
+    );
+    if (!root_page) { return -1; }
+
+    BTreePage leaf = {0};
+    BTreeStatus status = btree_page_attach_load_validate(
+        ctx.pager,
+        &leaf,
+        root_page,
+        ctx.index_spec
+    );
+    ASSERT(status == BTREE_SUCCESS);
+    ASSERT(leaf.type == BTREE_LEAF_NODE);
+    ASSERT(leaf.is_root == true);
+
+    BTreeSplitResult split_result = {0};
+    BTreeCellContents pending_cell = {0};
+
+    uint32_t key_order = 0;
+
+    while (true) {
+        ASSERT(create_ordered_cell_contents(
+            &pending_cell,
+            ctx.index_spec,
+            key_order,
+            key_order
+        ));
+
+        status = btree_node_insert(
+            ctx.pager,
+            &leaf,
+            &pending_cell,
+            &split_result,
+            ctx.index_spec
+        );
+
+        if (status == BTREE_NEEDS_SPLIT) {
+            break;
+        }
+
+        ASSERT(status == BTREE_SUCCESS);
+
+        free_cell_contents(&pending_cell);
+        key_order++;
+    }
+
+    ASSERT(split_result.split == true);
+
+    uint32_t old_root_page_num = ctx.btree->root_page_num;
+
+    BTreeInsertionResult insertion_res = {0};
+
+    status = btree_split_propagation(
+        ctx.btree,
+        &leaf,
+        &pending_cell,
+        &split_result,
+        ctx.index_spec,
+        &insertion_res
+    );
+    ASSERT(status == BTREE_SUCCESS);
+
+    ASSERT(insertion_res.split_levels == 1);
+    ASSERT(insertion_res.insertion_page_num != UINT32_MAX);
+    ASSERT(ctx.btree->root_page_num != old_root_page_num);
+
+    uint32_t height = 0;
+    ASSERT(get_btree_height(&ctx, &height));
+    ASSERT(height == 2);
+
+    Page *new_root_page = pager_get_page(
+        ctx.pager,
+        ctx.btree->root_page_num
+    );
+    if (!new_root_page) { return -1; }
+
+    BTreePage new_root = {0};
+    status = btree_page_attach_load_validate(
+        ctx.pager,
+        &new_root,
+        new_root_page,
+        ctx.index_spec
+    );
+    ASSERT(status == BTREE_SUCCESS);
+
+    ASSERT(new_root.type == BTREE_INTERNAL_NODE);
+    ASSERT(new_root.is_root == true);
+    ASSERT(new_root.parent_pointer == UINT32_MAX);
+    ASSERT(new_root.cell_count == 1);
+
+    free_cell_contents(&pending_cell);
+    split_result_reset(&split_result);
+
+    btree_test_context_free(&ctx);
+
+    /* --- TWO-LEVEL SPLIT PROPAGATION ---
+     *
+     * Build a real full internal root directly instead of inserting
+     * hundreds of rows through root-to-leaf traversal.
+     *
+     * Then fill its rightmost leaf, split it and propagate the
+     * separator through the already full internal root. */
+    ASSERT(btree_test_context_init(&ctx, "build/database13_2.db"));
+
+    uint32_t rightmost_leaf_page_num = 0;
+    uint32_t next_separator_key_order = 0;
+
+    ASSERT(build_full_internal_root(
+        &ctx,
+        &rightmost_leaf_page_num,
+        &next_separator_key_order
+    ));
+
+    Page *full_root_page = pager_get_page(
+        ctx.pager,
+        ctx.btree->root_page_num
+    );
+    if (!full_root_page) { return -1; }
+
+    BTreePage full_root = {0};
+    status = btree_page_attach_load_validate(
+        ctx.pager,
+        &full_root,
+        full_root_page,
+        ctx.index_spec
+    );
+    ASSERT(status == BTREE_SUCCESS);
+
+    ASSERT(full_root.type == BTREE_INTERNAL_NODE);
+    ASSERT(full_root.is_root == true);
+
+    uint16_t internal_cell_size =
+        ctx.index_spec->key_size + sizeof(uint32_t);
+
+    status = btree_page_has_enough_space(
+        &full_root,
+        internal_cell_size
+    );
+    ASSERT(status == BTREE_NEEDS_SPLIT);
+
+    old_root_page_num = ctx.btree->root_page_num;
+
+    Page *rightmost_leaf_page = pager_get_page(
+        ctx.pager,
+        rightmost_leaf_page_num
+    );
+    if (!rightmost_leaf_page) { return -1; }
+
+    leaf = (BTreePage){0};
+    status = btree_page_attach_load_validate(
+        ctx.pager,
+        &leaf,
+        rightmost_leaf_page,
+        ctx.index_spec
+    );
+    ASSERT(status == BTREE_SUCCESS);
+
+    ASSERT(leaf.type == BTREE_LEAF_NODE);
+    ASSERT(leaf.is_root == false);
+    ASSERT(leaf.parent_pointer == old_root_page_num);
+
+    pending_cell = (BTreeCellContents){0};
+    split_result = (BTreeSplitResult){0};
+
+    key_order = 1000 + next_separator_key_order;
+
+    while (true) {
+        ASSERT(create_ordered_cell_contents(
+            &pending_cell,
+            ctx.index_spec,
+            key_order,
+            key_order
+        ));
+
+        status = btree_node_insert(
+            ctx.pager,
+            &leaf,
+            &pending_cell,
+            &split_result,
+            ctx.index_spec
+        );
+
+        if (status == BTREE_NEEDS_SPLIT) {
+            break;
+        }
+
+        ASSERT(status == BTREE_SUCCESS);
+
+        free_cell_contents(&pending_cell);
+        key_order++;
+    }
+
+    ASSERT(split_result.split == true);
+
+    insertion_res = (BTreeInsertionResult){0};
+
+    status = btree_split_propagation(
+        ctx.btree,
+        &leaf,
+        &pending_cell,
+        &split_result,
+        ctx.index_spec,
+        &insertion_res
+    );
+    ASSERT(status == BTREE_SUCCESS);
+
+    ASSERT(insertion_res.split_levels == 2);
+    ASSERT(insertion_res.insertion_page_num != UINT32_MAX);
+    ASSERT(ctx.btree->root_page_num != old_root_page_num);
+
+    ASSERT(get_btree_height(&ctx, &height));
+    ASSERT(height == 3);
+
+    new_root_page = pager_get_page(
+        ctx.pager,
+        ctx.btree->root_page_num
+    );
+    if (!new_root_page) { return -1; }
+
+    new_root = (BTreePage){0};
+    status = btree_page_attach_load_validate(
+        ctx.pager,
+        &new_root,
+        new_root_page,
+        ctx.index_spec
+    );
+    ASSERT(status == BTREE_SUCCESS);
+
+    ASSERT(new_root.type == BTREE_INTERNAL_NODE);
+    ASSERT(new_root.is_root == true);
+    ASSERT(new_root.parent_pointer == UINT32_MAX);
+    ASSERT(new_root.cell_count == 1);
+
+    uint32_t root_cell_pointer = get_cell_pointer(
+        new_root.data,
+        0
+    );
+
+    uint32_t left_internal_page_num = get_cell_child_pointer(
+        new_root.data,
+        get_cell_offset(root_cell_pointer)
+    );
+
     uint32_t right_internal_page_num =
-        new_root
-            .type_specific_data
-            .rightmost_child_pointer;
+        new_root.type_specific_data.rightmost_child_pointer;
 
     ASSERT(left_internal_page_num == old_root_page_num);
+    ASSERT(right_internal_page_num != old_root_page_num);
 
-    ASSERT(
-        right_internal_page_num >
-        SYSTEM_CATALOG_PAGE_NUM
-    );
-
-    ASSERT(
-        right_internal_page_num <
-        pager->num_pages
-    );
-
-    ASSERT(
-        left_internal_page_num !=
-        right_internal_page_num
-    );
-
-    /* ---------------------------------------------------------
-     * VERIFY BOTH RESULTING INTERNAL NODES
-     * --------------------------------------------------------- */
-
-    Page *left_page = pager_get_page(
-        pager,
+    Page *left_internal_page = pager_get_page(
+        ctx.pager,
         left_internal_page_num
     );
 
-    Page *right_page = pager_get_page(
-        pager,
+    Page *right_internal_page = pager_get_page(
+        ctx.pager,
         right_internal_page_num
     );
 
-    if (!left_page || !right_page) {
-        return -1;
-    }
+    if (!left_internal_page || !right_internal_page) { return -1; }
 
     BTreePage left_internal = {0};
     BTreePage right_internal = {0};
 
     status = btree_page_attach_load_validate(
-        pager,
+        ctx.pager,
         &left_internal,
-        left_page,
-        &index_spec
+        left_internal_page,
+        ctx.index_spec
     );
     ASSERT(status == BTREE_SUCCESS);
 
     status = btree_page_attach_load_validate(
-        pager,
+        ctx.pager,
         &right_internal,
-        right_page,
-        &index_spec
+        right_internal_page,
+        ctx.index_spec
     );
     ASSERT(status == BTREE_SUCCESS);
 
@@ -1482,2161 +3437,792 @@ static int test_internal_node_split() {
     ASSERT(left_internal.is_root == false);
     ASSERT(right_internal.is_root == false);
 
-    ASSERT(
-        left_internal.parent_pointer ==
-        new_root.page->page_num
-    );
-
-    ASSERT(
-        right_internal.parent_pointer ==
-        new_root.page->page_num
-    );
+    ASSERT(left_internal.parent_pointer == new_root.page->page_num);
+    ASSERT(right_internal.parent_pointer == new_root.page->page_num);
 
     ASSERT(left_internal.cell_count > 0);
     ASSERT(right_internal.cell_count > 0);
 
-    /*
-     * Full internal node is split in half.
-     *
-     * One separator gets promoted but the pending separator
-     * from the triggering leaf split is also inserted.
-     *
-     * Therefore the combined number of separators remains
-     * equal to the old full internal node's separator count.
-     */
-    ASSERT(
-        left_internal.cell_count +
-        right_internal.cell_count ==
-        full_internal_cell_count
-    );
-
-    ASSERT(left_internal.page->is_dirty == true);
-    ASSERT(right_internal.page->is_dirty == true);
-
-    /* ---------------------------------------------------------
-     * VERIFY BOTH INTERNAL NODES HAVE FREE SPACE
-     * --------------------------------------------------------- */
-
-    BTreeCellContents internal_cell = {0};
-
-    internal_cell.type = BTREE_INTERNAL_NODE;
-    internal_cell.num_keys =
-        index_spec.index_key->num_columns;
-    internal_cell.key_size =
-        index_spec.key_size;
-    internal_cell.cell_size =
-        internal_cell.key_size +
-        sizeof(uint32_t);
-
-    status = btree_page_has_enough_space(
-        &left_internal,
-        internal_cell.cell_size
-    );
-    ASSERT(status == BTREE_SUCCESS);
-
-    status = btree_page_has_enough_space(
-        &right_internal,
-        internal_cell.cell_size
-    );
-    ASSERT(status == BTREE_SUCCESS);
-
-    /* ---------------------------------------------------------
-     * VERIFY KEY ORDER
-     * --------------------------------------------------------- */
-
-    BTreeKeyView key_view = {0};
-
-    status = get_key(
-        &new_root,
-        0,
-        &key_view,
-        &index_spec
-    );
-    ASSERT(status == BTREE_SUCCESS);
-
-    Value **root_key =
-        serialized_key_to_values(
-            key_view.key,
-            index_spec.index_key->num_columns,
-            &index_spec
-        );
-    if (!root_key) {
-        return -1;
-    }
-
-    /* Last separator in left internal. */
-    status = get_key(
-        &left_internal,
-        left_internal.cell_count - 1,
-        &key_view,
-        &index_spec
-    );
-    ASSERT(status == BTREE_SUCCESS);
-
-    Value **left_last_key =
-        serialized_key_to_values(
-            key_view.key,
-            index_spec.index_key->num_columns,
-            &index_spec
-        );
-    if (!left_last_key) {
-        return -1;
-    }
-
-    int result = 0;
-
-    status = btree_compare(
-        left_last_key,
-        root_key,
-        index_spec.index_key->num_columns,
-        &result
-    );
-    ASSERT(status == BTREE_SUCCESS);
-    ASSERT(result == -1);
-
-    /* First separator remaining in right internal. */
-    status = get_key(
-        &right_internal,
-        0,
-        &key_view,
-        &index_spec
-    );
-    ASSERT(status == BTREE_SUCCESS);
-
-    Value **right_first_key =
-        serialized_key_to_values(
-            key_view.key,
-            index_spec.index_key->num_columns,
-            &index_spec
-        );
-    if (!right_first_key) {
-        return -1;
-    }
-
-    status = btree_compare(
-        root_key,
-        right_first_key,
-        index_spec.index_key->num_columns,
-        &result
-    );
-    ASSERT(status == BTREE_SUCCESS);
-    ASSERT(result == -1);
-
-    /* ---------------------------------------------------------
-     * VERIFY PROMOTED KEY ==
-     * MINIMUM KEY OF RIGHT SUBTREE
-     * --------------------------------------------------------- */
-
-    uint32_t first_right_cell_pointer =
-        get_cell_pointer(
-            right_internal.data,
-            0
-        );
-
-    uint32_t right_leftmost_leaf_num =
-        get_cell_child_pointer(
-            right_internal.data,
-            get_cell_offset(first_right_cell_pointer)
-        );
-
-    Page *right_leftmost_leaf_page =
-        pager_get_page(
-            pager,
-            right_leftmost_leaf_num
-        );
-
-    if (!right_leftmost_leaf_page) {
-        return -1;
-    }
-
-    BTreePage right_leftmost_leaf = {0};
-
-    status = btree_page_attach_load_validate(
-        pager,
-        &right_leftmost_leaf,
-        right_leftmost_leaf_page,
-        &index_spec
-    );
-    ASSERT(status == BTREE_SUCCESS);
-
-    ASSERT(
-        right_leftmost_leaf.type ==
-        BTREE_LEAF_NODE
-    );
-
-    status = get_key(
-        &right_leftmost_leaf,
-        0,
-        &key_view,
-        &index_spec
-    );
-    ASSERT(status == BTREE_SUCCESS);
-
-    Value **right_subtree_min =
-        serialized_key_to_values(
-            key_view.key,
-            index_spec.index_key->num_columns,
-            &index_spec
-        );
-    if (!right_subtree_min) {
-        return -1;
-    }
-
-    status = btree_compare(
-        root_key,
-        right_subtree_min,
-        index_spec.index_key->num_columns,
-        &result
-    );
-    ASSERT(status == BTREE_SUCCESS);
-    ASSERT(result == 0);
-
-    /* ---------------------------------------------------------
-     * VERIFY ALL CHILD POINTERS + PARENT REFERENCES
-     * --------------------------------------------------------- */
-
-    for (uint32_t i = 0;
-         i < left_internal.cell_count + 1;
-         i++) {
-
-        uint32_t child_pointer = 0;
-
-        if (i == left_internal.cell_count) {
-            child_pointer =
-                left_internal
-                    .type_specific_data
-                    .rightmost_child_pointer;
-        } else {
-            uint32_t cell_pointer =
-                get_cell_pointer(
-                    left_internal.data,
-                    i
-                );
-
-            child_pointer =
-                get_cell_child_pointer(
-                    left_internal.data,
-                    get_cell_offset(cell_pointer)
-                );
-        }
-
-        Page *child_page =
-            pager_get_page(
-                pager,
-                child_pointer
-            );
-
-        if (!child_page) {
-            return -1;
-        }
-
-        BTreePage child = {0};
-
-        status = btree_page_attach_load_validate(
-            pager,
-            &child,
-            child_page,
-            &index_spec
-        );
-        ASSERT(status == BTREE_SUCCESS);
-
-        ASSERT(child.type == BTREE_LEAF_NODE);
-        ASSERT(child.is_root == false);
-
-        ASSERT(
-            child.parent_pointer ==
-            left_internal.page->page_num
-        );
-    }
-
-    for (uint32_t i = 0;
-         i < right_internal.cell_count + 1;
-         i++) {
-
-        uint32_t child_pointer = 0;
-
-        if (i == right_internal.cell_count) {
-            child_pointer =
-                right_internal
-                    .type_specific_data
-                    .rightmost_child_pointer;
-        } else {
-            uint32_t cell_pointer =
-                get_cell_pointer(
-                    right_internal.data,
-                    i
-                );
-
-            child_pointer =
-                get_cell_child_pointer(
-                    right_internal.data,
-                    get_cell_offset(cell_pointer)
-                );
-        }
-
-        Page *child_page =
-            pager_get_page(
-                pager,
-                child_pointer
-            );
-
-        if (!child_page) {
-            return -1;
-        }
-
-        BTreePage child = {0};
-
-        status = btree_page_attach_load_validate(
-            pager,
-            &child,
-            child_page,
-            &index_spec
-        );
-        ASSERT(status == BTREE_SUCCESS);
-
-        ASSERT(child.type == BTREE_LEAF_NODE);
-        ASSERT(child.is_root == false);
-
-        ASSERT(
-            child.parent_pointer ==
-            right_internal.page->page_num
-        );
-    }
-
-    /* ---------------------------------------------------------
-     * VERIFY EVERY ALLOCATED BTREE PAGE REMAINS REACHABLE
-     * --------------------------------------------------------- */
-
-    BTreePageCollection visited = {0};
-
-    status = btree_traverse_reachable_pages(
-        test_btree.btree,
-        &visited
-    );
-    ASSERT(status == BTREE_SUCCESS);
-
-    ASSERT(
-        visited.count ==
-        pager->num_pages - 2
-    );
-
-    /* ---------------------------------------------------------
-     * CLEANUP
-     *
-     * NO close/reopen in the middle of this unit test.
-     * test_btree_free() closes the Pager normally at the end.
-     * --------------------------------------------------------- */
-
-    value_free_array(
-        root_key,
-        index->key->num_columns
-    );
-
-    value_free_array(
-        left_last_key,
-        index->key->num_columns
-    );
-
-    value_free_array(
-        right_first_key,
-        index->key->num_columns
-    );
-
-    value_free_array(
-        right_subtree_min,
-        index->key->num_columns
-    );
-
-    split_result_reset(&split_result);
-
-    value_free_array(
-        cell_contents.keys,
-        index->key->num_columns
-    );
-
-    value_free_array(
-        cell_contents.BTreePayload.row->values,
-        index->key->num_columns
-    );
-
-    free(cell_contents.BTreePayload.row);
-
-    index_spec_free(&index_spec);
-
-    test_btree_free(
-        &test_btree,
-        &index,
-        &pager
-    );
-
-    return 0;
-}
-
-/* Test root node split handling. */
-static int test_root_node_split() {
-    TestBTree test_btree = {0};
-    Pager *pager = NULL;
-    Index *index = NULL;
-    uint8_t levels = 1;
-    char *pathname = "build/database6.db";
-    ASSERT(test_btree_full_init(&test_btree, &pager, &index, levels, pathname));
-
-    BTreePage btree_page = {0};
-    btree_page_attach(&btree_page, pager->pages[2]);
-    btree_page_init_empty_leaf(&btree_page);
-    btree_page_sync(pager, &btree_page);
-
-    BTreeIndexSpec index_spec = {0};
-    ASSERT(index_spec_init(&index_spec, index));
-
-    BTreeSearchKey search_key = {0};
-    Value **target_key_vals = (Value **) calloc(index_spec.index_key->num_columns, sizeof(Value *));
-    if (!target_key_vals) {
-        return -1;
-    }
-
-    BTreeCellContents cell_contents = {0};
-    ASSERT(cell_contents_init(&cell_contents));
-
-    BTreeSplitResult split_result = {0};
-
-    BTreeStatus status = BTREE_SUCCESS;
-    /* ---- INSERT UNTIL FULL: (upper limit was found to be 131) ---- */
-    for (uint32_t i = 0; i < 124; i++) {
-        for (uint32_t j = 0; j < cell_contents.num_keys; j++) {
-            uint32_t val = j * 20 + i * 5;
-   
-            if (cell_contents.keys[j]) {
-                value_free(cell_contents.keys[j]);
-            } 
-            if (cell_contents.BTreePayload.row->values[j]) {
-                value_free(cell_contents.BTreePayload.row->values[j]);
-            }
-            cell_contents.keys[j] = value_create(UNSIGNED_INTEGER, (void *) &val);
-            cell_contents.BTreePayload.row->values[j] = value_copy(cell_contents.keys[j]);
-            target_key_vals[j] = cell_contents.keys[j];
-            
-        }
-
-        status = btree_node_insert(pager, &btree_page, &cell_contents, &split_result, &index_spec);
-
-    }
-    ASSERT(search_key_init(&search_key, &index_spec, target_key_vals));
-    ASSERT(status == BTREE_NEEDS_SPLIT);
-    ASSERT(split_result.split == true);
-
-    status = btree_leaf_node_split(pager, &btree_page, &index_spec, &split_result);
-    ASSERT(status == BTREE_SUCCESS);
-    ASSERT(split_result.right_page == pager->pages[3]->page_num);
-
-    ASSERT(pager->pages[4] == NULL); // New root page doesn't exist yet.
-    Value **separator_key = (Value **) calloc(index_spec.index_key->num_columns, sizeof(Value *));
-    ASSERT(separator_key);
-
-    uint8_t *separator_offset = (uint8_t *) split_result.separator_key;
-    for (uint32_t i = 0; i < index_spec.index_key->num_columns; i++) {
-        if (separator_key[i]) {
-            value_free(separator_key[i]);
-        }
-        separator_key[i] = value_create(index_spec.column_types[i], separator_offset);
-
-        separator_offset += get_data_type_size(index_spec.column_types[i]);
-    }
-
-    uint32_t right_page_num = split_result.right_page;
-    status = btree_root_split(test_btree.btree, &btree_page, &split_result, &index_spec);
-    ASSERT(status == BTREE_SUCCESS);
-    ASSERT(pager->pages[4]);
-
-    BTreePage new_root_page = {0};
-    btree_page_attach(&new_root_page, pager->pages[4]);
-    btree_page_load(&new_root_page);
-
-    uint32_t child_pointer = get_cell_child_pointer(new_root_page.data, get_cell_offset(get_cell_pointer(new_root_page.data, 0))); 
-    ASSERT(child_pointer == btree_page.page->page_num);
-    ASSERT(new_root_page.type_specific_data.rightmost_child_pointer == right_page_num);
-
-    ASSERT(test_btree.btree->root_page_num == new_root_page.page->page_num);
-    ASSERT(btree_page.is_root == false);
-    ASSERT(btree_page.parent_pointer == new_root_page.page->page_num);
-    ASSERT(new_root_page.is_root == true);
-    ASSERT(new_root_page.parent_pointer == UINT32_MAX);
-
-    BTreePage right_page = {0};
-    btree_page_attach(&right_page, pager->pages[right_page_num]);
-    btree_page_load(&right_page);
-    ASSERT(right_page.is_root == false);
-    ASSERT(right_page.parent_pointer == new_root_page.page->page_num);
-
-    BTreeKeyView key_view = {0};
-    status = get_key(&new_root_page, 0, &key_view, &index_spec);
-    ASSERT(status == BTREE_SUCCESS);
-
-    Value **new_root_keys = (Value **) calloc(index_spec.index_key->num_columns, sizeof(Value *));
-    ASSERT(new_root_keys);
-
-    for (uint32_t i = 0; i < index_spec.index_key->num_columns; i++) {
-        if (new_root_keys[i]) {
-            value_free(new_root_keys[i]);
-        }
-        new_root_keys[i] = value_create(index_spec.column_types[i], key_view.key);
-        
-        int result = 0;
-        ASSERT(value_compare(new_root_keys[i], separator_key[i], &result));
-        ASSERT(result == 0);
-        key_view.key += get_data_type_size(index_spec.column_types[i]);
-    }
-
-    index_spec_free(&index_spec);
-    value_free_array(cell_contents.keys, index->key->num_columns);
-    value_free_array(cell_contents.BTreePayload.row->values, index->key->num_columns);
-    value_free_array(separator_key, index_spec.index_key->num_columns);
-    value_free_array(new_root_keys, index_spec.index_key->num_columns);
-    free(target_key_vals);
-    test_btree_free(&test_btree, &index, &pager);
-    free(search_key.target_key);
-    return 0;
-}
-
-/* Test if all pages were reached in a multi-level B+Tree. */
-static int test_reachable_page_traversal() {
-    TestBTree test_btree = {0};
-    Pager *pager = NULL;
-    Index *index = NULL;
-    uint8_t levels = 1;
-    char *pathname = "build/database7_1.db";
-    ASSERT(test_btree_full_init(&test_btree, &pager, &index, levels, pathname));
-
     BTreePageCollection visited_pages = {0};
 
-    /* ---- 1 LEVEL TREE: ---- */
-    BTreeStatus status = btree_traverse_reachable_pages(test_btree.btree, &visited_pages);
+    status = btree_traverse_reachable_pages(
+        ctx.btree,
+        &visited_pages
+    );
     ASSERT(status == BTREE_SUCCESS);
-    
-    for (uint32_t i = 2; i < pager->num_pages; i++) {
-        ASSERT(btree_collection_contains(&visited_pages, i));
-    }
+    ASSERT(visited_pages.count == ctx.pager->num_pages - 2);
 
-    ASSERT(visited_pages.page_numbers[0] == 2);
-    /* ---- 2 LEVEL TREE: ---- */ 
-    test_btree_free(&test_btree, &index, &pager);
-    visited_pages.count = 0;
-    levels = 2;
-    pathname = "build/database7_2.db";
-    ASSERT(test_btree_full_init(&test_btree, &pager, &index, levels, pathname));
-
-    status = btree_traverse_reachable_pages(test_btree.btree, &visited_pages);
-    ASSERT(status == BTREE_SUCCESS);
-    
-    for (uint32_t i = 2; i < pager->num_pages; i++) {
-        ASSERT(btree_collection_contains(&visited_pages, i));
-    }
-
-    ASSERT(visited_pages.page_numbers[0] == 2);
-    ASSERT(visited_pages.page_numbers[1] == 3);
-    ASSERT(visited_pages.page_numbers[2] == 4);
-    /* ---- 3 LEVEL TREE: ---- */
-    test_btree_free(&test_btree, &index, &pager);
-    visited_pages.count = 0;
-    levels = 3;
-    pathname = "build/database7_3.db";
-    ASSERT(test_btree_full_init(&test_btree, &pager, &index, levels, pathname));
-
-    status = btree_traverse_reachable_pages(test_btree.btree, &visited_pages);
-    ASSERT(status == BTREE_SUCCESS);
-    
-    for (uint32_t i = 2; i < pager->num_pages; i++) {
-        ASSERT(btree_collection_contains(&visited_pages, i));
-    }
-
-    ASSERT(visited_pages.page_numbers[0] == 2);
-    ASSERT(visited_pages.page_numbers[1] == 3);
-    ASSERT(visited_pages.page_numbers[2] == 5);
-    ASSERT(visited_pages.page_numbers[3] == 6);
-    ASSERT(visited_pages.page_numbers[4] == 4);
-    ASSERT(visited_pages.page_numbers[5] == 7);
-    ASSERT(visited_pages.page_numbers[6] == 8);
-
-    test_btree_free(&test_btree, &index, &pager);
-    return 0;
-}
-
-/* Test exact key lookup. */
-static int test_exact_key_lookup() {
-    TestBTree test_btree = {0};
-    Pager *pager = NULL;
-    Index *index = NULL;
-    uint8_t levels = 3;
-    char *pathname = "build/database8_1.db";
-    /* MULTIPLE LEVEL BTREE KEY LOOKUP */
-    ASSERT(test_btree_full_init(&test_btree, &pager, &index, levels, pathname));
-
-    BTreeIndexSpec index_spec = {0};
-    ASSERT(index_spec_init(&index_spec, index));
-
+    /* Pending cell must still be searchable after both split levels. */
     BTreeSearchKey search_key = {0};
-    Value **target_key_vals = (Value **) calloc(index_spec.index_key->num_columns, sizeof(Value *));
-    if (!target_key_vals) {
-        return -1;
-    }
-
-    BTreeCellContents cell_contents = {0};
     BTreeSearchResult search_result = {0};
 
-    for (uint32_t i = 0; i < index_spec.index_key->num_columns; i++) {
-        uint32_t val = i * 10 + 45;
+    ASSERT(ordered_search_key_init(
+        &search_key,
+        ctx.index_spec,
+        key_order
+    ));
 
-        target_key_vals[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
-    }
-    ASSERT(search_key_init(&search_key, &index_spec, target_key_vals));
-
-    /* ---- TEST LOOKUP EXISTING KEY + KEY IN THE BEGINNING ---- */
-    BTreeStatus status = btree_find_exact_key(test_btree.btree, &search_key, &search_result, &cell_contents);
+    status = btree_root_to_leaf(
+        ctx.btree,
+        &search_key,
+        &search_result,
+        BTREE_UPPER_BOUND
+    );
     ASSERT(status == BTREE_SUCCESS);
-    ASSERT(search_result.found == true);
     ASSERT(search_result.exact_match == true);
-    ASSERT(search_result.page == test_btree.btree->pager->pages[5]);
-    ASSERT(search_result.result_index == 0);
 
-    ASSERT(cell_contents.type == BTREE_LEAF_NODE);
-    ASSERT(cell_contents.num_keys == 3);
-    
-    for (uint32_t i = 0; i < index_spec.index_key->num_columns; i++) {
-        int result = 0;
-        ASSERT(value_compare(cell_contents.keys[i], target_key_vals[i], &result));
-        ASSERT(result == 0);
-
-        ASSERT(value_compare(cell_contents.BTreePayload.row->values[i], target_key_vals[i], &result));
-        ASSERT(result == 0);
-    }
-    ASSERT(cell_contents.key_size == 3 * get_data_type_size(UNSIGNED_INTEGER));
-    ASSERT(cell_contents.cell_size == cell_contents.key_size + sizeof(uint8_t) +
-         sizeof(uint32_t) + 3*get_data_type_size(UNSIGNED_INTEGER));
-
-    ASSERT(cell_contents.BTreePayload.row->is_deleted == false);
-    ASSERT(cell_contents.BTreePayload.row->n_columns == index_spec.index_key->num_columns);
-    
-    /* ---- TEST LOOKUP EXISTING KEY AT THE END ---- */
-    for (uint32_t i = 0; i < index_spec.index_key->num_columns; i++) {
-        uint32_t val = i * 10 + 55;
-
-        if (target_key_vals[i]) {
-            value_free(target_key_vals[i]);
-        }
-        target_key_vals[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
-
-        if (cell_contents.BTreePayload.row->values[i]) {
-            value_free(cell_contents.BTreePayload.row->values[i]);
-        }
-        if (cell_contents.keys[i]) {
-            value_free(cell_contents.keys[i]);
-        }
-    }
-    ASSERT(search_key_init(&search_key, &index_spec, target_key_vals));
-
-    status = btree_find_exact_key(test_btree.btree, &search_key, &search_result, &cell_contents);
-    ASSERT(status == BTREE_SUCCESS);
-    ASSERT(search_result.found == true);
-    ASSERT(search_result.exact_match == true);
-    ASSERT(search_result.page == test_btree.btree->pager->pages[5]);
-    ASSERT(search_result.result_index == 2);
-
-    ASSERT(cell_contents.type == BTREE_LEAF_NODE);
-    ASSERT(cell_contents.num_keys == 3);
-
-    for (uint32_t i = 0; i < index_spec.index_key->num_columns; i++) {
-        int result = 0;
-        ASSERT(value_compare(cell_contents.keys[i], target_key_vals[i], &result));
-        ASSERT(result == 0);
-
-        ASSERT(value_compare(cell_contents.BTreePayload.row->values[i], target_key_vals[i], &result));
-        ASSERT(result == 0);
-    }
-
-    /* ---- TEST LOOKUP OF MISSING KEY ---- */
-    for (uint32_t i = 0; i < index_spec.index_key->num_columns; i++) {
-        uint32_t val = i * 10 + 1000;
-
-        if (target_key_vals[i]) {
-            value_free(target_key_vals[i]);
-        }
-        target_key_vals[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
-
-        if (cell_contents.BTreePayload.row->values[i]) {
-            value_free(cell_contents.BTreePayload.row->values[i]);
-        }
-        if (cell_contents.keys[i]) {
-            value_free(cell_contents.keys[i]);
-        }
-    }
-    ASSERT(search_key_init(&search_key, &index_spec, target_key_vals));
-
-    status = btree_find_exact_key(test_btree.btree, &search_key, &search_result, &cell_contents);
-    ASSERT(status == BTREE_NOT_FOUND);
-    ASSERT(search_result.found == false);
-    ASSERT(search_result.exact_match == false);
-    ASSERT(search_result.page == NULL);
-    ASSERT(search_result.result_index == UINT16_MAX);
-
-    /* ---- TEST EMPTY BTREE LOOKUP ---- */
-    levels = 1;
-    pathname = "build/database8_2.db";
-    test_btree_free(&test_btree, &index, &pager);
-    ASSERT(test_btree_full_init(&test_btree, &pager, &index, levels, pathname));
-    index_spec.index_key = index->key;
-
-    BTreePage btree_page = {0};
-    status = btree_page_attach_load_validate(pager, &btree_page, pager->pages[2], &index_spec);
-    if (status != BTREE_SUCCESS) {
-        return -1;
-    }
-
-    for (uint32_t i = 0; i < btree_page.cell_count; i++) {
-        status = btree_remove_cell(&btree_page, 0);
-        if (status != BTREE_SUCCESS) { return -1; }
-    } 
-    btree_page_sync(pager, &btree_page);
-
-    status = btree_find_exact_key(test_btree.btree, &search_key, &search_result, &cell_contents);
-    ASSERT(status == BTREE_NOT_FOUND);
-    ASSERT(search_result.found == false);
-    ASSERT(search_result.exact_match == false);
-    ASSERT(search_result.page == NULL);
-    ASSERT(search_result.result_index == UINT16_MAX);
-
-    index_spec_free(&index_spec);
-    free(cell_contents.BTreePayload.row->values);
-    free(cell_contents.BTreePayload.row);
-    free(cell_contents.keys);
-    value_free_array(target_key_vals, index_spec.index_key->num_columns);
-    test_btree_free(&test_btree, &index, &pager);
-    free(search_key.target_key);
-    return 0;
-}
-
-/* Test range scan. */
-static int test_range_query() {
-    TestBTree test_btree = {0};
-    Pager *pager = NULL;
-    Index *index = NULL;
-    uint8_t levels = 3;
-    char *pathname = "build/database9_1.db";
-    ASSERT(test_btree_full_init(&test_btree, &pager, &index, levels, pathname));
-
-    BTreeIndexSpec index_spec = {0};
-    ASSERT(index_spec_init(&index_spec, index));
-
-    BTreeSearchKey start_search_key = {0};
-    Value **start_key_vals = (Value **) calloc(index_spec.index_key->num_columns, sizeof(Value *));
-    if (!start_key_vals) {
-        return -1;
-    }
-
-    BTreeSearchKey end_search_key = {0};
-    Value **end_key_vals = (Value **) calloc(index_spec.index_key->num_columns, sizeof(Value *));
-    if (!end_key_vals) {
-        return -1;
-    }
-
-    BTreeRangeResult range_result = {0};
-
-    /* ---- RANGE CONTAINED IN A SINGLE LEAF & INCLUSIVE BOUNDS ---- */
-    for (uint32_t i = 0; i < index_spec.index_key->num_columns; i++) {
-        uint32_t val = i * 10 + 45;
-        start_key_vals[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
-
-        val = i * 10 + 55;
-        end_key_vals[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
-    }
-    ASSERT(search_key_init(&start_search_key, &index_spec, start_key_vals));
-    ASSERT(search_key_init(&end_search_key, &index_spec, end_key_vals));
-
-    BTreeStatus status = btree_find_range_keys(test_btree.btree, &index_spec, &start_search_key, true, &end_search_key, true, &range_result);
-    ASSERT(status == BTREE_SUCCESS);
-    ASSERT(range_result.count == 3);
-
-    uint32_t key_counter = 0;
-    ASSERT(verify_page_keys(pager->pages[test_btree.page_nums[3]], &range_result, &index_spec, &key_counter));
-    ASSERT(key_counter == range_result.count);
-
-    /* ---- RANGE CONTAINED IN MULTIPLE LINKED LEAF NODES & EXCLUSIVE BOUNDS ---- */
-    for (uint32_t i = 0; i < index_spec.index_key->num_columns; i++) {
-        uint32_t val = i * 10 + 45;
-        if (start_key_vals[i]) {
-            value_free(start_key_vals[i]);
-        }
-        start_key_vals[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
-
-        val = i * 10 + 70;
-        if (end_key_vals[i]) {
-            value_free(end_key_vals[i]);
-        }
-        end_key_vals[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
-    }
-    ASSERT(search_key_init(&start_search_key, &index_spec, start_key_vals));
-    ASSERT(search_key_init(&end_search_key, &index_spec, end_key_vals));
-    status = btree_find_range_keys(test_btree.btree, &index_spec, &start_search_key, false, &end_search_key, false, &range_result);
-    ASSERT(status == BTREE_SUCCESS);
-    ASSERT(range_result.count == 4);
-
-    key_counter = 0;
-    ASSERT(verify_page_keys(pager->pages[test_btree.page_nums[3]], &range_result, &index_spec, &key_counter));
-    ASSERT(verify_page_keys(pager->pages[test_btree.page_nums[4]], &range_result, &index_spec, &key_counter));
-    ASSERT(key_counter == range_result.count);
-
-    /* ---- MIXED INCLUSIVE/EXLUSIVE BOUNDS ---- 
-     * ---- UNBOUNDED LOWER RANGE ---- */
-    ASSERT(search_key_init(&start_search_key, &index_spec, start_key_vals));
-    ASSERT(search_key_init(&end_search_key, &index_spec, end_key_vals));
-    status = btree_find_range_keys(test_btree.btree, &index_spec, NULL, false, &end_search_key, true, &range_result);
-    ASSERT(status == BTREE_SUCCESS);
-    ASSERT(range_result.count == 6);
-
-    key_counter = 0;
-    ASSERT(verify_page_keys(pager->pages[test_btree.page_nums[3]], &range_result, &index_spec, &key_counter));
-    ASSERT(verify_page_keys(pager->pages[test_btree.page_nums[4]], &range_result, &index_spec, &key_counter));
-    ASSERT(key_counter == range_result.count);
-
-    /* ---- UNBOUNDED UPPER RANGE ---- */
-    status = btree_find_range_keys(test_btree.btree, &index_spec, &start_search_key, true, NULL, false, &range_result);
-    ASSERT(status == BTREE_SUCCESS);
-    ASSERT(range_result.count == 12);
-
-    key_counter = 0;
-    ASSERT(verify_page_keys(pager->pages[test_btree.page_nums[3]], &range_result, &index_spec, &key_counter));
-    ASSERT(verify_page_keys(pager->pages[test_btree.page_nums[4]], &range_result, &index_spec, &key_counter));
-    ASSERT(verify_page_keys(pager->pages[test_btree.page_nums[5]], &range_result, &index_spec, &key_counter));
-    ASSERT(verify_page_keys(pager->pages[test_btree.page_nums[6]], &range_result, &index_spec, &key_counter));
-    ASSERT(key_counter == range_result.count);
-
-    /* ---- EMPTY MATCHING RANGE ---- */
-    for (uint32_t i = 0; i < index_spec.index_key->num_columns; i++) {
-        uint32_t val = i * 10 + 70;
-        if (start_key_vals[i]) {
-            value_free(start_key_vals[i]);
-        }
-        start_key_vals[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
-
-        val = i * 10 + 45;
-        if (end_key_vals[i]) {
-            value_free(end_key_vals[i]);
-        }
-        end_key_vals[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
-    }
-    ASSERT(search_key_init(&start_search_key, &index_spec, start_key_vals));
-    ASSERT(search_key_init(&end_search_key, &index_spec, end_key_vals));
-    
-    status = btree_find_range_keys(test_btree.btree, &index_spec, &start_search_key, true, &end_search_key, true, &range_result);
-    ASSERT(status == BTREE_SUCCESS);
-    ASSERT(range_result.count == 0);
-
-    /* ---- RANGE CONTAINING ONLY 1 KEY ---- */
-    for (uint32_t i = 0; i < index_spec.index_key->num_columns; i++) {
-        uint32_t val = i * 10 + 70;
-        if (start_key_vals[i]) {
-            value_free(start_key_vals[i]);
-        }
-        start_key_vals[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
-
-        if (end_key_vals[i]) {
-            value_free(end_key_vals[i]);
-        }
-        end_key_vals[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
-    }
-    ASSERT(search_key_init(&start_search_key, &index_spec, start_key_vals));
-    ASSERT(search_key_init(&end_search_key, &index_spec, end_key_vals));
-    
-    status = btree_find_range_keys(test_btree.btree, &index_spec, &start_search_key, true, &end_search_key, true, &range_result);
-    ASSERT(status == BTREE_SUCCESS);
-    ASSERT(range_result.count == 1);
-
-    key_counter = 0;
-    ASSERT(verify_page_keys(pager->pages[test_btree.page_nums[4]], &range_result, &index_spec, &key_counter));
-    ASSERT(key_counter == range_result.count);
-
-    /* ---- START SEARCH KEY LOWER THAN FIRST LEAF'S FIRST KEY ---- */
-    for (uint32_t i = 0; i < index_spec.index_key->num_columns; i++) {
-        uint32_t val = i * 10 + 35;
-        if (start_key_vals[i]) {
-            value_free(start_key_vals[i]);
-        }
-        start_key_vals[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
-
-        val = i * 10 + 70;
-        if (end_key_vals[i]) {
-            value_free(end_key_vals[i]);
-        }
-        end_key_vals[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
-    }
-    ASSERT(search_key_init(&start_search_key, &index_spec, start_key_vals));
-    ASSERT(search_key_init(&end_search_key, &index_spec, end_key_vals));
-    
-    status = btree_find_range_keys(test_btree.btree, &index_spec, &start_search_key, false, &end_search_key, false, &range_result);
-    ASSERT(status == BTREE_SUCCESS);
-    ASSERT(range_result.count == 5);
-
-    key_counter = 0;
-    ASSERT(verify_page_keys(pager->pages[test_btree.page_nums[3]], &range_result, &index_spec, &key_counter));
-    ASSERT(verify_page_keys(pager->pages[test_btree.page_nums[4]], &range_result, &index_spec, &key_counter));
-    ASSERT(key_counter == range_result.count);
-
-    /* ---- START SEARCH KEY BIGGER THAN LAST LEAF'S LAST KEY ---- */
-    for (uint32_t i = 0; i < index_spec.index_key->num_columns; i++) {
-        uint32_t val = i * 10 + 90;
-        if (start_key_vals[i]) {
-            value_free(start_key_vals[i]);
-        }
-        start_key_vals[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
-
-        val = i * 10 + 110;
-        if (end_key_vals[i]) {
-            value_free(end_key_vals[i]);
-        }
-        end_key_vals[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
-    }
-    ASSERT(search_key_init(&start_search_key, &index_spec, start_key_vals));
-    ASSERT(search_key_init(&end_search_key, &index_spec, end_key_vals));
-    
-    status = btree_find_range_keys(test_btree.btree, &index_spec, &start_search_key, false, &end_search_key, false, &range_result);
-    ASSERT(status == BTREE_SUCCESS);
-    ASSERT(range_result.count == 2);
-
-    key_counter = 0;
-    ASSERT(verify_page_keys(pager->pages[test_btree.page_nums[5]], &range_result, &index_spec, &key_counter));
-    ASSERT(verify_page_keys(pager->pages[test_btree.page_nums[6]], &range_result, &index_spec, &key_counter));
-    ASSERT(key_counter == range_result.count);
-
-    /* ---- INVALID SIBLING POINTERS OR CYCLIC CHAINS ---- */
-    for (uint32_t i = 0; i < index_spec.index_key->num_columns; i++) {
-        uint32_t val = i * 10 + 45;
-        if (start_key_vals[i]) {
-            value_free(start_key_vals[i]);
-        }
-        start_key_vals[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
-
-        val = i * 10 + 70;
-        if (end_key_vals[i]) {
-            value_free(end_key_vals[i]);
-        }
-        end_key_vals[i] = value_create(UNSIGNED_INTEGER, (void *) &val);
-    }
-    ASSERT(search_key_init(&start_search_key, &index_spec, start_key_vals));
-    ASSERT(search_key_init(&end_search_key, &index_spec, end_key_vals));
-    
-    set_leaf_next(pager->pages[test_btree.page_nums[3]]->page_data, 50);
-    status = btree_find_range_keys(test_btree.btree, &index_spec, &start_search_key, false, &end_search_key, false, &range_result);
-    ASSERT(status == BTREE_CORRUPT_PAGE);
-
-    Page *page = pager_get_page(pager, test_btree.page_nums[3]);
-    if (!page) {
-        return -1;
-    }
-
-    set_leaf_next(pager->pages[test_btree.page_nums[3]]->page_data, MAX_PAGES);
-    status = btree_find_range_keys(test_btree.btree, &index_spec, &start_search_key, false, &end_search_key, false, &range_result);
-    ASSERT(status == BTREE_CORRUPT_PAGE);
-
-    page = pager_get_page(pager, test_btree.page_nums[3]);
-    if (!page) {
-        return -1;
-    }
-
-    set_leaf_next(pager->pages[test_btree.page_nums[4]]->page_data, test_btree.page_nums[3]);
-    status = btree_find_range_keys(test_btree.btree, &index_spec, &start_search_key, false, &end_search_key, false, &range_result);
-    ASSERT(status == BTREE_CORRUPT_PAGE);
-
-    index_spec_free(&index_spec);
-    value_free_array(start_key_vals, index_spec.index_key->num_columns);
-    value_free_array(end_key_vals, index_spec.index_key->num_columns);
-    test_btree_free(&test_btree, &index, &pager);
-    free(start_search_key.target_key);
-    free(end_search_key.target_key);
-    return 0;
-}
-
-/* Test prefix key search. */
-static int test_find_prefix_keys() {
-    TestBTree test_btree = {0};
-    Pager *pager = NULL;
-    Index *index = NULL;
-    uint8_t levels = 1;
-    char *pathname = "build/database11.db";
-    ASSERT(test_btree_full_init(&test_btree, &pager, &index, levels, pathname));
-
-    BTreeIndexSpec index_spec = {0};
-    ASSERT(index_spec_init(&index_spec, index));
-
-    BTreeCellContents cell_contents = {0};
-    ASSERT(cell_contents_init(&cell_contents));
-
-    BTreeSplitResult split_result = {0};
-
-    BTreeSearchKey search_key = {0};
-    Value **target_key_vals = (Value **) calloc(index_spec.index_key->num_columns, sizeof(Value *));
-    if (!target_key_vals) {
-        return -1;
-    }
-
-    /*
-     * Insert 250 keys sharing the same first key component:
-     *
-     * (1000, 0, 0)
-     * (1000, 0, 1)
-     * ...
-     * (1000, 0, 4)
-     * (1000, 1, 0)
-     * ...
-     * (1000, 49, 4)
-     *
-     * This guarantees:
-     * - one-component prefix with many matches
-     * - two-component prefix with 5 matches
-     * - full-key prefix with exactly one match
-     * - enough entries to cross multiple leaf pages
-     * - multiple leaf splits before prefix lookup
-     */
-    uint32_t split_count = 0;
-
-    for (uint32_t i = 0; i < 250; i++) {
-        uint32_t vals[3] = {
-            1000,
-            i / 5,
-            i % 5
-        };
-
-        for (uint32_t j = 0; j < cell_contents.num_keys; j++) {
-            if (cell_contents.keys[j]) {
-                value_free(cell_contents.keys[j]);
-            }
-
-            if (cell_contents.BTreePayload.row->values[j]) {
-                value_free(cell_contents.BTreePayload.row->values[j]);
-            }
-
-            cell_contents.keys[j] = value_create(
-                UNSIGNED_INTEGER,
-                (void *) &vals[j]
-            );
-            if (!cell_contents.keys[j]) {
-                return -1;
-            }
-
-            cell_contents.BTreePayload.row->values[j] =
-                value_copy(cell_contents.keys[j]);
-
-            if (!cell_contents.BTreePayload.row->values[j]) {
-                return -1;
-            }
-
-            target_key_vals[j] = cell_contents.keys[j];
-        }
-
-        ASSERT(search_key_init(
-            &search_key,
-            &index_spec,
-            target_key_vals
-        ));
-
-        BTreeSearchResult search_result = {0};
-
-        BTreeStatus status = btree_root_to_leaf(
-            test_btree.btree,
-            &search_key,
-            &search_result,
-            BTREE_UPPER_BOUND
-        );
-        ASSERT(status == BTREE_SUCCESS);
-        ASSERT(search_result.page);
-
-        BTreePage leaf_page = {0};
-        status = btree_page_attach_load_validate(
-            pager,
-            &leaf_page,
-            search_result.page,
-            &index_spec
-        );
-        if (status != BTREE_SUCCESS) {
-            return -1;
-        }
-
-        ASSERT(leaf_page.type == BTREE_LEAF_NODE);
-
-        status = btree_node_insert(
-            pager,
-            &leaf_page,
-            &cell_contents,
-            &split_result,
-            &index_spec
-        );
-
-        BTreeInsertionResult insertion_res = {0};
-        insertion_result_reset(&insertion_res);
-        if (status == BTREE_NEEDS_SPLIT) {
-            split_count++;
-
-            status = btree_split_propagation(
-                test_btree.btree,
-                &leaf_page,
-                &cell_contents,
-                &split_result,
-                &index_spec,
-                &insertion_res
-            );
-            ASSERT(status == BTREE_SUCCESS);
-        } else {
-            ASSERT(status == BTREE_SUCCESS);
-        }
-    }
-
-    /* Tree must have undergone multiple splits before prefix lookup. */
-    ASSERT(split_count > 1);
-
-    BTreeSearchKey prefix_key = {0};
-    Value **prefix_key_vals = (Value **) calloc(
-        index_spec.index_key->num_columns,
-        sizeof(Value *)
-    );
-    if (!prefix_key_vals) {
-        return -1;
-    }
-
-    BTreeRangeResult range_result = {0};
-
-    /* ---- PREFIX CONTAINING ONE KEY COMPONENT ----
-     * ---- MULTIPLE MATCHES ----
-     * ---- CROSS MULTIPLE LINKED LEAF PAGES ----
-     * ---- RESULT KEY ORDER ----
-     * ---- ONLY MATCHING PREFIXES ---- */
-    uint32_t prefix_vals[3] = {1000, 0, 0};
-
-    for (uint32_t i = 0; i < index_spec.index_key->num_columns; i++) {
-        prefix_key_vals[i] = value_create(
-            UNSIGNED_INTEGER,
-            (void *) &prefix_vals[i]
-        );
-        if (!prefix_key_vals[i]) {
-            return -1;
-        }
-    }
-
-    ASSERT(search_key_init(
-        &prefix_key,
-        &index_spec,
-        prefix_key_vals
-    ));
-    prefix_key.num_target_keys = 1;
-
-    BTreeStatus status = btree_find_prefix_keys(
-        test_btree.btree,
-        &index_spec,
-        &prefix_key,
-        &range_result
-    );
-    ASSERT(status == BTREE_SUCCESS);
-    ASSERT(range_result.count == 250);
-
-    /*
-     * One leaf can contain at most 123 cells with the current
-     * test cell layout. Therefore 250 matching results prove
-     * that the prefix lookup crossed linked leaf pages.
-     */
-    ASSERT(range_result.count > 123);
-
-    for (uint32_t i = 0; i < range_result.count; i++) {
-        ASSERT(range_result.cells[i].type == BTREE_LEAF_NODE);
-        ASSERT(range_result.cells[i].num_keys ==
-               index_spec.index_key->num_columns);
-
-        /* Every returned key must share the requested prefix. */
-        int result = 0;
-        ASSERT(value_compare(
-            range_result.cells[i].keys[0],
-            prefix_key_vals[0],
-            &result
-        ));
-        ASSERT(result == 0);
-
-        /*
-         * Expected complete key.
-         * This also verifies there are no missing/extra results.
-         */
-        uint32_t expected_vals[3] = {
-            1000,
-            i / 5,
-            i % 5
-        };
-
-        for (uint32_t j = 0;
-             j < index_spec.index_key->num_columns;
-             j++) {
-
-            Value *expected = value_create(
-                UNSIGNED_INTEGER,
-                (void *) &expected_vals[j]
-            );
-            if (!expected) {
-                return -1;
-            }
-
-            result = 0;
-            ASSERT(value_compare(
-                range_result.cells[i].keys[j],
-                expected,
-                &result
-            ));
-            ASSERT(result == 0);
-
-            value_free(expected);
-        }
-
-        /* Results must be returned in complete-key order. */
-        if (i > 0) {
-            result = 0;
-            status = btree_compare(
-                range_result.cells[i - 1].keys,
-                range_result.cells[i].keys,
-                index_spec.index_key->num_columns,
-                &result
-            );
-            ASSERT(status == BTREE_SUCCESS);
-            ASSERT(result == -1);
-        }
-    }
-
-    btree_range_result_free(&range_result);
-
-    /* ---- PREFIX CONTAINING TWO KEY COMPONENTS ----
-     * ---- MULTIPLE MATCHING ENTRIES ---- */
-    prefix_vals[0] = 1000;
-    prefix_vals[1] = 20;
-    prefix_vals[2] = 0;
-
-    for (uint32_t i = 0; i < index_spec.index_key->num_columns; i++) {
-        if (prefix_key_vals[i]) {
-            value_free(prefix_key_vals[i]);
-        }
-
-        prefix_key_vals[i] = value_create(
-            UNSIGNED_INTEGER,
-            (void *) &prefix_vals[i]
-        );
-        if (!prefix_key_vals[i]) {
-            return -1;
-        }
-    }
-
-    ASSERT(search_key_init(
-        &prefix_key,
-        &index_spec,
-        prefix_key_vals
-    ));
-    prefix_key.num_target_keys = 2;
-
-    status = btree_find_prefix_keys(
-        test_btree.btree,
-        &index_spec,
-        &prefix_key,
-        &range_result
-    );
-    ASSERT(status == BTREE_SUCCESS);
-    ASSERT(range_result.count == 5);
-
-    for (uint32_t i = 0; i < range_result.count; i++) {
-        for (uint32_t j = 0; j < prefix_key.num_target_keys; j++) {
-            int result = 0;
-
-            ASSERT(value_compare(
-                range_result.cells[i].keys[j],
-                prefix_key_vals[j],
-                &result
-            ));
-            ASSERT(result == 0);
-        }
-
-        uint32_t expected_third = i;
-        Value *expected = value_create(
-            UNSIGNED_INTEGER,
-            (void *) &expected_third
-        );
-        if (!expected) {
-            return -1;
-        }
-
-        int result = 0;
-        ASSERT(value_compare(
-            range_result.cells[i].keys[2],
-            expected,
-            &result
-        ));
-        ASSERT(result == 0);
-
-        value_free(expected);
-
-        if (i > 0) {
-            result = 0;
-            status = btree_compare(
-                range_result.cells[i - 1].keys,
-                range_result.cells[i].keys,
-                index_spec.index_key->num_columns,
-                &result
-            );
-            ASSERT(status == BTREE_SUCCESS);
-            ASSERT(result == -1);
-        }
-    }
-
-    btree_range_result_free(&range_result);
-
-    /* ---- PREFIX CONTAINING ALL INDEXED KEY COMPONENTS ----
-     * ---- PREFIX MATCHING EXACTLY ONE ENTRY ---- */
-    prefix_vals[0] = 1000;
-    prefix_vals[1] = 20;
-    prefix_vals[2] = 3;
-
-    for (uint32_t i = 0; i < index_spec.index_key->num_columns; i++) {
-        if (prefix_key_vals[i]) {
-            value_free(prefix_key_vals[i]);
-        }
-
-        prefix_key_vals[i] = value_create(
-            UNSIGNED_INTEGER,
-            (void *) &prefix_vals[i]
-        );
-        if (!prefix_key_vals[i]) {
-            return -1;
-        }
-    }
-
-    ASSERT(search_key_init(
-        &prefix_key,
-        &index_spec,
-        prefix_key_vals
-    ));
-    prefix_key.num_target_keys = index_spec.index_key->num_columns;
-
-    status = btree_find_prefix_keys(
-        test_btree.btree,
-        &index_spec,
-        &prefix_key,
-        &range_result
-    );
-    ASSERT(status == BTREE_SUCCESS);
-    ASSERT(range_result.count == 1);
-
-    for (uint32_t i = 0; i < prefix_key.num_target_keys; i++) {
-        int result = 0;
-
-        ASSERT(value_compare(
-            range_result.cells[0].keys[i],
-            prefix_key_vals[i],
-            &result
-        ));
-        ASSERT(result == 0);
-    }
-
-    btree_range_result_free(&range_result);
-
-    /* ---- PREFIX MATCHING NO ENTRIES ---- */
-    prefix_vals[0] = 2000;
-    prefix_vals[1] = 0;
-    prefix_vals[2] = 0;
-
-    for (uint32_t i = 0; i < index_spec.index_key->num_columns; i++) {
-        if (prefix_key_vals[i]) {
-            value_free(prefix_key_vals[i]);
-        }
-
-        prefix_key_vals[i] = value_create(
-            UNSIGNED_INTEGER,
-            (void *) &prefix_vals[i]
-        );
-        if (!prefix_key_vals[i]) {
-            return -1;
-        }
-    }
-
-    ASSERT(search_key_init(
-        &prefix_key,
-        &index_spec,
-        prefix_key_vals
-    ));
-    prefix_key.num_target_keys = 1;
-
-    status = btree_find_prefix_keys(
-        test_btree.btree,
-        &index_spec,
-        &prefix_key,
-        &range_result
-    );
-    ASSERT(status == BTREE_SUCCESS);
-    ASSERT(range_result.count == 0);
-
-    btree_range_result_free(&range_result);
-
-    /* ---- INVALID ARGUMENTS ---- */
-
-    prefix_vals[0] = 1000;
-    prefix_vals[1] = 20;
-    prefix_vals[2] = 3;
-
-    for (uint32_t i = 0; i < index_spec.index_key->num_columns; i++) {
-        if (prefix_key_vals[i]) {
-            value_free(prefix_key_vals[i]);
-        }
-
-        prefix_key_vals[i] = value_create(
-            UNSIGNED_INTEGER,
-            (void *) &prefix_vals[i]
-        );
-        if (!prefix_key_vals[i]) {
-            return -1;
-        }
-    }
-
-    ASSERT(search_key_init(
-        &prefix_key,
-        &index_spec,
-        prefix_key_vals
-    ));
-
-    /* prefix_key == NULL */
-    status = btree_find_prefix_keys(
-        test_btree.btree,
-        &index_spec,
-        NULL,
-        &range_result
-    );
-    ASSERT(status == BTREE_INVALID_ARGUMENTS);
-
-    /* prefix_key->target_key == NULL */
-    void *valid_target_key = prefix_key.target_key;
-    prefix_key.target_key = NULL;
-
-    status = btree_find_prefix_keys(
-        test_btree.btree,
-        &index_spec,
-        &prefix_key,
-        &range_result
-    );
-    ASSERT(status == BTREE_INVALID_ARGUMENTS);
-
-    prefix_key.target_key = valid_target_key;
-
-    /* prefix_key->index != index */
-    BTreeIndexSpec different_index_spec = index_spec;
-    prefix_key.index = &different_index_spec;
-
-    status = btree_find_prefix_keys(
-        test_btree.btree,
-        &index_spec,
-        &prefix_key,
-        &range_result
-    );
-    ASSERT(status == BTREE_INVALID_ARGUMENTS);
-
-    prefix_key.index = &index_spec;
-
-    /* prefix_key->num_target_keys == 0 */
-    prefix_key.num_target_keys = 0;
-
-    status = btree_find_prefix_keys(
-        test_btree.btree,
-        &index_spec,
-        &prefix_key,
-        &range_result
-    );
-    ASSERT(status == BTREE_INVALID_ARGUMENTS);
-
-    /* prefix_key->num_target_keys > index->index_key->num_columns */
-    prefix_key.num_target_keys =
-        index_spec.index_key->num_columns + 1;
-
-    status = btree_find_prefix_keys(
-        test_btree.btree,
-        &index_spec,
-        &prefix_key,
-        &range_result
-    );
-    ASSERT(status == BTREE_INVALID_ARGUMENTS);
-
-    prefix_key.num_target_keys =
-        index_spec.index_key->num_columns;
-
-    /* result == NULL */
-    status = btree_find_prefix_keys(
-        test_btree.btree,
-        &index_spec,
-        &prefix_key,
-        NULL
-    );
-    ASSERT(status == BTREE_INVALID_ARGUMENTS);
-
-    /* Invalid BTree */
-    status = btree_find_prefix_keys(
-        NULL,
-        &index_spec,
-        &prefix_key,
-        &range_result
-    );
-    ASSERT(status == BTREE_INVALID_ARGUMENTS);
-
-    /* Invalid Index */
-    status = btree_find_prefix_keys(
-        test_btree.btree,
-        NULL,
-        &prefix_key,
-        &range_result
-    );
-    ASSERT(status == BTREE_INVALID_ARGUMENTS);
-
-    btree_range_result_free(&range_result);
+    free_cell_contents(&pending_cell);
     split_result_reset(&split_result);
 
-    value_free_array(
-        cell_contents.keys,
-        index->key->num_columns
-    );
-    value_free_array(
-        cell_contents.BTreePayload.row->values,
-        index->key->num_columns
-    );
-    free(cell_contents.BTreePayload.row);
-
-    free(target_key_vals);
-
-    value_free_array(
-        prefix_key_vals,
-        index->key->num_columns
-    );
-
     free(search_key.target_key);
-    free(prefix_key.target_key);
-
-    index_spec_free(&index_spec);
-    test_btree_free(&test_btree, &index, &pager);
-
-    return 0;
-}
-
-/* Test split propagation on all levels (3).
- *
- * (Heavy stress test)
- * Third subtest in split propagation takes too
- * long and creates an excessive amount of pages (over 20 thousand).
- * For a leaf node to split, propagate to the internal
- * node above, waiting for that to split too and then
- * filling up the root node in order to split and create
- * a new root to turn the tree in to a 4-level tree. */
-static int test_split_propagation() {
-    TestBTree test_btree = {0};
-    Pager *pager = NULL;
-    Index *index = NULL;
-    uint8_t levels = 1;
-    char *pathname = "build/database10_1.db";
-    ASSERT(test_btree_full_init(&test_btree, &pager, &index, levels, pathname));
-
-    BTreeIndexSpec index_spec = {0};
-    ASSERT(index_spec_init(&index_spec, index));
-
-    /* ---- 1-LEVEL SPLIT PROPAGATION ---- 
-     *
-     * Only leaf root node splits and new
-     * root internal node is created. */
-    BTreePage btree_page = {0};
-    BTreeStatus status = btree_page_attach_load_validate(pager, &btree_page, pager->pages[test_btree.page_nums[0]], &index_spec);
-    if (status != BTREE_SUCCESS) { return -1; }
-
-    BTreeSearchKey search_key = {0};
-    Value **target_key_vals = (Value **) calloc(index_spec.index_key->num_columns, sizeof(Value *));
-    if (!target_key_vals) { return -1; }
-
-    BTreeCellContents cell_contents = {0};
-    ASSERT(cell_contents_init(&cell_contents));
-
-    BTreeSplitResult split_result = {0};
-
-    /* Insert until leaf root node is full. */
-    for (uint32_t i = 0; i < 121; i++) {
-        for (uint32_t j = 0; j < cell_contents.num_keys; j++) {
-            uint32_t val = j * 20 + i * 5;
-   
-            if (cell_contents.keys[j]) {
-                value_free(cell_contents.keys[j]);
-            } 
-            if (cell_contents.BTreePayload.row->values[j]) {
-                value_free(cell_contents.BTreePayload.row->values[j]);
-            }
-            cell_contents.keys[j] = value_create(UNSIGNED_INTEGER, (void *) &val);
-            cell_contents.BTreePayload.row->values[j] = value_copy(cell_contents.keys[j]);
-            target_key_vals[j] = cell_contents.keys[j];
-            
-        }
-
-        status = btree_node_insert(pager, &btree_page, &cell_contents, &split_result, &index_spec);
-    }
-    ASSERT(search_key_init(&search_key, &index_spec, target_key_vals));
-    ASSERT(status == BTREE_NEEDS_SPLIT);
-    ASSERT(split_result.split == true);
-
-    BTreeInsertionResult insertion_res = {0};
-    insertion_result_reset(&insertion_res);
-    status = btree_split_propagation(test_btree.btree, &btree_page, &cell_contents, &split_result, &index_spec, &insertion_res);
-    ASSERT(status == BTREE_SUCCESS);
-    ASSERT(pager->num_pages == 5); // 0, 1 (system pages), 2 (leaf_left), 3(leaf_right), 4 (new root)
-    ASSERT(test_btree.btree->root_page_num == pager->pages[4]->page_num);
-
-    btree_page_load(&btree_page);
-    ASSERT(btree_page.cell_count == 61);
-    ASSERT(btree_page.is_root == false);
-    ASSERT(btree_page.type_specific_data.siblings.previous_leaf_pointer == UINT32_MAX);
-    ASSERT(btree_page.page->is_dirty == true);
-
-    BTreePage right_page = {0}, new_root = {0};
-    status = btree_page_attach_load_validate(pager, &right_page, pager->pages[3], &index_spec);
-    if (status != BTREE_SUCCESS) { return -1; }
-
-    ASSERT(right_page.cell_count == 63);
-    ASSERT(right_page.is_root == false);
-    ASSERT(right_page.type_specific_data.siblings.previous_leaf_pointer == btree_page.page->page_num);
-    ASSERT(right_page.type_specific_data.siblings.next_leaf_pointer == UINT32_MAX);
-    ASSERT(btree_page.type_specific_data.siblings.next_leaf_pointer == right_page.page->page_num);
-    ASSERT(right_page.page->is_dirty == true);
-
-    status = btree_page_attach_load_validate(pager, &new_root, pager->pages[4], &index_spec);
-    if (status != BTREE_SUCCESS) { return -1; }
-
-    ASSERT(new_root.is_root == true);
-    ASSERT(new_root.cell_count == 1);
-    ASSERT(new_root.parent_pointer == UINT32_MAX);
-    ASSERT(btree_page.parent_pointer == new_root.page->page_num);
-    ASSERT(right_page.parent_pointer == new_root.page->page_num);
-    ASSERT(new_root.type_specific_data.rightmost_child_pointer == right_page.page->page_num);
-    ASSERT(new_root.page->is_dirty == true);
-
-    BTreeKeyView key_view = {0};
-    status = get_key(&new_root, 0, &key_view, &index_spec);
-    if (status != BTREE_SUCCESS) { return -1; }
-
-    Value **new_root_cell = serialized_key_to_values(key_view.key, index_spec.index_key->num_columns, &index_spec);
-    if (!new_root_cell) { return -1; }
-
-    status = get_key(&right_page, 0, &key_view, &index_spec);
-    if (status != BTREE_SUCCESS) { return -1; }
-
-    Value **right_page_cell = serialized_key_to_values(key_view.key, index_spec.index_key->num_columns, &index_spec);
-    if (!right_page_cell) { return -1; }
-    
-    int result = 0;
-    status = btree_compare(new_root_cell, right_page_cell, index->key->num_columns, &result);
-    ASSERT(result == 0);
-
-    index_spec_free(&index_spec);
-    split_result_reset(&split_result);
-    value_free_array(new_root_cell, index->key->num_columns);
-    value_free_array(right_page_cell, index->key->num_columns);
-    value_free_array(cell_contents.keys, index->key->num_columns);
-    value_free_array(cell_contents.BTreePayload.row->values, index->key->num_columns);
-    free(target_key_vals);
     search_key.target_key = NULL;
+
+    btree_test_context_free(&ctx);
+    return 0;
+}
+
+static int test_node_delete() {
+    BTreeTestContext ctx = {0};
+    ASSERT(btree_test_context_init(&ctx, "build/database14.db"));
+
+    Page *root_page = pager_get_page(ctx.pager, ctx.btree->root_page_num);
+    if (!root_page) { return -1; }
+
+    BTreePage leaf = {0};
+    BTreeStatus status = btree_page_attach_load_validate(ctx.pager, &leaf, root_page, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+
+    for (uint32_t i = 0; i < 4; i++) {
+        ASSERT(append_test_leaf_cell(&ctx, &leaf, i, i));
+    }
+
+    BTreeCellContents target_cell = {0};
+    ASSERT(create_ordered_cell_contents(&target_cell, ctx.index_spec, 0, 0));
+
+    BTreeDeletionResult deletion_result = {0};
+    BTreePage target_leaf = {0};
+
+    status = btree_node_delete(ctx.btree, &target_cell, &deletion_result, ctx.index_spec, &target_leaf);
+    ASSERT(status == BTREE_SUCCESS);
+
+    ASSERT(deletion_result.deleted == true);
+    ASSERT(deletion_result.underflow == false);
+    ASSERT(deletion_result.page_num == ctx.btree->root_page_num);
+    ASSERT(deletion_result.first_key_changed == true);
+    ASSERT(target_leaf.page == root_page);
+    ASSERT(target_leaf.cell_count == 3);
+    ASSERT(page_cell_matches_key_order(&target_leaf, ctx.index_spec, 0, 1));
+
+    BTreeSearchKey search_key = {0};
+    BTreeSearchResult search_result = {0};
+    ASSERT(ordered_search_key_init(&search_key, ctx.index_spec, 0));
+
+    status = btree_binary_search(&target_leaf, &search_key, &search_result, BTREE_LOWER_BOUND);
+    ASSERT(status == BTREE_SUCCESS);
+    ASSERT(search_result.exact_match == false);
+
+    free_cell_contents(&deletion_result.first_cell);
+    free_cell_contents(&target_cell);
     free(search_key.target_key);
-    test_btree_free(&test_btree, &index, &pager);
 
-    /* ---- 2-LEVEL SPLIT PROPAGATION ---- 
-     *
-     * Leaf node splits, separator key moves up
-     * to already existing root that also splits
-     * and creates another new root. */
-    levels = 2;
-    pathname = "build/database10_2.db";
-    ASSERT(test_btree_full_init(&test_btree, &pager, &index, levels, pathname));
-    ASSERT(index_spec_init(&index_spec, index));
+    btree_test_context_free(&ctx);
+    return 0;
+}
 
-    status = btree_page_attach_load_validate(pager, &btree_page, pager->pages[test_btree.page_nums[2]], &index_spec);
-    if (status != BTREE_SUCCESS) { return -1; }
+static int test_leaf_borrow() {
+    BTreeTestContext ctx = {0};
+    ASSERT(btree_test_context_init(&ctx, "build/database15_1.db"));
 
-    target_key_vals = (Value **) calloc(index_spec.index_key->num_columns, sizeof(Value *));
-    if (!target_key_vals) { return -1; }
+    /* --- BORROW FROM LEFT --- */
+    uint32_t left_page_num = 0;
+    uint32_t right_page_num = 0;
+    ASSERT(build_two_level_test_tree(&ctx, 100, &left_page_num, &right_page_num));
 
-    ASSERT(cell_contents_init(&cell_contents));
+    Page *root_page = pager_get_page(ctx.pager, ctx.btree->root_page_num);
+    Page *left_page = pager_get_page(ctx.pager, left_page_num);
+    Page *right_page = pager_get_page(ctx.pager, right_page_num);
+    if (!root_page || !left_page || !right_page) { return -1; }
 
-    uint32_t old_root_page_num = test_btree.btree->root_page_num;
-    /* Insert until leaf root node is full. */
-    for (uint32_t k = 0; k < 500; k++) { // Amount of splits needed for full root
-        for (uint32_t i = 0; i < 121; i++) {
-            for (uint32_t j = 0; j < cell_contents.num_keys; j++) {
-                uint32_t val = k * 1000 + i*10 + j;
-                
-               
-                if (cell_contents.keys[j]) {
-                    value_free(cell_contents.keys[j]);
-                } 
-                if (cell_contents.BTreePayload.row->values[j]) {
-                    value_free(cell_contents.BTreePayload.row->values[j]);
-                }
-                cell_contents.keys[j] = value_create(UNSIGNED_INTEGER, (void *) &val);
-                cell_contents.BTreePayload.row->values[j] = value_copy(cell_contents.keys[j]);
-                target_key_vals[j] = cell_contents.keys[j];
-                
-            }
+    BTreePage root = {0};
+    BTreePage left = {0};
+    BTreePage right = {0};
 
-            status = btree_node_insert(pager, &btree_page, &cell_contents, &split_result, &index_spec);
-        }
+    BTreeStatus status = btree_page_attach_load_validate(ctx.pager, &root, root_page, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+    status = btree_page_attach_load_validate(ctx.pager, &left, left_page, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+    status = btree_page_attach_load_validate(ctx.pager, &right, right_page, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
 
-        if (status != BTREE_NEEDS_SPLIT) { return -1; }
+    uint32_t left_keys[] = {10, 20, 30};
+    uint32_t right_keys[] = {100, 110};
 
-        status = btree_split_propagation(test_btree.btree, &btree_page, &cell_contents, &split_result, &index_spec, &insertion_res);
-        if (status != BTREE_SUCCESS) {
-            return -1;
-        }
-
-        if (old_root_page_num != test_btree.btree->root_page_num) {
-            break;
-        }
-
-        status = btree_page_attach_load_validate(pager, &new_root, pager->pages[test_btree.btree->root_page_num], &index_spec);
-        if (status != BTREE_SUCCESS) { return -1; }
-
-        status = btree_page_attach_load_validate(pager, &btree_page, pager->pages[new_root.type_specific_data.rightmost_child_pointer], &index_spec);
-        if (status != BTREE_SUCCESS) { return -1; }
+    for (uint32_t i = 0; i < 3; i++) {
+        ASSERT(append_test_leaf_cell(&ctx, &left, left_keys[i], left_keys[i]));
+    }
+    for (uint32_t i = 0; i < 2; i++) {
+        ASSERT(append_test_leaf_cell(&ctx, &right, right_keys[i], right_keys[i]));
     }
 
-    ASSERT(old_root_page_num != test_btree.btree->root_page_num);
-    
-    status = btree_page_attach_load_validate(pager, &new_root, pager->pages[test_btree.btree->root_page_num], &index_spec);
-    if (status != BTREE_SUCCESS) { return -1; }
-    ASSERT(new_root.is_root == true);
-    ASSERT(new_root.parent_pointer == UINT32_MAX);
-    ASSERT(new_root.cell_count == 1);
-    
-    BTreePage old_root = {0};
-    status = btree_page_attach_load_validate(pager, &old_root, pager->pages[old_root_page_num], &index_spec);
-    if (status != BTREE_SUCCESS) { return -1; }
-    ASSERT(old_root.is_root == false);
-    ASSERT(old_root.cell_count == 102);
-    ASSERT(old_root.parent_pointer == test_btree.btree->root_page_num);
+    status = btree_leaf_borrow(ctx.pager, 0, &right, &root, &left,
+        BTREE_BORROW_FROM_LEFT, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
 
-    status = btree_page_attach_load_validate(pager, &right_page, pager->pages[new_root.type_specific_data.rightmost_child_pointer], &index_spec);
-    if (status != BTREE_SUCCESS) { return -1; }
-    ASSERT(right_page.is_root == false);
-    ASSERT(right_page.cell_count == 102);
-    ASSERT(right_page.parent_pointer == test_btree.btree->root_page_num);
+    ASSERT(left.cell_count == 2);
+    ASSERT(right.cell_count == 3);
+    ASSERT(root.cell_count == 1);
 
-    uint32_t new_root_cell_pointer = get_cell_pointer(new_root.data, 0);
-    uint32_t new_root_child_pointer = get_cell_child_pointer(new_root.data, get_cell_offset(new_root_cell_pointer));
-    ASSERT(new_root_child_pointer == old_root.page->page_num);
-    ASSERT(new_root.type_specific_data.rightmost_child_pointer == right_page.page->page_num);
+    ASSERT(page_cell_matches_key_order(&left, ctx.index_spec, 0, 10));
+    ASSERT(page_cell_matches_key_order(&left, ctx.index_spec, 1, 20));
+    ASSERT(page_cell_matches_key_order(&right, ctx.index_spec, 0, 30));
+    ASSERT(page_cell_matches_key_order(&right, ctx.index_spec, 1, 100));
+    ASSERT(page_cell_matches_key_order(&root, ctx.index_spec, 0, 30));
 
-    for (uint32_t i = 0; i < old_root.cell_count+1; i++) {
-        BTreePage leaf_node = {0};
-        uint32_t child_pointer = 0;
-        if (i == old_root.cell_count) {
-            child_pointer = old_root.type_specific_data.rightmost_child_pointer;
-        } else {    
-            uint32_t cell_pointer = get_cell_pointer(old_root.data, i);
-            child_pointer = get_cell_child_pointer(old_root.data, get_cell_offset(cell_pointer));
+    btree_test_context_free(&ctx);
 
-        }
-        Page *page = pager_get_page(pager, child_pointer);
-        if (!page) { return -1; }
+    /* --- BORROW FROM RIGHT --- */
+    ASSERT(btree_test_context_init(&ctx, "build/database15_2.db"));
+    ASSERT(build_two_level_test_tree(&ctx, 100, &left_page_num, &right_page_num));
 
-        status = btree_page_attach_load_validate(pager, &leaf_node, page, &index_spec);
-        if (status != BTREE_SUCCESS) { return -1; }
+    root_page = pager_get_page(ctx.pager, ctx.btree->root_page_num);
+    left_page = pager_get_page(ctx.pager, left_page_num);
+    right_page = pager_get_page(ctx.pager, right_page_num);
+    if (!root_page || !left_page || !right_page) { return -1; }
 
-        ASSERT(leaf_node.type == BTREE_LEAF_NODE);
-        ASSERT(leaf_node.is_root == false);
-        ASSERT(leaf_node.parent_pointer == old_root.page->page_num);
+    root = (BTreePage){0};
+    left = (BTreePage){0};
+    right = (BTreePage){0};
+
+    status = btree_page_attach_load_validate(ctx.pager, &root, root_page, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+    status = btree_page_attach_load_validate(ctx.pager, &left, left_page, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+    status = btree_page_attach_load_validate(ctx.pager, &right, right_page, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+
+    uint32_t left_keys_2[] = {10, 20};
+    uint32_t right_keys_2[] = {100, 110, 120};
+
+    for (uint32_t i = 0; i < 2; i++) {
+        ASSERT(append_test_leaf_cell(&ctx, &left, left_keys_2[i], left_keys_2[i]));
+    }
+    for (uint32_t i = 0; i < 3; i++) {
+        ASSERT(append_test_leaf_cell(&ctx, &right, right_keys_2[i], right_keys_2[i]));
     }
 
-    for (uint32_t i = 0; i < right_page.cell_count; i++) {
-        BTreePage leaf_node = {0};
-        uint32_t child_pointer = 0;
-        if (i == right_page.cell_count) {
-            child_pointer = right_page.type_specific_data.rightmost_child_pointer;
-        } else {    
-            uint32_t cell_pointer = get_cell_pointer(right_page.data, i);
-            child_pointer = get_cell_child_pointer(right_page.data, get_cell_offset(cell_pointer));
+    status = btree_leaf_borrow(ctx.pager, 0, &left, &root, &right,
+        BTREE_BORROW_FROM_RIGHT, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
 
-        }
+    ASSERT(left.cell_count == 3);
+    ASSERT(right.cell_count == 2);
+    ASSERT(root.cell_count == 1);
 
-        Page *page = pager_get_page(pager, child_pointer);
-        if (!page) { return -1; }
+    ASSERT(page_cell_matches_key_order(&left, ctx.index_spec, 2, 100));
+    ASSERT(page_cell_matches_key_order(&right, ctx.index_spec, 0, 110));
+    ASSERT(page_cell_matches_key_order(&root, ctx.index_spec, 0, 110));
 
-        status = btree_page_attach_load_validate(pager, &leaf_node, page, &index_spec);
-        if (status != BTREE_SUCCESS) { return -1; }
+    btree_test_context_free(&ctx);
+    return 0;
+}
 
-        ASSERT(leaf_node.type == BTREE_LEAF_NODE);
-        ASSERT(leaf_node.is_root == false);
-        ASSERT(leaf_node.parent_pointer == right_page.page->page_num);
-    }
+static int test_internal_borrow() {
+    BTreeTestContext ctx = {0};
+    ASSERT(btree_test_context_init(&ctx, "build/database16_1.db"));
 
-    status = get_key(&new_root, 0, &key_view, &index_spec);
-    if (status != BTREE_SUCCESS) { return -1; }
+    /* --- BORROW FROM LEFT --- */
+    uint32_t left_internal_page_num = 0;
+    uint32_t right_internal_page_num = 0;
+    uint32_t rightmost_leaf_page_num = 0;
 
-    new_root_cell = serialized_key_to_values(key_view.key, index_spec.index_key->num_columns, &index_spec);
-    if (!new_root_cell) { return -1; }
+    ASSERT(build_two_level_test_tree(&ctx, 50, &left_internal_page_num, &right_internal_page_num));
+    ASSERT(expand_test_tree_to_three_levels(&ctx, left_internal_page_num, right_internal_page_num,
+        20, 70, &rightmost_leaf_page_num));
 
-    Page *right_internal_page = pager_get_page(pager, new_root.type_specific_data.rightmost_child_pointer);
-    if (!right_internal_page) { return -1; }
+    Page *root_page = pager_get_page(ctx.pager, ctx.btree->root_page_num);
+    Page *left_page = pager_get_page(ctx.pager, left_internal_page_num);
+    Page *right_page = pager_get_page(ctx.pager, right_internal_page_num);
+    if (!root_page || !left_page || !right_page) { return -1; }
 
+    BTreePage root = {0};
+    BTreePage left_internal = {0};
     BTreePage right_internal = {0};
-    status = btree_page_attach_load_validate(pager, &right_internal, right_internal_page, &index_spec);
-    if (status != BTREE_SUCCESS) { return -1; }
 
-    BTreeCellView cell_view = {0};
-    status = get_cell(&right_internal, 0, &cell_view, &index_spec);
-    if (status != BTREE_SUCCESS) { return -1; }
-
-    right_page_cell = serialized_key_to_values(cell_view.key.key, index_spec.index_key->num_columns, &index_spec);
-    if (!right_page_cell) { return -1; }
-
-    status = get_key(&old_root, old_root.cell_count-1, &key_view, &index_spec);
-    if (status != BTREE_SUCCESS) { return -1; }
-
-    Value **left_page_last_cell = serialized_key_to_values(key_view.key, index->key->num_columns, &index_spec);
-    if (!left_page_last_cell) { return -1; }
-    
-    result = 0;
-    status = btree_compare(left_page_last_cell, new_root_cell, index->key->num_columns, &result);
-    ASSERT(result == -1);
-
-    status = btree_compare(new_root_cell, right_page_cell, index->key->num_columns, &result);
-    ASSERT(result == -1);
-
-    uint32_t right_subtree_leftmost = 0;
-    memcpy(&right_subtree_leftmost, cell_view.payload, sizeof(uint32_t));
-
-    Page *right_subtree_leftmost_page = pager_get_page(pager, right_subtree_leftmost);
-    if (!right_subtree_leftmost_page) { return -1; }
-
-    BTreePage right_subtree_leftmost_btree_page = {0};
-    status = btree_page_attach_load_validate(pager, &right_subtree_leftmost_btree_page, right_subtree_leftmost_page, &index_spec);
-    if (status != BTREE_SUCCESS) { return -1; }
-
-    status = get_key(&right_subtree_leftmost_btree_page, 0, &key_view, &index_spec);
-    if (status != BTREE_SUCCESS) { return -1; }
-
-    Value **right_subbtree_leftmost_key = serialized_key_to_values(key_view.key, index_spec.index_key->num_columns, &index_spec);
-    if (!right_subbtree_leftmost_key) { return -1; }
-
-    status = btree_compare(new_root_cell, right_subbtree_leftmost_key, index->key->num_columns, &result);
-    ASSERT(result == 0);
-
-    BTreePageCollection visited = {0};
-
-    status = btree_traverse_reachable_pages(test_btree.btree, &visited);
+    BTreeStatus status = btree_page_attach_load_validate(ctx.pager, &root, root_page, ctx.index_spec);
     ASSERT(status == BTREE_SUCCESS);
-    ASSERT(visited.count == pager->num_pages - 2);
+    status = btree_page_attach_load_validate(ctx.pager, &left_internal, left_page, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+    status = btree_page_attach_load_validate(ctx.pager, &right_internal, right_page, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
 
-    uint32_t leftmost_cell_pointer = get_cell_pointer(old_root.data, 0);
-    uint32_t leftmost_child_pointer = get_cell_child_pointer(old_root.data, get_cell_offset(leftmost_cell_pointer));
+    uint32_t old_left_rightmost = left_internal.type_specific_data.rightmost_child_pointer;
+    uint32_t new_left_rightmost = 0;
+    ASSERT(create_empty_leaf_child(&ctx, left_internal_page_num, &new_left_rightmost));
+    ASSERT(append_test_internal_cell(&ctx, &left_internal, 30, old_left_rightmost, new_left_rightmost));
 
-    Page *leftmost_leaf_node_page = pager_get_page(pager, leftmost_child_pointer);
-    if (!leftmost_leaf_node_page) { return -1; }
+    status = btree_internal_borrow(ctx.pager, 0, &right_internal, &root, &left_internal,
+        BTREE_BORROW_FROM_LEFT, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
 
-    BTreePage leftmost_leaf_node_btree_page = {0};
-    status = btree_page_attach_load_validate(pager, &leftmost_leaf_node_btree_page, leftmost_leaf_node_page, &index_spec);
-    if (status != BTREE_SUCCESS) { return -1; }
+    ASSERT(left_internal.cell_count == 1);
+    ASSERT(right_internal.cell_count == 2);
+    ASSERT(root.cell_count == 1);
 
-    uint32_t counter = 1, prev_page_num = leftmost_leaf_node_btree_page.page->page_num;
-    uint32_t next_leaf = leftmost_leaf_node_btree_page.type_specific_data.siblings.next_leaf_pointer;
-    ASSERT(leftmost_leaf_node_btree_page.type_specific_data.siblings.previous_leaf_pointer == UINT32_MAX);
-    while (next_leaf != UINT32_MAX) {        
-        Page *page = pager_get_page(pager, next_leaf);
-        if (!page) { return -1; }
+    ASSERT(page_cell_matches_key_order(&left_internal, ctx.index_spec, 0, 20));
+    ASSERT(page_cell_matches_key_order(&right_internal, ctx.index_spec, 0, 50));
+    ASSERT(page_cell_matches_key_order(&right_internal, ctx.index_spec, 1, 70));
+    ASSERT(page_cell_matches_key_order(&root, ctx.index_spec, 0, 30));
 
-        BTreePage leaf_page = {0};
-        status = btree_page_attach_load_validate(pager, &leaf_page, page, &index_spec);
-        if (status != BTREE_SUCCESS) { return -1; }
-        ASSERT(leaf_page.type == BTREE_LEAF_NODE);
+    btree_test_context_free(&ctx);
 
-        ASSERT(leaf_page.type_specific_data.siblings.previous_leaf_pointer == prev_page_num);
-        next_leaf = leaf_page.type_specific_data.siblings.next_leaf_pointer;
+    /* --- BORROW FROM RIGHT --- */
+    ASSERT(btree_test_context_init(&ctx, "build/database16_2.db"));
+    ASSERT(build_two_level_test_tree(&ctx, 50, &left_internal_page_num, &right_internal_page_num));
+    ASSERT(expand_test_tree_to_three_levels(&ctx, left_internal_page_num, right_internal_page_num,
+        20, 70, &rightmost_leaf_page_num));
 
-        prev_page_num = leaf_page.page->page_num;
-        counter++;
+    root_page = pager_get_page(ctx.pager, ctx.btree->root_page_num);
+    left_page = pager_get_page(ctx.pager, left_internal_page_num);
+    right_page = pager_get_page(ctx.pager, right_internal_page_num);
+    if (!root_page || !left_page || !right_page) { return -1; }
+
+    root = (BTreePage){0};
+    left_internal = (BTreePage){0};
+    right_internal = (BTreePage){0};
+
+    status = btree_page_attach_load_validate(ctx.pager, &root, root_page, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+    status = btree_page_attach_load_validate(ctx.pager, &left_internal, left_page, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+    status = btree_page_attach_load_validate(ctx.pager, &right_internal, right_page, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+
+    uint32_t old_right_rightmost = right_internal.type_specific_data.rightmost_child_pointer;
+    uint32_t new_right_rightmost = 0;
+    ASSERT(create_empty_leaf_child(&ctx, right_internal_page_num, &new_right_rightmost));
+    ASSERT(append_test_internal_cell(&ctx, &right_internal, 80, old_right_rightmost, new_right_rightmost));
+
+    status = btree_internal_borrow(ctx.pager, 0, &left_internal, &root, &right_internal,
+        BTREE_BORROW_FROM_RIGHT, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+
+    ASSERT(left_internal.cell_count == 2);
+    ASSERT(right_internal.cell_count == 1);
+    ASSERT(root.cell_count == 1);
+
+    ASSERT(page_cell_matches_key_order(&left_internal, ctx.index_spec, 0, 20));
+    ASSERT(page_cell_matches_key_order(&left_internal, ctx.index_spec, 1, 50));
+    ASSERT(page_cell_matches_key_order(&right_internal, ctx.index_spec, 0, 80));
+    ASSERT(page_cell_matches_key_order(&root, ctx.index_spec, 0, 70));
+
+    btree_test_context_free(&ctx);
+    return 0;
+}
+
+static int test_node_borrow() {
+    BTreeTestContext ctx = {0};
+    ASSERT(btree_test_context_init(&ctx, "build/database17.db"));
+
+    uint32_t left_page_num = 0;
+    uint32_t right_page_num = 0;
+    ASSERT(build_two_level_test_tree(&ctx, 100, &left_page_num, &right_page_num));
+
+    Page *root_page = pager_get_page(ctx.pager, ctx.btree->root_page_num);
+    Page *left_page = pager_get_page(ctx.pager, left_page_num);
+    Page *right_page = pager_get_page(ctx.pager, right_page_num);
+    if (!root_page || !left_page || !right_page) { return -1; }
+
+    BTreePage root = {0};
+    BTreePage left = {0};
+    BTreePage right = {0};
+
+    BTreeStatus status = btree_page_attach_load_validate(ctx.pager, &root, root_page, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+    status = btree_page_attach_load_validate(ctx.pager, &left, left_page, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+    status = btree_page_attach_load_validate(ctx.pager, &right, right_page, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+
+    ASSERT(append_test_leaf_cell(&ctx, &left, 10, 10));
+    ASSERT(append_test_leaf_cell(&ctx, &right, 100, 100));
+    ASSERT(append_test_leaf_cell(&ctx, &right, 110, 110));
+
+    status = btree_node_borrow(ctx.pager, 0, &left, &root, &right,
+        BTREE_BORROW_FROM_RIGHT, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+
+    ASSERT(left.cell_count == 2);
+    ASSERT(right.cell_count == 1);
+    ASSERT(page_cell_matches_key_order(&left, ctx.index_spec, 1, 100));
+    ASSERT(page_cell_matches_key_order(&root, ctx.index_spec, 0, 110));
+
+    status = btree_node_borrow(ctx.pager, 0, &left, &root, &right,
+        (BTreeBorrowDirection) 100, ctx.index_spec);
+    ASSERT(status == BTREE_INVALID_ARGUMENTS);
+
+    btree_test_context_free(&ctx);
+    return 0;
+}
+
+static int test_leaf_merge() {
+    BTreeTestContext ctx = {0};
+    ASSERT(btree_test_context_init(&ctx, "build/database18.db"));
+
+    uint32_t left_page_num = 0;
+    uint32_t right_page_num = 0;
+    ASSERT(build_two_level_test_tree(&ctx, 100, &left_page_num, &right_page_num));
+
+    Page *root_page = pager_get_page(ctx.pager, ctx.btree->root_page_num);
+    Page *left_page = pager_get_page(ctx.pager, left_page_num);
+    Page *right_page = pager_get_page(ctx.pager, right_page_num);
+    if (!root_page || !left_page || !right_page) { return -1; }
+
+    BTreePage root = {0};
+    BTreePage left = {0};
+    BTreePage right = {0};
+
+    BTreeStatus status = btree_page_attach_load_validate(ctx.pager, &root, root_page, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+    status = btree_page_attach_load_validate(ctx.pager, &left, left_page, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+    status = btree_page_attach_load_validate(ctx.pager, &right, right_page, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+
+    ASSERT(append_test_leaf_cell(&ctx, &left, 10, 10));
+    ASSERT(append_test_leaf_cell(&ctx, &left, 20, 20));
+    ASSERT(append_test_leaf_cell(&ctx, &right, 100, 100));
+    ASSERT(append_test_leaf_cell(&ctx, &right, 110, 110));
+
+    status = connect_sibling_leaf_nodes(ctx.pager, &left, &right);
+    ASSERT(status == BTREE_SUCCESS);
+    ASSERT(btree_page_sync(ctx.pager, &left));
+    ASSERT(btree_page_sync(ctx.pager, &right));
+
+    status = btree_leaf_merge(ctx.pager, &left, &right, &root, 0, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+
+    ASSERT(left.cell_count == 4);
+    ASSERT(root.cell_count == 0);
+    ASSERT(left.type_specific_data.siblings.next_leaf_pointer == UINT32_MAX);
+
+    ASSERT(page_cell_matches_key_order(&left, ctx.index_spec, 0, 10));
+    ASSERT(page_cell_matches_key_order(&left, ctx.index_spec, 1, 20));
+    ASSERT(page_cell_matches_key_order(&left, ctx.index_spec, 2, 100));
+    ASSERT(page_cell_matches_key_order(&left, ctx.index_spec, 3, 110));
+
+    uint32_t free_list_head = 0;
+    ASSERT(get_test_free_list_head(&ctx, &free_list_head));
+    ASSERT(free_list_head == right_page_num);
+
+    btree_test_context_free(&ctx);
+    return 0;
+}
+
+static int test_internal_merge() {
+    BTreeTestContext ctx = {0};
+    ASSERT(btree_test_context_init(&ctx, "build/database19.db"));
+
+    uint32_t left_internal_page_num = 0;
+    uint32_t right_internal_page_num = 0;
+    uint32_t rightmost_leaf_page_num = 0;
+
+    ASSERT(build_two_level_test_tree(&ctx, 50, &left_internal_page_num, &right_internal_page_num));
+    ASSERT(expand_test_tree_to_three_levels(&ctx, left_internal_page_num, right_internal_page_num,
+        20, 70, &rightmost_leaf_page_num));
+
+    Page *root_page = pager_get_page(ctx.pager, ctx.btree->root_page_num);
+    Page *left_page = pager_get_page(ctx.pager, left_internal_page_num);
+    Page *right_page = pager_get_page(ctx.pager, right_internal_page_num);
+    if (!root_page || !left_page || !right_page) { return -1; }
+
+    BTreePage root = {0};
+    BTreePage left_internal = {0};
+    BTreePage right_internal = {0};
+
+    BTreeStatus status = btree_page_attach_load_validate(ctx.pager, &root, root_page, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+    status = btree_page_attach_load_validate(ctx.pager, &left_internal, left_page, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+    status = btree_page_attach_load_validate(ctx.pager, &right_internal, right_page, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+
+    uint32_t old_rightmost = right_internal.type_specific_data.rightmost_child_pointer;
+
+    status = btree_internal_merge(ctx.pager, &left_internal, &right_internal, &root, 0, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+
+    ASSERT(left_internal.cell_count == 3);
+    ASSERT(root.cell_count == 0);
+    ASSERT(left_internal.type_specific_data.rightmost_child_pointer == old_rightmost);
+
+    ASSERT(page_cell_matches_key_order(&left_internal, ctx.index_spec, 0, 20));
+    ASSERT(page_cell_matches_key_order(&left_internal, ctx.index_spec, 1, 50));
+    ASSERT(page_cell_matches_key_order(&left_internal, ctx.index_spec, 2, 70));
+
+    for (uint32_t i = 0; i < left_internal.cell_count; i++) {
+        uint32_t cell_pointer = get_cell_pointer(left_internal.data, i);
+        uint32_t child_page_num = get_cell_child_pointer(left_internal.data, get_cell_offset(cell_pointer));
+        Page *child_page = pager_get_page(ctx.pager, child_page_num);
+        if (!child_page) { return -1; }
+        ASSERT(get_parent_pointer(child_page->page_data) == left_internal_page_num);
     }
-    ASSERT(counter == pager->num_pages-5);
 
-    index_spec_free(&index_spec);
-    split_result_reset(&split_result);
-    value_free_array(new_root_cell, index->key->num_columns);
-    value_free_array(right_page_cell, index->key->num_columns);
-    value_free_array(cell_contents.keys, index->key->num_columns);
-    value_free_array(cell_contents.BTreePayload.row->values, index->key->num_columns);
-    free(target_key_vals);
-    search_key.target_key = NULL;
-    free(search_key.target_key);
-    test_btree_free(&test_btree, &index, &pager);
+    Page *rightmost_child = pager_get_page(ctx.pager, left_internal.type_specific_data.rightmost_child_pointer);
+    if (!rightmost_child) { return -1; }
+    ASSERT(get_parent_pointer(rightmost_child->page_data) == left_internal_page_num);
 
-     /* ---- 3-LEVEL SPLIT PROPAGATION ---- 
-     *
-     * Leaf node splits, separator key moves up
-     * to internal node that splits and internal
-     * node's separator key moves up to root
-     * until it splits up too. */
-    levels = 3;
-    pathname = "build/database10_3.db";
-    ASSERT(test_btree_full_init(&test_btree, &pager, &index, levels, pathname));
-    ASSERT(index_spec_init(&index_spec, index));
+    uint32_t free_list_head = 0;
+    ASSERT(get_test_free_list_head(&ctx, &free_list_head));
+    ASSERT(free_list_head == right_internal_page_num);
 
-    status = btree_page_attach_load_validate(pager, &btree_page, pager->pages[test_btree.page_nums[6]], &index_spec);
-    if (status != BTREE_SUCCESS) { return -1; }
+    btree_test_context_free(&ctx);
+    return 0;
+}
 
-    target_key_vals = (Value **) calloc(index_spec.index_key->num_columns, sizeof(Value *));
-    if (!target_key_vals) { return -1; }
+static int test_node_merge() {
+    BTreeTestContext ctx = {0};
+    ASSERT(btree_test_context_init(&ctx, "build/database20.db"));
 
-    ASSERT(cell_contents_init(&cell_contents));
+    uint32_t left_page_num = 0;
+    uint32_t right_page_num = 0;
+    ASSERT(build_two_level_test_tree(&ctx, 100, &left_page_num, &right_page_num));
 
-    old_root_page_num = test_btree.btree->root_page_num;
-    /* Insert until leaf root node is full. */
-    for (uint32_t k = 0; k < 22000; k++) { // Amount of splits needed for full root
-        for (uint32_t i = 0; i < 121; i++) {
-            for (uint32_t j = 0; j < cell_contents.num_keys; j++) {
-                uint32_t val = k * 10000 + i*10 + j;
-                
-               
-                if (cell_contents.keys[j]) {
-                    value_free(cell_contents.keys[j]);
-                } 
-                if (cell_contents.BTreePayload.row->values[j]) {
-                    value_free(cell_contents.BTreePayload.row->values[j]);
-                }
-                cell_contents.keys[j] = value_create(UNSIGNED_INTEGER, (void *) &val);
-                cell_contents.BTreePayload.row->values[j] = value_copy(cell_contents.keys[j]);
-                target_key_vals[j] = cell_contents.keys[j];
-                
-            }
+    Page *root_page = pager_get_page(ctx.pager, ctx.btree->root_page_num);
+    Page *left_page = pager_get_page(ctx.pager, left_page_num);
+    Page *right_page = pager_get_page(ctx.pager, right_page_num);
+    if (!root_page || !left_page || !right_page) { return -1; }
 
-            status = btree_node_insert(pager, &btree_page, &cell_contents, &split_result, &index_spec);
-        }
+    BTreePage root = {0};
+    BTreePage left = {0};
+    BTreePage right = {0};
 
-        if (status != BTREE_NEEDS_SPLIT) { return -1; }
+    BTreeStatus status = btree_page_attach_load_validate(ctx.pager, &root, root_page, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+    status = btree_page_attach_load_validate(ctx.pager, &left, left_page, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+    status = btree_page_attach_load_validate(ctx.pager, &right, right_page, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
 
-        status = btree_split_propagation(test_btree.btree, &btree_page, &cell_contents, &split_result, &index_spec, &insertion_res);
-        if (status != BTREE_SUCCESS) {
-            return -1;
-        }
+    ASSERT(append_test_leaf_cell(&ctx, &left, 10, 10));
+    ASSERT(append_test_leaf_cell(&ctx, &right, 100, 100));
 
-        if (old_root_page_num != test_btree.btree->root_page_num) {
+    BTreeMergeResult merge_result = {0};
+    status = btree_node_merge(ctx.pager, &merge_result, ctx.index_spec);
+    ASSERT(status == BTREE_INVALID_ARGUMENTS);
+
+    merge_result.needs_merge = true;
+    merge_result.underflowing_page_num = right_page_num;
+    merge_result.sibling_page_num = left_page_num;
+    merge_result.parent_page_num = ctx.btree->root_page_num;
+    merge_result.parent_underflowing_cell_index = 1;
+    merge_result.parent_sibling_cell_index = 0;
+
+    status = btree_node_merge(ctx.pager, &merge_result, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+
+    btree_page_load(&root);
+    btree_page_load(&left);
+
+    ASSERT(left.cell_count == 2);
+    ASSERT(root.cell_count == 0);
+    ASSERT(root.type_specific_data.rightmost_child_pointer == left_page_num);
+    ASSERT(page_cell_matches_key_order(&left, ctx.index_spec, 0, 10));
+    ASSERT(page_cell_matches_key_order(&left, ctx.index_spec, 1, 100));
+
+    uint32_t free_list_head = 0;
+    ASSERT(get_test_free_list_head(&ctx, &free_list_head));
+    ASSERT(free_list_head == right_page_num);
+
+    btree_test_context_free(&ctx);
+    return 0;
+}
+
+static int test_root_collapse() {
+    BTreeTestContext ctx = {0};
+    ASSERT(btree_test_context_init(&ctx, "build/database21.db"));
+
+    uint32_t old_root_page_num = ctx.btree->root_page_num;
+    uint32_t child_page_num = 0;
+    ASSERT(create_empty_leaf_child(&ctx, old_root_page_num, &child_page_num));
+    ASSERT(initialize_test_internal_page(&ctx, old_root_page_num, UINT32_MAX, true, child_page_num));
+
+    Page *old_root_page = pager_get_page(ctx.pager, old_root_page_num);
+    if (!old_root_page) { return -1; }
+
+    BTreePage old_root = {0};
+    BTreeStatus status = btree_page_attach_load_validate(ctx.pager, &old_root, old_root_page, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+    ASSERT(old_root.type == BTREE_INTERNAL_NODE);
+    ASSERT(old_root.cell_count == 0);
+    ASSERT(old_root.is_root == true);
+
+    status = btree_root_collapse(ctx.btree, &old_root, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+    ASSERT(ctx.btree->root_page_num == child_page_num);
+
+    Page *new_root_page = pager_get_page(ctx.pager, child_page_num);
+    if (!new_root_page) { return -1; }
+
+    BTreePage new_root = {0};
+    status = btree_page_attach_load_validate(ctx.pager, &new_root, new_root_page, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+
+    ASSERT(new_root.type == BTREE_LEAF_NODE);
+    ASSERT(new_root.is_root == true);
+    ASSERT(new_root.parent_pointer == UINT32_MAX);
+
+    uint32_t free_list_head = 0;
+    ASSERT(get_test_free_list_head(&ctx, &free_list_head));
+    ASSERT(free_list_head == old_root_page_num);
+
+    btree_test_context_free(&ctx);
+    return 0;
+}
+
+static int test_node_redistribution() {
+    BTreeTestContext ctx = {0};
+    ASSERT(btree_test_context_init(&ctx, "build/database22_1.db"));
+
+    /* --- REDISTRIBUTE FROM RIGHT --- */
+    uint32_t left_page_num = 0;
+    uint32_t right_page_num = 0;
+    ASSERT(build_two_level_test_tree(&ctx, 100, &left_page_num, &right_page_num));
+
+    Page *root_page = pager_get_page(ctx.pager, ctx.btree->root_page_num);
+    Page *left_page = pager_get_page(ctx.pager, left_page_num);
+    Page *right_page = pager_get_page(ctx.pager, right_page_num);
+    if (!root_page || !left_page || !right_page) { return -1; }
+
+    BTreePage root = {0};
+    BTreePage left = {0};
+    BTreePage right = {0};
+
+    BTreeStatus status = btree_page_attach_load_validate(ctx.pager, &root, root_page, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+    status = btree_page_attach_load_validate(ctx.pager, &left, left_page, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+    status = btree_page_attach_load_validate(ctx.pager, &right, right_page, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+
+    for (uint32_t i = 0; i < 3; i++) {
+        ASSERT(append_test_leaf_cell(&ctx, &left, 10 + i, 10 + i));
+    }
+    for (uint32_t i = 0; i < 5; i++) {
+        ASSERT(append_test_leaf_cell(&ctx, &right, 100 + i, 100 + i));
+    }
+
+    status = btree_check_underflow(&left, UINT32_MAX);
+    ASSERT(status == BTREE_NODE_UNDERFLOW);
+    status = btree_node_can_lend(&right, 0, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+
+    BTreeMergeResult merge_result = {0};
+    status = btree_node_redistribution(ctx.pager, &left, ctx.index_spec, &merge_result);
+    ASSERT(status == BTREE_SUCCESS);
+
+    btree_page_load(&root);
+    btree_page_load(&left);
+    btree_page_load(&right);
+
+    ASSERT(merge_result.needs_merge == false);
+    ASSERT(left.cell_count == 4);
+    ASSERT(right.cell_count == 4);
+    ASSERT(page_cell_matches_key_order(&left, ctx.index_spec, 3, 100));
+    ASSERT(page_cell_matches_key_order(&right, ctx.index_spec, 0, 101));
+    ASSERT(page_cell_matches_key_order(&root, ctx.index_spec, 0, 101));
+
+    btree_test_context_free(&ctx);
+
+    /* --- NEEDS MERGE --- */
+    ASSERT(btree_test_context_init(&ctx, "build/database22_2.db"));
+    ASSERT(build_two_level_test_tree(&ctx, 100, &left_page_num, &right_page_num));
+
+    root_page = pager_get_page(ctx.pager, ctx.btree->root_page_num);
+    left_page = pager_get_page(ctx.pager, left_page_num);
+    right_page = pager_get_page(ctx.pager, right_page_num);
+    if (!root_page || !left_page || !right_page) { return -1; }
+
+    root = (BTreePage){0};
+    left = (BTreePage){0};
+    right = (BTreePage){0};
+
+    status = btree_page_attach_load_validate(ctx.pager, &root, root_page, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+    status = btree_page_attach_load_validate(ctx.pager, &left, left_page, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+    status = btree_page_attach_load_validate(ctx.pager, &right, right_page, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+
+    for (uint32_t i = 0; i < 3; i++) {
+        ASSERT(append_test_leaf_cell(&ctx, &left, 10 + i, 10 + i));
+    }
+    for (uint32_t i = 0; i < 4; i++) {
+        ASSERT(append_test_leaf_cell(&ctx, &right, 100 + i, 100 + i));
+    }
+
+    status = btree_check_underflow(&left, UINT32_MAX);
+    ASSERT(status == BTREE_NODE_UNDERFLOW);
+    status = btree_node_can_lend(&right, 0, ctx.index_spec);
+    ASSERT(status == BTREE_NODE_UNDERFLOW);
+
+    merge_result = (BTreeMergeResult){0};
+    status = btree_node_redistribution(ctx.pager, &left, ctx.index_spec, &merge_result);
+    ASSERT(status == BTREE_NEEDS_MERGE);
+
+    ASSERT(merge_result.needs_merge == true);
+    ASSERT(merge_result.underflowing_page_num == left_page_num);
+    ASSERT(merge_result.sibling_page_num == right_page_num);
+    ASSERT(merge_result.parent_page_num == ctx.btree->root_page_num);
+    ASSERT(merge_result.parent_underflowing_cell_index == 0);
+    ASSERT(merge_result.parent_sibling_cell_index == 1);
+
+    btree_test_context_free(&ctx);
+    return 0;
+}
+
+static int test_btree_insert() {
+    BTreeTestContext ctx = {0};
+    ASSERT(btree_test_context_init(&ctx, "build/database23.db"));
+
+    uint32_t old_root_page_num = ctx.btree->root_page_num;
+
+    BTreeCellContents cell_contents = {0};
+    ASSERT(create_ordered_cell_contents(&cell_contents, ctx.index_spec, 0, 0));
+
+    BTreeInsertionResult insertion_result = {0};
+    BTreeStatus status = btree_insert(ctx.btree, &cell_contents, &insertion_result, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+
+    ASSERT(insertion_result.inserted == true);
+    ASSERT(insertion_result.splitted == false);
+    ASSERT(insertion_result.insertion_page_num == old_root_page_num);
+    ASSERT(insertion_result.split_levels == 0);
+
+    status = btree_insert(ctx.btree, &cell_contents, &insertion_result, ctx.index_spec);
+    ASSERT(status == BTREE_DUPLICATE_KEY);
+    ASSERT(insertion_result.inserted == false);
+
+    free_cell_contents(&cell_contents);
+
+    uint32_t key_order = 1;
+    while (true) {
+        ASSERT(create_ordered_cell_contents(&cell_contents, ctx.index_spec, key_order, key_order));
+
+        status = btree_insert(ctx.btree, &cell_contents, &insertion_result, ctx.index_spec);
+        ASSERT(status == BTREE_SUCCESS);
+
+        bool splitted = insertion_result.splitted;
+        free_cell_contents(&cell_contents);
+
+        if (splitted) {
             break;
         }
 
-        status = btree_page_attach_load_validate(pager, &new_root, pager->pages[test_btree.btree->root_page_num], &index_spec);
-        if (status != BTREE_SUCCESS) { return -1; }
-
-        BTreePage right_internal = {0};
-        status = btree_page_attach_load_validate(pager, &right_internal, pager->pages[new_root.type_specific_data.rightmost_child_pointer], &index_spec);
-        if (status != BTREE_SUCCESS) { return -1; }
-
-        status = btree_page_attach_load_validate(pager, &btree_page, pager->pages[right_internal.type_specific_data.rightmost_child_pointer], &index_spec);
-        if (status != BTREE_SUCCESS) { return -1; }
+        key_order++;
+        ASSERT(key_order < 100);
     }
 
-    ASSERT(old_root_page_num != test_btree.btree->root_page_num);
-    
-    status = btree_page_attach_load_validate(pager, &new_root, pager->pages[test_btree.btree->root_page_num], &index_spec);
-    if (status != BTREE_SUCCESS) { return -1; }
-    ASSERT(new_root.is_root == true);
-    ASSERT(new_root.parent_pointer == UINT32_MAX);
-    ASSERT(new_root.cell_count == 1);
-    
-    status = btree_page_attach_load_validate(pager, &old_root, pager->pages[old_root_page_num], &index_spec);
-    if (status != BTREE_SUCCESS) { return -1; }
-    ASSERT(old_root.is_root == false);
-    ASSERT(old_root.parent_pointer == test_btree.btree->root_page_num);
+    ASSERT(insertion_result.inserted == true);
+    ASSERT(insertion_result.splitted == true);
+    ASSERT(insertion_result.split_levels == 1);
+    ASSERT(ctx.btree->root_page_num != old_root_page_num);
 
-    status = btree_page_attach_load_validate(pager, &right_page, pager->pages[new_root.type_specific_data.rightmost_child_pointer], &index_spec);
-    if (status != BTREE_SUCCESS) { return -1; }
-    ASSERT(right_page.is_root == false);
-    ASSERT(right_page.parent_pointer == test_btree.btree->root_page_num);
+    uint32_t height = 0;
+    ASSERT(get_btree_height(&ctx, &height));
+    ASSERT(height == 2);
 
-    new_root_cell_pointer = get_cell_pointer(new_root.data, 0);
-    new_root_child_pointer = get_cell_child_pointer(new_root.data, get_cell_offset(new_root_cell_pointer));
-    ASSERT(new_root_child_pointer == old_root.page->page_num);
-    ASSERT(new_root.type_specific_data.rightmost_child_pointer == right_page.page->page_num);
+    BTreeSearchKey search_key = {0};
+    BTreeSearchResult search_result = {0};
+    ASSERT(ordered_search_key_init(&search_key, ctx.index_spec, key_order));
 
-    Page *first_leaf_node = NULL;
-    for (uint32_t i = 0; i < old_root.cell_count+1; i++) {
-        BTreePage internal_node = {0};
-        uint32_t child_pointer = 0;
-        if (i == old_root.cell_count) {
-            child_pointer = old_root.type_specific_data.rightmost_child_pointer;
-        } else {    
-            uint32_t cell_pointer = get_cell_pointer(old_root.data, i);
-            child_pointer = get_cell_child_pointer(old_root.data, get_cell_offset(cell_pointer));
-
-        }
-        Page *page = pager_get_page(pager, child_pointer);
-        if (!page) { return -1; }
-
-        status = btree_page_attach_load_validate(pager, &internal_node, page, &index_spec);
-        if (status != BTREE_SUCCESS) { return -1; }
-
-        ASSERT(internal_node.type == BTREE_INTERNAL_NODE);
-        ASSERT(internal_node.is_root == false);
-        ASSERT(internal_node.parent_pointer == old_root.page->page_num);
-
-        for (uint32_t j = 0; j < internal_node.cell_count+1; j++) {
-            BTreePage leaf_node = {0};
-            child_pointer = 0;
-            if (j == internal_node.cell_count) {
-                child_pointer = internal_node.type_specific_data.rightmost_child_pointer;
-            } else {    
-                uint32_t cell_pointer = get_cell_pointer(internal_node.data, j);
-                child_pointer = get_cell_child_pointer(internal_node.data, get_cell_offset(cell_pointer));
-            }
-
-            page = pager_get_page(pager, child_pointer);
-            if (!page) { return -1; }
-
-            status = btree_page_attach_load_validate(pager, &leaf_node, page, &index_spec);
-            if (status != BTREE_SUCCESS) { return -1; }
-
-            if (i == old_root.cell_count && j == internal_node.cell_count) {
-                status = get_key(&leaf_node, leaf_node.cell_count-1, &key_view, &index_spec);
-                if (status != BTREE_SUCCESS) { return -1; }
-
-                left_page_last_cell = serialized_key_to_values(key_view.key, index->key->num_columns, &index_spec);
-                if (!left_page_last_cell) { return -1; }
-            }
-
-            ASSERT(leaf_node.type == BTREE_LEAF_NODE);
-            ASSERT(leaf_node.is_root == false);
-            ASSERT(leaf_node.parent_pointer == internal_node.page->page_num);
-
-            if (i == 0 && j == 0) {
-                first_leaf_node = page;
-            }
-        }
-    }
-
-    for (uint32_t i = 0; i < right_page.cell_count+1; i++) {
-        BTreePage internal_node = {0};
-        uint32_t child_pointer = 0;
-        if (i == right_page.cell_count) {
-            child_pointer = right_page.type_specific_data.rightmost_child_pointer;
-        } else {    
-            uint32_t cell_pointer = get_cell_pointer(right_page.data, i);
-            child_pointer = get_cell_child_pointer(right_page.data, get_cell_offset(cell_pointer));
-
-        }
-        Page *page = pager_get_page(pager, child_pointer);
-        if (!page) { return -1; }
-
-        status = btree_page_attach_load_validate(pager, &internal_node, page, &index_spec);
-        if (status != BTREE_SUCCESS) { return -1; }
-
-        ASSERT(internal_node.type == BTREE_INTERNAL_NODE);
-        ASSERT(internal_node.is_root == false);
-        ASSERT(internal_node.parent_pointer == right_page.page->page_num);
-
-        for (uint32_t j = 0; j < internal_node.cell_count+1; j++) {
-            BTreePage leaf_node = {0};
-            child_pointer = 0;
-            if (j == internal_node.cell_count) {
-                child_pointer = internal_node.type_specific_data.rightmost_child_pointer;
-            } else {    
-                uint32_t cell_pointer = get_cell_pointer(internal_node.data, j);
-                child_pointer = get_cell_child_pointer(internal_node.data, get_cell_offset(cell_pointer));
-            }
-
-            page = pager_get_page(pager, child_pointer);
-            if (!page) { return -1; }
-
-            status = btree_page_attach_load_validate(pager, &leaf_node, page, &index_spec);
-            if (status != BTREE_SUCCESS) { return -1; }
-
-            if (i == 0 && j == 0) {
-                status = get_key(&leaf_node, j, &key_view, &index_spec);
-                if (status != BTREE_SUCCESS) { return -1; }
-
-                right_page_cell = serialized_key_to_values(key_view.key, index->key->num_columns, &index_spec);
-                if (!right_page_cell) { return -1; }
-            }
-
-            ASSERT(leaf_node.type == BTREE_LEAF_NODE);
-            ASSERT(leaf_node.is_root == false);
-            ASSERT(leaf_node.parent_pointer == internal_node.page->page_num);
-        }
-    }
-
-    status = get_key(&new_root, 0, &key_view, &index_spec);
-    if (status != BTREE_SUCCESS) { return -1; }
-
-    new_root_cell = serialized_key_to_values(key_view.key, index_spec.index_key->num_columns, &index_spec);
-    if (!new_root_cell) { return -1; }
-
-    right_internal_page = pager_get_page(pager, new_root.type_specific_data.rightmost_child_pointer);
-    if (!right_internal_page) { return -1; }
-
-    status = btree_page_attach_load_validate(pager, &right_internal, right_internal_page, &index_spec);
-    if (status != BTREE_SUCCESS) { return -1; }
-
-
-    result = 0;
-    status = btree_compare(left_page_last_cell, new_root_cell, index->key->num_columns, &result);
-    ASSERT(result == -1);
-
-    status = btree_compare(new_root_cell, right_page_cell, index->key->num_columns, &result);
-    ASSERT(result == 0);
-
-    // right_subtree_leftmost = 0;
-    // memcpy(&right_subtree_leftmost, cell_view.payload, sizeof(uint32_t));
-
-    // right_subtree_leftmost_page = pager_get_page(pager, right_subtree_leftmost);
-    // if (!right_subtree_leftmost_page) { return -1; }
-
-    status = btree_traverse_reachable_pages(test_btree.btree, &visited);
+    status = btree_root_to_leaf(ctx.btree, &search_key, &search_result, BTREE_UPPER_BOUND);
     ASSERT(status == BTREE_SUCCESS);
-    ASSERT(visited.count == pager->num_pages - 2);
+    ASSERT(search_result.exact_match == true);
 
-    BTreePage btree_first_leaf_node = {0};
-    status = btree_page_attach_load_validate(pager, &btree_first_leaf_node, first_leaf_node, &index_spec);
-    if (status != BTREE_SUCCESS) { return -1; }
-    uint32_t leaf_count = 0;
+    free(search_key.target_key);
+    btree_test_context_free(&ctx);
+    return 0;
+}
 
-    for (uint32_t i = 0; i < visited.count; i++) {
-        Page *page = pager_get_page(pager, visited.page_numbers[i]);
-        if (!page) { return -1; }
+static int test_btree_delete() {
+    BTreeTestContext ctx = {0};
+    ASSERT(btree_test_context_init(&ctx, "build/database24.db"));
 
-        BTreePage page_btree = {0};
-        status = btree_page_attach_load_validate(
-            pager,
-            &page_btree,
-            page,
-            &index_spec
-        );
-        if (status != BTREE_SUCCESS) { return -1; }
+    uint32_t left_page_num = 0;
+    uint32_t right_page_num = 0;
+    ASSERT(build_two_level_test_tree(&ctx, 100, &left_page_num, &right_page_num));
 
-        if (page_btree.type == BTREE_LEAF_NODE) {
-            leaf_count++;
-        }
+    Page *root_page = pager_get_page(ctx.pager, ctx.btree->root_page_num);
+    Page *left_page = pager_get_page(ctx.pager, left_page_num);
+    Page *right_page = pager_get_page(ctx.pager, right_page_num);
+    if (!root_page || !left_page || !right_page) { return -1; }
+
+    BTreePage root = {0};
+    BTreePage left = {0};
+    BTreePage right = {0};
+
+    BTreeStatus status = btree_page_attach_load_validate(ctx.pager, &root, root_page, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+    status = btree_page_attach_load_validate(ctx.pager, &left, left_page, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+    status = btree_page_attach_load_validate(ctx.pager, &right, right_page, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+
+    for (uint32_t i = 0; i < 4; i++) {
+        ASSERT(append_test_leaf_cell(&ctx, &left, 10 + i, 10 + i));
+    }
+    for (uint32_t i = 0; i < 5; i++) {
+        ASSERT(append_test_leaf_cell(&ctx, &right, 100 + i, 100 + i));
     }
 
-    counter = 1;
-    prev_page_num = btree_first_leaf_node.page->page_num;
-    next_leaf = btree_first_leaf_node.type_specific_data.siblings.next_leaf_pointer;
-    ASSERT(btree_first_leaf_node.type_specific_data.siblings.previous_leaf_pointer == UINT32_MAX);
-    while (next_leaf != UINT32_MAX) {
-        ASSERT(counter < leaf_count);
-        
-        Page *page = pager_get_page(pager, next_leaf);
-        if (!page) { return -1; }
+    BTreeCellContents target_cell = {0};
+    ASSERT(create_ordered_cell_contents(&target_cell, ctx.index_spec, 10, 10));
 
-        BTreePage leaf_page = {0};
-        status = btree_page_attach_load_validate(pager, &leaf_page, page, &index_spec);
-        if (status != BTREE_SUCCESS) { return -1; }
-        ASSERT(leaf_page.type == BTREE_LEAF_NODE);
+    BTreeDeletionResult deletion_result = {0};
+    status = btree_delete(ctx.btree, &target_cell, &deletion_result, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+    ASSERT(deletion_result.deleted == true);
 
-        ASSERT(leaf_page.type_specific_data.siblings.previous_leaf_pointer == prev_page_num);
-        next_leaf = leaf_page.type_specific_data.siblings.next_leaf_pointer;
+    left_page = pager_get_page(ctx.pager, left_page_num);
+    right_page = pager_get_page(ctx.pager, right_page_num);
+    root_page = pager_get_page(ctx.pager, ctx.btree->root_page_num);
+    if (!left_page || !right_page || !root_page) { return -1; }
 
-        prev_page_num = leaf_page.page->page_num;
-        counter++;
+    left = (BTreePage){0};
+    right = (BTreePage){0};
+    root = (BTreePage){0};
+
+    status = btree_page_attach_load_validate(ctx.pager, &left, left_page, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+    status = btree_page_attach_load_validate(ctx.pager, &right, right_page, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+    status = btree_page_attach_load_validate(ctx.pager, &root, root_page, ctx.index_spec);
+    ASSERT(status == BTREE_SUCCESS);
+
+    ASSERT(left.cell_count == 4);
+    ASSERT(right.cell_count == 4);
+    ASSERT(page_cell_matches_key_order(&left, ctx.index_spec, 0, 11));
+    ASSERT(page_cell_matches_key_order(&left, ctx.index_spec, 3, 100));
+    ASSERT(page_cell_matches_key_order(&right, ctx.index_spec, 0, 101));
+    ASSERT(page_cell_matches_key_order(&root, ctx.index_spec, 0, 101));
+
+    BTreeSearchKey search_key = {0};
+    BTreeSearchResult search_result = {0};
+    BTreeSearchEntries entries = {0};
+    ASSERT(ordered_search_key_init(&search_key, ctx.index_spec, 10));
+
+    status = btree_find_exact_key(ctx.btree, &search_key, &search_result, &entries);
+    ASSERT(status == BTREE_NOT_FOUND);
+
+    btree_search_entries_free(&entries);
+    free(search_key.target_key);
+    free_cell_contents(&target_cell);
+
+    if (deletion_result.first_key_changed) {
+        free_cell_contents(&deletion_result.first_cell);
     }
-    ASSERT(counter == leaf_count);
-    
 
+    btree_test_context_free(&ctx);
     return 0;
 }
 
@@ -3649,7 +4235,6 @@ void generate_output(int result, int test_num, char *test_desc) {
     printf("TEST[%d]: %s - %*s\n", test_num, test_desc, space, result_str);
 }
 
-/* (NOTE) MAX_PAGES >= 25000 (Won't run correctly otherwise)*/
 int main(int argc, char *argv[]) {
     int result;
 
@@ -3659,45 +4244,65 @@ int main(int argc, char *argv[]) {
     if (result < 0) { if (errno != ENOENT) { return 1; } }
     result = unlink("build/database3.db");
     if (result < 0) { if (errno != ENOENT) { return 1; } }
-    result = unlink("build/database4_1.db");
-    if (result < 0) { if (errno != ENOENT) { return 1; } }
-    result = unlink("build/database4_2.db");
-    if (result < 0) { if (errno != ENOENT) { return 1; } }
-    result = unlink("build/database4_3.db");
+    result = unlink("build/database4.db");
     if (result < 0) { if (errno != ENOENT) { return 1; } }
     result = unlink("build/database5.db");
     if (result < 0) { if (errno != ENOENT) { return 1; } }
     result = unlink("build/database6.db");
     if (result < 0) { if (errno != ENOENT) { return 1; } }
-    result = unlink("build/database7_1.db");
+    result = unlink("build/database7.db");
     if (result < 0) { if (errno != ENOENT) { return 1; } }
-    result = unlink("build/database7_2.db");
+    result = unlink("build/database8.db");
     if (result < 0) { if (errno != ENOENT) { return 1; } }
-    result = unlink("build/database7_3.db");
-    if (result < 0) { if (errno != ENOENT) { return 1; } }
-    result = unlink("build/database8_1.db");
-    if (result < 0) { if (errno != ENOENT) { return 1; } }
-    result = unlink("build/database8_2.db");
-    if (result < 0) { if (errno != ENOENT) { return 1; } }
-    result = unlink("build/database9_1.db");
+    result = unlink("build/database9.db");
     if (result < 0) { if (errno != ENOENT) { return 1; } }
     result = unlink("build/database10_1.db");
     if (result < 0) { if (errno != ENOENT) { return 1; } }
     result = unlink("build/database10_2.db");
     if (result < 0) { if (errno != ENOENT) { return 1; } }
-    result = unlink("build/database10_3.db");
-    if (result < 0) { if (errno != ENOENT) { return 1; } }
     result = unlink("build/database11.db");
     if (result < 0) { if (errno != ENOENT) { return 1; } }
     result = unlink("build/database12.db");
     if (result < 0) { if (errno != ENOENT) { return 1; } }
+    result = unlink("build/database13_1.db");
+    if (result < 0) { if (errno != ENOENT) { return 1; } }
+    result = unlink("build/database13_2.db");
+    if (result < 0) { if (errno != ENOENT) { return 1; } }
+    result = unlink("build/database14.db");
+    if (result < 0) { if (errno != ENOENT) { return 1; } }
+    result = unlink("build/database15_1.db");
+    if (result < 0) { if (errno != ENOENT) { return 1; } }
+    result = unlink("build/database15_2.db");
+    if (result < 0) { if (errno != ENOENT) { return 1; } }
+    result = unlink("build/database16_1.db");
+    if (result < 0) { if (errno != ENOENT) { return 1; } }
+    result = unlink("build/database16_2.db");
+    if (result < 0) { if (errno != ENOENT) { return 1; } }
+    result = unlink("build/database17.db");
+    if (result < 0) { if (errno != ENOENT) { return 1; } }
+    result = unlink("build/database18.db");
+    if (result < 0) { if (errno != ENOENT) { return 1; } }
+    result = unlink("build/database19.db");
+    if (result < 0) { if (errno != ENOENT) { return 1; } }
+    result = unlink("build/database20.db");
+    if (result < 0) { if (errno != ENOENT) { return 1; } }
+    result = unlink("build/database21.db");
+    if (result < 0) { if (errno != ENOENT) { return 1; } }
+    result = unlink("build/database22_1.db");
+    if (result < 0) { if (errno != ENOENT) { return 1; } }
+    result = unlink("build/database22_2.db");
+    if (result < 0) { if (errno != ENOENT) { return 1; } }
+    result = unlink("build/database23.db");
+    if (result < 0) { if (errno != ENOENT) { return 1; } }
+    result = unlink("build/database24.db");
+    if (result < 0) { if (errno != ENOENT) { return 1; } }
 
     result = test_empty_leaf_init();
     generate_output(result, 0, "test_empty_leaf_init");
-    result = test_init_internal();
-    generate_output(result, 1, "test_init_internal");
-    result = test_binary_search();
-    generate_output(result, 2, "test_binary_search");
+    result = test_empty_internal_init();
+    generate_output(result, 1, "test_empty_internal_init");
+    result = test_btree_binary_search();
+    generate_output(result, 2, "test_btree_binary_search");
     result = test_root_to_leaf();
     generate_output(result, 3, "test_root_to_leaf");
     result = test_node_insert();
@@ -3718,7 +4323,28 @@ int main(int argc, char *argv[]) {
     generate_output(result, 11, "test_find_prefix_keys");
     result = test_split_propagation();
     generate_output(result, 12, "test_split_propagation");
-    
+    result = test_node_delete();
+    generate_output(result, 13, "test_node_delete");
+    result = test_leaf_borrow();
+    generate_output(result, 14, "test_leaf_borrow");
+    result = test_internal_borrow();
+    generate_output(result, 15, "test_internal_borrow");
+    result = test_node_borrow();
+    generate_output(result, 16, "test_node_borrow");
+    result = test_leaf_merge();
+    generate_output(result, 17, "test_leaf_merge");
+    result = test_internal_merge();
+    generate_output(result, 18, "test_internal_merge");
+    result = test_node_merge();
+    generate_output(result, 19, "test_node_merge");
+    result = test_root_collapse();
+    generate_output(result, 20, "test_root_collapse");
+    result = test_node_redistribution();
+    generate_output(result, 21, "test_node_redistribution");
+    result = test_btree_insert();
+    generate_output(result, 22, "test_btree_insert");
+    result = test_btree_delete();
+    generate_output(result, 23, "test_btree_delete");
 
     result = unlink("build/database1.db");
     if (result < 0) { if (errno != ENOENT) { return 1; } }
@@ -3726,37 +4352,57 @@ int main(int argc, char *argv[]) {
     if (result < 0) { if (errno != ENOENT) { return 1; } }
     result = unlink("build/database3.db");
     if (result < 0) { if (errno != ENOENT) { return 1; } }
-    result = unlink("build/database4_1.db");
-    if (result < 0) { if (errno != ENOENT) { return 1; } }
-    result = unlink("build/database4_2.db");
-    if (result < 0) { if (errno != ENOENT) { return 1; } }
-    result = unlink("build/database4_3.db");
+    result = unlink("build/database4.db");
     if (result < 0) { if (errno != ENOENT) { return 1; } }
     result = unlink("build/database5.db");
     if (result < 0) { if (errno != ENOENT) { return 1; } }
     result = unlink("build/database6.db");
     if (result < 0) { if (errno != ENOENT) { return 1; } }
-    result = unlink("build/database7_1.db");
+    result = unlink("build/database7.db");
     if (result < 0) { if (errno != ENOENT) { return 1; } }
-    result = unlink("build/database7_2.db");
+    result = unlink("build/database8.db");
     if (result < 0) { if (errno != ENOENT) { return 1; } }
-    result = unlink("build/database7_3.db");
-    if (result < 0) { if (errno != ENOENT) { return 1; } }
-    result = unlink("build/database8_1.db");
-    if (result < 0) { if (errno != ENOENT) { return 1; } }
-    result = unlink("build/database8_2.db");
-    if (result < 0) { if (errno != ENOENT) { return 1; } }
-    result = unlink("build/database9_1.db");
+    result = unlink("build/database9.db");
     if (result < 0) { if (errno != ENOENT) { return 1; } }
     result = unlink("build/database10_1.db");
     if (result < 0) { if (errno != ENOENT) { return 1; } }
     result = unlink("build/database10_2.db");
     if (result < 0) { if (errno != ENOENT) { return 1; } }
-    result = unlink("build/database10_3.db");
-    if (result < 0) { if (errno != ENOENT) { return 1; } }
     result = unlink("build/database11.db");
     if (result < 0) { if (errno != ENOENT) { return 1; } }
     result = unlink("build/database12.db");
+    if (result < 0) { if (errno != ENOENT) { return 1; } }
+    result = unlink("build/database13_1.db");
+    if (result < 0) { if (errno != ENOENT) { return 1; } }
+    result = unlink("build/database13_2.db");
+    if (result < 0) { if (errno != ENOENT) { return 1; } }
+    result = unlink("build/database14.db");
+    if (result < 0) { if (errno != ENOENT) { return 1; } }
+    result = unlink("build/database15_1.db");
+    if (result < 0) { if (errno != ENOENT) { return 1; } }
+    result = unlink("build/database15_2.db");
+    if (result < 0) { if (errno != ENOENT) { return 1; } }
+    result = unlink("build/database16_1.db");
+    if (result < 0) { if (errno != ENOENT) { return 1; } }
+    result = unlink("build/database16_2.db");
+    if (result < 0) { if (errno != ENOENT) { return 1; } }
+    result = unlink("build/database17.db");
+    if (result < 0) { if (errno != ENOENT) { return 1; } }
+    result = unlink("build/database18.db");
+    if (result < 0) { if (errno != ENOENT) { return 1; } }
+    result = unlink("build/database19.db");
+    if (result < 0) { if (errno != ENOENT) { return 1; } }
+    result = unlink("build/database20.db");
+    if (result < 0) { if (errno != ENOENT) { return 1; } }
+    result = unlink("build/database21.db");
+    if (result < 0) { if (errno != ENOENT) { return 1; } }
+    result = unlink("build/database22_1.db");
+    if (result < 0) { if (errno != ENOENT) { return 1; } }
+    result = unlink("build/database22_2.db");
+    if (result < 0) { if (errno != ENOENT) { return 1; } }
+    result = unlink("build/database23.db");
+    if (result < 0) { if (errno != ENOENT) { return 1; } }
+    result = unlink("build/database24.db");
     if (result < 0) { if (errno != ENOENT) { return 1; } }
 
     return 0;
