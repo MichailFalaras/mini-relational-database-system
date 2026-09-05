@@ -327,7 +327,7 @@ BTreeStatus btree_node_insert(Pager *pager, BTreePage *btree_page, BTreeCellCont
 
     /* Creates space for new cell pointer and actually serializes cell contents onto
      * page's page_data. */
-    status = insert_cell(pager, btree_page, index, &search_result, cell_contents);
+    status = insert_cell(pager, btree_page, cell_contents, search_result.result_index, index);
     if (status != BTREE_SUCCESS) {
         return status;
     }
@@ -1710,9 +1710,14 @@ BTreeStatus btree_node_merge(Pager *pager, BTreeMergeResult *merge_result, BTree
     }
 
     /* If separator cell refers to rightmost pointer, then we decrease cell_index
-     * by one. */
-    if (separator_cell_index == btree_parent_page.cell_count) {
-        separator_cell_index--;
+     * by one. 
+     *
+     * Check both underflowing page's index and sibling cell's index because in the simplest
+     * case of parent having only 2 children (1 has a cell & 1 is rightmost)
+     * the expression: separator_index == btree_parent_page.cell_count would be false
+     * since separator index won't ever be cell_count.*/
+    if (merge_result->parent_underflowing_cell_index == btree_parent_page.cell_count
+        || merge_result->parent_sibling_cell_index == btree_parent_page.cell_count) {
         btree_parent_page.type_specific_data.rightmost_child_pointer = left->page->page_num;
     }
 
@@ -1809,9 +1814,13 @@ BTreeStatus btree_node_redistribution(Pager *pager, BTreePage *underflowing_page
     }
     merge_result_reset(merge_result);
 
+    Page *page = pager_get_page(pager, underflowing_page->parent_pointer);
+    if (!page) {
+        return BTREE_ERROR;
+    }
+
     BTreePage parent_page = {0};
-    BTreeStatus status = btree_page_attach_load_validate(pager, &parent_page,
-                         pager->pages[underflowing_page->parent_pointer], index);
+    BTreeStatus status = btree_page_attach_load_validate(pager, &parent_page, page, index);
     if (status != BTREE_SUCCESS) {
         return status;
     }

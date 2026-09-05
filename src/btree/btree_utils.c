@@ -585,15 +585,15 @@ BTreeStatus get_cell(BTreePage *btree_page, uint16_t cell_index, BTreeCellView *
 }
 
 /* Insert new cell's Cell Pointer and its contents onto a BTreePage AFTER BINARY SEARCH. */
-BTreeStatus insert_cell(Pager *pager, BTreePage *btree_page, BTreeIndexSpec *index, BTreeSearchResult *search_result,
-                     BTreeCellContents *cell_contents) {
+BTreeStatus insert_cell(Pager *pager, BTreePage *btree_page, BTreeCellContents *cell_contents, uint32_t cell_index,
+    BTreeIndexSpec *index) {
     if (!pager || !btree_page || !btree_page->page || !btree_page->data
-        || !index || !search_result || !cell_contents) {
+        || !index || cell_index > btree_page->cell_count || !cell_contents) {
         return BTREE_INVALID_ARGUMENTS;
     }
 
     /* Shift cell pointers downwards to create empty space. */
-    BTreeStatus status = shift_cell_pointer(btree_page, search_result->result_index, BTREE_SHIFT_INSERT);
+    BTreeStatus status = shift_cell_pointer(btree_page, cell_index, BTREE_SHIFT_INSERT);
     if (status != BTREE_SUCCESS) {
         return status;
     }
@@ -604,7 +604,7 @@ BTreeStatus insert_cell(Pager *pager, BTreePage *btree_page, BTreeIndexSpec *ind
     /* Fill that empty space with the new cell pointer. */
     set_cell_pointer(
         btree_page->data,
-        search_result->result_index,
+        cell_index,
         make_cell_pointer(offset, size)
     );
 
@@ -1092,7 +1092,7 @@ Value **serialized_key_to_values(void *separator_key, uint32_t num_keys, BTreeIn
 
         bool is_null = ((bitmap[bitmap_index] & (1 << bitmap_shift)) != 0);
 
-        key_vals[i] = deserialize_value_data(get_column(index, i), is_null, key_offset);
+        key_vals[i] = deserialize_value_data(get_key_column(index, i), is_null, key_offset);
         if (!key_vals[i]) {
             free(bitmap);
             value_free_array(key_vals, num_keys);
@@ -1127,7 +1127,7 @@ void *values_to_serialized_key(Value **key_vals, uint32_t num_keys, BTreeIndexSp
     }
 
     for (uint32_t i = 0; i < num_keys; i++) {
-        if (!serialize_value_data(key_vals[i], get_column(index, i), offset)) {
+        if (!serialize_value_data(key_vals[i], get_key_column(index, i), offset)) {
             free(serialized_key);
             return NULL;
         }
@@ -1305,20 +1305,51 @@ BTreeStatus btree_node_can_lend(BTreePage *lender, uint32_t cell_pointer_index, 
 }
 
 /* Replace cell by removing what was in its position and inserting another one. */
-BTreeStatus btree_replace_cell(Pager *pager, BTreePage *btree_page, uint32_t cell_pointer_index, BTreeCellContents *replacement, BTreeIndexSpec *index) {
+BTreeStatus btree_replace_cell(Pager *pager, BTreePage *btree_page, uint32_t cell_index, BTreeCellContents *replacement,
+    BTreeIndexSpec *index) {
     if (!pager || !btree_page || !btree_page->page || !btree_page->data
-        || cell_pointer_index >= btree_page->cell_count
+        || cell_index >= btree_page->cell_count
         || !replacement || !index) {
         return BTREE_INVALID_ARGUMENTS;
     }
 
-    BTreeStatus status = btree_remove_cell(btree_page, cell_pointer_index);
+    BTreeCellContents to_be_deleted = {0};
+    BTreeStatus status = get_cell_contents(btree_page, cell_index, &to_be_deleted, index);
     if (status != BTREE_SUCCESS) {
         return status;
     }
 
-    BTreeSplitResult split_result = {0};
-    status = btree_node_insert(pager, btree_page, replacement, &split_result, index);
+    /* Simulate cell deletion in a temporary stack struct and check if replacement
+     * would fit inside the page without overflow. */
+    BTreePage temp = *btree_page;
+    temp.cell_count--;
+    temp.free_space_offset -= to_be_deleted.cell_size + sizeof(uint32_t);
+
+    status = btree_page_has_enough_space(&temp, replacement->cell_size);
+    if (status != BTREE_SUCCESS && status != BTREE_NEEDS_SPLIT) {
+        btree_cell_contents_free(&to_be_deleted);
+        return status;
+    }
+
+    if (status == BTREE_NEEDS_SPLIT) {
+        btree_cell_contents_free(&to_be_deleted);
+        return BTREE_ERROR;
+    }
+    btree_cell_contents_free(&to_be_deleted);
+
+    status = btree_remove_cell(btree_page, cell_index);
+    if (status != BTREE_SUCCESS) {
+        return status;
+    }
+
+    status = insert_cell(pager, btree_page, replacement, cell_index, index);
+    if (status != BTREE_SUCCESS) {
+        return status;
+    }
+
+    if (!btree_page_sync(pager, btree_page)) {
+        return BTREE_ERROR;
+    }
 
     return status;
 }

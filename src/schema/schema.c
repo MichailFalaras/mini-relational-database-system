@@ -759,7 +759,9 @@ void schema_free(Schema *schema) {
     if (schema != NULL) {
         if (schema->columns != NULL) {
             for (uint32_t i = 0; i < schema->num_columns; i++) {
-                free(schema->columns[i]);
+                if (schema->columns[i] != NULL) {
+                    free(schema->columns[i]);
+                }
             }
             free(schema->columns);
         }

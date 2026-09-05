@@ -152,8 +152,8 @@ BTreeStatus propagate_first_key_to_parents(Pager *pager, BTreePage *btree_page, 
 BTreeStatus get_cell(BTreePage *btree_page, uint16_t cell_index, BTreeCellView *cell, BTreeIndexSpec *index);
 
 /* Insert new cell's Cell Pointer and its contents onto a BTreePage AFTER BINARY SEARCH. */
-BTreeStatus insert_cell(Pager *pager, BTreePage *btree_page, BTreeIndexSpec *index, BTreeSearchResult *search_result,
-    BTreeCellContents *cell_contents);
+BTreeStatus insert_cell(Pager *pager, BTreePage *btree_page, BTreeCellContents *cell_contents, uint32_t cell_index,
+    BTreeIndexSpec *index);
 
 /* Transfer half of src's cells to dest and update cell count. */
 BTreeStatus btree_split_cells(BTreePage *src, BTreePage *dest, BTreeIndexSpec *index);
