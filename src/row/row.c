@@ -48,16 +48,11 @@ bool row_mark_deleted(Row *row) {
 
 /* Row return Value * from values array index. */
 Value *row_get_value(const Row *row, uint32_t column_pos) {
-
-    if (row == NULL) {
+    if (!row || column_pos >= row->n_columns) {
         return NULL;
     }
 
-    if (column_pos > row->n_columns || column_pos == 0) {
-        return NULL;
-    }
-
-    return row->values[column_pos-1];
+    return row->values[column_pos];
 }
 
 Value **row_get_values(const Row *row, uint32_t *column_index_array, uint32_t num_columns) {

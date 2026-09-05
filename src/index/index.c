@@ -532,7 +532,7 @@ IndexLookupStatus index_find_exact(const Index *index, Pager *pager, Schema *sch
 
     BTreeSearchKey search_key = {0};
     search_key.index = &spec;
-    search_key.target_key = key_values;
+    search_key.target_key = values_to_serialized_key(key_values, num_columns, &spec);
     search_key.num_target_keys = num_columns;
 
     BTreeSearchEntries btree_result = {0};
@@ -665,7 +665,7 @@ IndexLookupStatus index_find_prefix(const Index *index, Pager *pager, Schema *sc
 
     BTreeSearchKey prefix_key = {0};
     prefix_key.index = &spec;
-    prefix_key.target_key = prefix_key_values;
+    prefix_key.target_key = values_to_serialized_key(prefix_key_values, prefix_num_columns, &spec);
     prefix_key.num_target_keys = prefix_num_columns;
 
     BTreeSearchEntries btree_result = {0};
@@ -821,13 +821,13 @@ IndexLookupStatus index_find_range(const Index *index, Pager *pager, Schema *sch
 
     if (has_start) {
         start_search_key.index = &spec;
-        start_search_key.target_key = start_key_values;
+        start_search_key.target_key = values_to_serialized_key(start_key_values, start_num_columns, &spec);
         start_search_key.num_target_keys = start_num_columns;
     }
     
     if (has_end) {
         end_search_key.index = &spec;
-        end_search_key.target_key = end_key_values;
+        end_search_key.target_key = values_to_serialized_key(end_key_values, end_num_columns, &spec);
         end_search_key.num_target_keys = end_num_columns;
     }
 
