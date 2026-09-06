@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "../include/row.h"
 #include "../include/schema.h"
 #include "../src/schema/schema_utils.h"
 #include "../include/constraints.h"
@@ -18,7 +19,7 @@
 
 /* ---------- Column & Constraint helpers ---------- */
 Column **create_column_array(int amount_columns) {
-    Column **columns = (Column **) malloc(amount_columns*sizeof(Column *));
+    Column **columns = (Column **) calloc(amount_columns, sizeof(Column *));
     if (columns == NULL) {
         perror("(helper) create_column_array");
         exit(1);
@@ -28,7 +29,7 @@ Column **create_column_array(int amount_columns) {
 }
 
 Constraint **create_constraint_array(int amount_constraints) {
-    Constraint **constraints = (Constraint **) malloc(amount_constraints*sizeof(Constraint *));
+    Constraint **constraints = (Constraint **) calloc(amount_constraints, sizeof(Constraint *));
     if (constraints == NULL) {
         perror("(helper) create_constraint_array");
         exit(1);
@@ -55,7 +56,7 @@ Database *create_database_component(uint32_t table_count) {
     }
 
     db->table_count = table_count;
-    Table **tables = (Table **) malloc(db->table_count*sizeof(Table *));
+    Table **tables = (Table **) calloc(db->table_count, sizeof(Table *));
     if (tables == NULL) {
         perror("(helper) create_database_component");
         exit(1);
@@ -73,6 +74,54 @@ ExpressionNode **create_expression_node_array(int amount_expressions) {
     }
 
     return expr;
+}
+
+void constraint_array_free(Constraint **constraint_array, int amount_constraints) {
+    if (!constraint_array || amount_constraints <= 0) {
+        return;
+    }
+
+    if (constraint_array) {
+        for (int i = 0; i < amount_constraints; i++) {
+            if (constraint_array[i]) {
+                free(constraint_array[i]);
+            }
+        } 
+
+        free(constraint_array);
+    }
+}
+
+void column_array_free(Column **column_array, int amount_columns) {
+    if (!column_array || amount_columns <= 0) {
+        return;
+    }
+
+    if (column_array) {
+        for (int i = 0; i < amount_columns; i++) {
+            if (column_array[i]) {
+                free(column_array[i]);
+            }
+        } 
+
+        free(column_array);
+    }
+}
+
+void expression_node_array_free(ExpressionNode **expr_node_array, int amount_expr_nodes) {
+    if (!expr_node_array || amount_expr_nodes <= 0) {
+        return;
+    }
+
+    if (expr_node_array) {
+        for (int i = 0; i < amount_expr_nodes; i++) {
+            if (expr_node_array[i]) {
+                expression_node_free(expr_node_array[i]);
+            }
+        }
+
+        free(expr_node_array);
+    } 
 }
 
 void database_free(Database *db) {
@@ -681,40 +730,105 @@ static int test_schema_drop_constraint() {
     return 0;
 }
 
-/* Needs execution engine implementation in order to work.
 static int test_schema_validate_row() {
     int num_columns = 3;
-    int num_constraints = 0;
+    int num_constraints = 2;
 
     Column **columns = create_column_array(num_columns);
-    Column *column = column_alloc("id", INTEGER, 5, 0);
-    columns[0] = column;
-    column = column_alloc("name", VARCHAR, 5, 0);
-    columns[1] = column;
-    column = column_alloc("salary", NUMERIC, 5, 0);
-    columns[2] = column;
+    if (!columns) { return -1; }
 
-    Constraint **constraints = NULL;
+    columns[0] = column_alloc("id", INTEGER, 0, 5, 0);
+    if (!columns[0]) { return -1; }
+    columns[1] = column_alloc("name", VARCHAR, 64, 5, 0);;
+    if (!columns[1]) { return -1; }
+    columns[2] = column_alloc("salary", NUMERIC, 0, 5, 0);;
+    if (!columns[2]) { return -1; }
+
+    Constraint **constraints = create_constraint_array(num_constraints);
+    if (!constraints) { return -1; }
+
+    uint32_t column_refs[] = {0};
+    uint32_t num_column_refs = 1;
+    constraints[0] = constraint_create_primary_key("PRIMARY_KEY", column_refs, num_column_refs);
+    if (!constraints[0]) { return -1; } 
+    constraints[1] = constraint_create_not_null("NOT_NULL_CONSTRAINT", 1);
+    if (!constraints[1]) { return -1; }
+
     Schema *schema = schema_create(columns, constraints, num_columns, num_constraints);
 
-
     ExpressionNode **expressions = create_expression_node_array(3);
-    ExpressionNode *expr = expression_node_create(EXPR_LITERAL);
-    int placeholder = 1;
-    expr->expression_data.literal_value.literal = value_create(INTEGER, &placeholder);
-    expressions[0] = expr;
-    expr = expression_node_create(EXPR_LITERAL);
-    char *temp = "John";
-    expr->expression_data.literal_value.literal = value_create(VARCHAR, temp);
+    if (!expressions) { return -1; }
 
+    int id = 0;
+    expressions[0] = expression_node_create(EXPR_LITERAL);
+    expressions[0]->expression_data.literal_value.literal = value_create(INTEGER, &id);
+    if (!expressions[0]->expression_data.literal_value.literal) { return -1; }
+
+    varchar_n_t name = {0};
+    name.max_n = 64;
+    name.string = "George";
+    expressions[1] = expression_node_create(EXPR_LITERAL);
+    expressions[1]->expression_data.literal_value.literal = value_create(VARCHAR, &name);
+    if (!expressions[1]->expression_data.literal_value.literal) { return -1; }
+    Value *reset_varchar = expressions[1]->expression_data.literal_value.literal;
+
+
+    numeric_t salary = {0};
+    salary.val  = 1500000;
+    salary.scale = 2;
+    expressions[2] = expression_node_create(EXPR_LITERAL);
+    expressions[2]->expression_data.literal_value.literal = value_create(NUMERIC, &salary);
+    if (!expressions[2]->expression_data.literal_value.literal) { return -1; }
+
+    Row *row = row_create(expressions, 3);
+    if (!row) { return -1; }
+
+    /* --- VALID ROW --- */
+    EvaluationContext eval_ctx = {0}; // Only used for CHECK constraint
+    ASSERT(schema_validate_row(schema, row, &eval_ctx));
+
+    /* --- ROW COLUMNS DATA TYPE MISMATCH --- */
+    bool boolean_val = true;
+    expressions[1]->expression_data.literal_value.literal = value_create(BOOL, &boolean_val);
+    if (!expressions[1]->expression_data.literal_value.literal) { return -1; }
+
+    row_free(row);
+    row = row_create(expressions, 3);
+    if (!row) { return -1; }
+
+    ASSERT(!schema_validate_row(schema, row, &eval_ctx));
+
+    /* --- PRIMARY KEY & NOT NULL CONSTRAINT VIOLATION --- */
+    value_free(expressions[1]->expression_data.literal_value.literal);
+    expressions[1]->expression_data.literal_value.literal = value_create_null(VARCHAR);
+    if (!expressions[1]->expression_data.literal_value.literal) { return -1; }
+
+    row_free(row);
+    row = row_create(expressions, 3);
+    if (!row) { return -1; }
+
+    ASSERT(!schema_validate_row(schema, row, &eval_ctx));
+
+    value_free(expressions[1]->expression_data.literal_value.literal);
+    expressions[1]->expression_data.literal_value.literal = reset_varchar;
+
+    value_free(expressions[0]->expression_data.literal_value.literal);
+    expressions[0]->expression_data.literal_value.literal = value_create_null(INTEGER);
+    if (!expressions[0]->expression_data.literal_value.literal) { return -1; }
+
+    row_free(row);
+    row = row_create(expressions, 3);
+    if (!row) { return -1; }
+
+    ASSERT(!schema_validate_row(schema, row, &eval_ctx));
     
-
-    ASSERT(schema->num_columns == 4);
-    ASSERT(schema->columns[schema->num_columns-1] != NULL);
-
+    column_array_free(columns, num_columns);
+    constraint_array_free(constraints, num_constraints);
+    expression_node_array_free(expressions, num_columns);
+    row_free(row);
     schema_free(schema);
     return 0;
-}*/
+}
 
 void generate_output(int result, int test_num, char *test_desc) {
     int space = 64 - strlen(test_desc);
@@ -763,6 +877,8 @@ int main (int argc, char *argv[]) {
     generate_output(result, 16, "test_schema_add_duplicate_constraint");
     result = test_schema_drop_constraint();
     generate_output(result, 17, "test_schema_drop_constraint");
+    result = test_schema_validate_row();
+    generate_output(result, 18, "test_schema_validate_row");
 
     printf("> TESTS RAN SUCCESSFULLY\n");
     return 0;
