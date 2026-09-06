@@ -678,12 +678,7 @@ bool schema_drop_constraint(Schema *schema, const char *constraint_name) {
 
 /* Schema validate row data/values. */
 bool schema_validate_row(const Schema *schema, const Row *row, const EvaluationContext *context) {
-
-    if (schema == NULL || row == NULL) {
-        return false;
-    }
-
-    if (row->is_deleted == true) {
+    if (!schema || !row || row->is_deleted) {
         return false;
     }
 
