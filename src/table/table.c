@@ -1839,3 +1839,150 @@ TableMutationStatus table_insert_entry(Table *table, Pager *pager, Row *row, con
 
     return TABLE_MUTATION_SUCCESS;
 }
+
+
+/*
+ * Delete table entry
+ *
+ * Deletion policy:
+ * Rows are currently removed physically from every table index rather
+ * than being tombstoned. Secondary-index entries are removed first and
+ * the canonical primary-index entry is removed last.
+ *
+ * TODO(transaction):
+ * Table-level deletion is not currently atomic. If deletion from one
+ * index fails after earlier secondary-index entries have already been
+ * removed, those earlier deletions cannot currently be restored.
+ *
+ * A future transaction/WAL layer must restore previously removed index
+ * entries or otherwise recover the table to a consistent state.
+ */
+extern TableMutationStatus table_delete_entry(Table *table, Pager *pager, Row *row, 
+    const EvaluationContext *context) {
+    
+    // Validate inputs
+    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+        return TABLE_MUTATION_INVALID_ARGUMENTS;
+    }
+
+    if (!table || 
+        !table->table_schema ||
+        table->name[0] == '\0' ||
+        table->is_deleted || 
+        !table->is_materialized) {
+        return TABLE_MUTATION_INVALID_ARGUMENTS;
+    }
+
+    if (!table->primary_index ||
+        !table->primary_index->key ||
+        !table->primary_index->key->column_index_array ||
+        table->primary_index->key->num_columns == 0) {
+        return TABLE_MUTATION_INVALID_ARGUMENTS;
+    }
+     
+    if (table->primary_index->type != PRIMARY_INDEX ||
+        table->primary_index->root_page_num <= SYSTEM_CATALOG_PAGE_NUM ||
+        table->primary_index->root_page_num >= pager->num_pages || 
+        table->primary_index->root_page_num >= MAX_PAGES) {
+        return TABLE_MUTATION_INVALID_ARGUMENTS;    
+    }
+
+    if (!table->secondary_indexes || table->total_secondary_indexes > MAX_INDEXES) {
+        return TABLE_MUTATION_INVALID_ARGUMENTS;
+    }
+
+    for (uint32_t i = 0; i < table->total_secondary_indexes; i++) {
+        Index *index = table->secondary_indexes[i];
+
+        if (!index ||
+            !index->key ||
+            !index->key->column_index_array ||
+            index->key->num_columns == 0 ||
+            index->type != SECONDARY_INDEX || 
+            index->root_page_num <= SYSTEM_CATALOG_PAGE_NUM ||
+            index->root_page_num >= pager->num_pages ||
+            index->root_page_num >= MAX_PAGES) {
+            return TABLE_MUTATION_INVALID_ARGUMENTS;
+        }
+    }
+
+
+    if (!row || !row->values || row->n_columns == 0 || row->is_deleted) {
+        return TABLE_MUTATION_INVALID_ARGUMENTS;
+    }
+
+    if (table->table_schema->num_columns > 0 && !table->table_schema->columns) {
+        return TABLE_MUTATION_INVALID_ARGUMENTS;
+    }
+
+    for (uint32_t i = 0; i < table->table_schema->num_columns; i++) {
+
+        if (!table->table_schema->columns[i] ||
+            !row->values[i]) {
+            return TABLE_MUTATION_INVALID_ARGUMENTS;
+        }
+    }
+
+    if (!schema_validate_row(table->table_schema, row, context)) {
+        return TABLE_MUTATION_CONSTRAINT_ERROR;
+    }
+
+    // Firstly, (attempt to) delete the input Row from all existing secondary indexes
+    for (uint32_t i = 0; i < table->total_secondary_indexes; i++) {
+        Index *sec_index = table->secondary_indexes[i];
+
+        IndexMutationStatus status = index_delete_entry(sec_index, pager, table->table_schema, row);
+
+        switch (status) {
+            case INDEX_MUTATION_SUCCESS:
+                break;
+            case INDEX_MUTATION_NOT_FOUND:
+                return TABLE_MUTATION_NOT_FOUND;
+            case INDEX_MUTATION_INVALID_ARGUMENTS:
+                return TABLE_MUTATION_INVALID_ARGUMENTS;
+            case INDEX_MUTATION_ERROR:
+            default:
+                return TABLE_MUTATION_ERROR;
+        }
+    }
+
+    // Then, (attempt to) to delete the input Row from the primary index
+    IndexMutationStatus status = index_delete_entry(
+        table->primary_index, 
+        pager, 
+        table->table_schema,
+        row
+    );
+
+    switch (status) {
+        case INDEX_MUTATION_SUCCESS:
+            break;
+        case INDEX_MUTATION_NOT_FOUND:
+            return TABLE_MUTATION_NOT_FOUND;
+        case INDEX_MUTATION_INVALID_ARGUMENTS:
+            return TABLE_MUTATION_INVALID_ARGUMENTS;
+        case INDEX_MUTATION_ERROR:
+        default:
+            return TABLE_MUTATION_ERROR;
+    }
+
+    // Record table statistics after input row has been successfully deleted from all indexes
+    for (uint32_t i = 0; i < table->table_schema->num_columns; i++) {
+        Column *column = table->table_schema->columns[i];
+
+        if (row->values[i]->null_val) {
+            column->null_rows--;
+        } 
+        else {
+            column->non_null_rows--;
+        }
+    }
+
+    table->row_count--;
+
+    /*
+     * TODO(catalog): Persist row_count and column statistics.
+     */
+
+    return TABLE_MUTATION_SUCCESS;
+}

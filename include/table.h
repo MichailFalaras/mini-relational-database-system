@@ -125,4 +125,9 @@ extern TableLookupStatus table_scan(const Table *table, Pager *pager, TableRowRe
 extern TableMutationStatus table_insert_entry(Table *table, Pager *pager, Row *row, 
     const EvaluationContext *context);
 
+// Table delete entry
+extern TableMutationStatus table_delete_entry(Table *table, Pager *pager, Row *row, 
+    const EvaluationContext *context);
+
+    
 #endif
