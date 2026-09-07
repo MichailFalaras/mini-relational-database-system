@@ -129,5 +129,9 @@ extern TableMutationStatus table_insert_entry(Table *table, Pager *pager, Row *r
 extern TableMutationStatus table_delete_entry(Table *table, Pager *pager, Row *row, 
     const EvaluationContext *context);
 
+// Table update entry
+extern TableMutationStatus table_update_entry(Table *table, Pager *pager, Row *old_row, Row *new_row, 
+    const EvaluationContext *context);
+
     
 #endif

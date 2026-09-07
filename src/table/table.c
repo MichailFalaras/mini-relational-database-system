@@ -1768,6 +1768,10 @@ TableMutationStatus table_insert_entry(Table *table, Pager *pager, Row *row, con
         return TABLE_MUTATION_INVALID_ARGUMENTS;
     }
 
+    if (row->n_columns != table->table_schema->num_columns) {
+        return TABLE_MUTATION_INVALID_ARGUMENTS;
+    }
+
     for (uint32_t i = 0; i < table->table_schema->num_columns; i++) {
 
         if (!table->table_schema->columns[i] ||
@@ -1915,16 +1919,15 @@ extern TableMutationStatus table_delete_entry(Table *table, Pager *pager, Row *r
         return TABLE_MUTATION_INVALID_ARGUMENTS;
     }
 
-    for (uint32_t i = 0; i < table->table_schema->num_columns; i++) {
-
-        if (!table->table_schema->columns[i] ||
-            !row->values[i]) {
-            return TABLE_MUTATION_INVALID_ARGUMENTS;
-        }
+    if (row->n_columns != table->table_schema->num_columns) {
+        return TABLE_MUTATION_INVALID_ARGUMENTS;
     }
 
-    if (!schema_validate_row(table->table_schema, row, context)) {
-        return TABLE_MUTATION_CONSTRAINT_ERROR;
+    for (uint32_t i = 0; i < table->table_schema->num_columns; i++) {
+
+        if (!table->table_schema->columns[i] || !row->values[i]) {
+            return TABLE_MUTATION_INVALID_ARGUMENTS;
+        }
     }
 
     // Firstly, (attempt to) delete the input Row from all existing secondary indexes
@@ -1982,6 +1985,167 @@ extern TableMutationStatus table_delete_entry(Table *table, Pager *pager, Row *r
 
     /*
      * TODO(catalog): Persist row_count and column statistics.
+     */
+
+    return TABLE_MUTATION_SUCCESS;
+}
+
+
+/* Table update entry
+ *
+ * Table-level updates are not currently atomic across indexes.
+ *
+ * If the primary index or an earlier secondary index is updated
+ * successfully and a later index update fails, the already-applied
+ * updates cannot currently be restored to old_row.
+ *
+ * A future transaction/WAL layer must roll back previously updated
+ * indexes in reverse order and restore the table to a consistent state.
+ *
+ * Note that index_update_entry() itself also has a non-atomic
+ * delete-then-insert failure window until transaction/recovery support
+ * is implemented.
+ */
+extern TableMutationStatus table_update_entry(Table *table, Pager *pager, Row *old_row, Row *new_row, 
+    const EvaluationContext *context) {
+
+    // Validate inputs
+    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+        return TABLE_MUTATION_INVALID_ARGUMENTS;
+    }
+
+    if (!table || 
+        !table->table_schema ||
+        table->name[0] == '\0' ||
+        table->is_deleted || 
+        !table->is_materialized) {
+        return TABLE_MUTATION_INVALID_ARGUMENTS;
+    }
+
+    if (!table->primary_index ||
+        !table->primary_index->key ||
+        !table->primary_index->key->column_index_array ||
+        table->primary_index->key->num_columns == 0) {
+        return TABLE_MUTATION_INVALID_ARGUMENTS;
+    }
+     
+    if (table->primary_index->type != PRIMARY_INDEX ||
+        table->primary_index->root_page_num <= SYSTEM_CATALOG_PAGE_NUM ||
+        table->primary_index->root_page_num >= pager->num_pages || 
+        table->primary_index->root_page_num >= MAX_PAGES) {
+        return TABLE_MUTATION_INVALID_ARGUMENTS;    
+    }
+
+    if (!table->secondary_indexes || table->total_secondary_indexes > MAX_INDEXES) {
+        return TABLE_MUTATION_INVALID_ARGUMENTS;
+    }
+
+    for (uint32_t i = 0; i < table->total_secondary_indexes; i++) {
+        Index *index = table->secondary_indexes[i];
+
+        if (!index ||
+            !index->key ||
+            !index->key->column_index_array ||
+            index->key->num_columns == 0 ||
+            index->type != SECONDARY_INDEX || 
+            index->root_page_num <= SYSTEM_CATALOG_PAGE_NUM ||
+            index->root_page_num >= pager->num_pages ||
+            index->root_page_num >= MAX_PAGES) {
+            return TABLE_MUTATION_INVALID_ARGUMENTS;
+        }
+    }
+
+
+    if (!old_row || !old_row->values || old_row->n_columns == 0 || old_row->is_deleted) {
+        return TABLE_MUTATION_INVALID_ARGUMENTS;
+    }
+
+    if (!new_row || !new_row->values || new_row->n_columns == 0 || new_row->is_deleted) {
+        return TABLE_MUTATION_INVALID_ARGUMENTS;
+    }
+
+    if (table->table_schema->num_columns > 0 && !table->table_schema->columns) {
+        return TABLE_MUTATION_INVALID_ARGUMENTS;
+    }
+
+    if (old_row->n_columns != table->table_schema->num_columns ||
+        new_row->n_columns != table->table_schema->num_columns) {
+        return TABLE_MUTATION_INVALID_ARGUMENTS;
+    }
+
+    for (uint32_t i = 0; i < table->table_schema->num_columns; i++) {
+
+        if (!table->table_schema->columns[i] || !old_row->values[i] || !new_row->values[i]) {
+            return TABLE_MUTATION_INVALID_ARGUMENTS;
+        }
+    }
+
+    if (!schema_validate_row(table->table_schema, new_row, context)) {
+        return TABLE_MUTATION_CONSTRAINT_ERROR;
+    }
+
+
+    // Firstly, (attempt to) update Row in the primary index
+    IndexMutationStatus status = index_update_entry(
+        table->primary_index, 
+        pager, 
+        table->table_schema, 
+        old_row,
+        new_row
+    );
+
+    switch (status) {
+        case INDEX_MUTATION_SUCCESS:
+            break;
+        case INDEX_MUTATION_NOT_FOUND:
+            return TABLE_MUTATION_NOT_FOUND;
+        case INDEX_MUTATION_DUPLICATE_KEY:
+            return TABLE_MUTATION_DUPLICATE_KEY;
+        case INDEX_MUTATION_INVALID_ARGUMENTS:
+            return TABLE_MUTATION_INVALID_ARGUMENTS;
+        case INDEX_MUTATION_ERROR:
+        default:
+            return TABLE_MUTATION_ERROR;
+    }
+
+    // Then, (attempt to) update the Row in all existing secondary indexes
+    for (uint32_t i = 0; i < table->total_secondary_indexes; i++) {
+        Index *sec_index = table->secondary_indexes[i];
+
+        status = index_update_entry(sec_index, pager, table->table_schema, old_row, new_row);
+
+        switch (status) {
+            case INDEX_MUTATION_SUCCESS:
+                break;
+            case INDEX_MUTATION_NOT_FOUND:
+                return TABLE_MUTATION_NOT_FOUND;
+            case INDEX_MUTATION_DUPLICATE_KEY:
+                return TABLE_MUTATION_DUPLICATE_KEY;
+            case INDEX_MUTATION_INVALID_ARGUMENTS:
+                return TABLE_MUTATION_INVALID_ARGUMENTS;
+            case INDEX_MUTATION_ERROR:
+            default:
+                return TABLE_MUTATION_ERROR;
+        }
+    }
+
+    // Update table statistics after input row has been successfully deleted from all indexes
+    for (uint32_t i = 0; i < table->table_schema->num_columns; i++) {
+        Column *column = table->table_schema->columns[i];
+
+        if (old_row->values[i]->null_val && !new_row->values[i]->null_val) {
+            column->null_rows--;
+            column->non_null_rows++;
+        } 
+        else if (!old_row->values[i]->null_val && new_row->values[i]->null_val) {
+            column->non_null_rows--;
+            column->null_rows++;
+        }
+    }
+
+    /*
+     * TODO(catalog): Persist updated column statistics when
+     * system-catalog metadata persistence is implemented.
      */
 
     return TABLE_MUTATION_SUCCESS;
