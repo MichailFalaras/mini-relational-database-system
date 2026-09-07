@@ -4,31 +4,34 @@
 #include "../../include/row.h"
 #include "../../include/expressions.h"
 #include "../../include/data_types.h"
+#include  "../data_types/data_types_utils.h"
 
 /* Create Row Struct & Initialize with Value copies. */
 Row *row_create(ExpressionNode **values, uint32_t n_columns) {
-
-    if (values == NULL) {
+    if (!values || !n_columns) {
         return NULL;
     }
 
-    Row *row = (Row *) malloc(sizeof(Row));
+    Row *row = (Row *) calloc(1, sizeof(Row));
     if (row == NULL) {
         perror("row_create");
-        exit(1);
+        return NULL;
     }
+
     row->is_deleted = false;
     row->n_columns = n_columns;
 
     row->values = (Value **) malloc(row->n_columns*sizeof(Value *));
     if (row->values == NULL) {
         perror("row_create");
-        exit(1);
+        return NULL;
     }
 
     for (uint32_t i = 0; i < row->n_columns; i++) {
-        Value *copy = value_copy(values[i]->expression_data.literal_value.literal);
-        row->values[i] = copy;
+        row->values[i] = value_copy(values[i]->expression_data.literal_value.literal);
+        if (!row->values[i]) {
+            return NULL;
+        }
     }
 
     return row;
@@ -37,7 +40,7 @@ Row *row_create(ExpressionNode **values, uint32_t n_columns) {
 /* Mark Row as deleted without freeing it/completely removing
 it from the database. */
 bool row_mark_deleted(Row *row) {
-    if (row == NULL) {
+    if (!row) {
         return false;
     }
 
@@ -56,6 +59,10 @@ Value *row_get_value(const Row *row, uint32_t column_pos) {
 }
 
 Value **row_get_values(const Row *row, uint32_t *column_index_array, uint32_t num_columns) {
+    if (!row || !column_index_array || !num_columns) {
+        return NULL;
+    }
+
     Value **values = (Value **) malloc(num_columns*sizeof(Value *));
     if (!values) {
         return NULL;
@@ -64,10 +71,7 @@ Value **row_get_values(const Row *row, uint32_t *column_index_array, uint32_t nu
     for (uint32_t i = 0; i < num_columns; i++) {
         values[i] = value_copy(row->values[column_index_array[i]]);
         if (!values[i]) {
-            for (uint32_t j = 0; j < i; j++) {
-                value_free(values[j]);
-            }
-            free(values);
+            value_free_array(values, i);
             return NULL;
         }
     }
@@ -77,23 +81,18 @@ Value **row_get_values(const Row *row, uint32_t *column_index_array, uint32_t nu
 
 /* Change Row Value pointer to a copy of a different value. */
 bool row_set_value(Row *row, uint32_t column_pos, const Value *new_val) {
-
-    if (new_val == NULL || row == NULL) {
+    if (!row || column_pos >= row->n_columns || !new_val) {
         return false;
     }
 
-    if (column_pos > row->n_columns || column_pos == 0) {
-        return false;
-    }
-
-    Value *temp = row->values[column_pos-1];
+    Value *temp = row->values[column_pos];
      
     Value *copy = value_copy(new_val);
     if (copy == NULL) {
         return false;
     }
 
-    row->values[column_pos-1] = copy;
+    row->values[column_pos] = copy;
     
     value_free(temp);
     return true;
@@ -120,11 +119,11 @@ void row_free(Row *row) {
 // Compares 2 rows column-by-column
 bool row_equals(const Row *left, const Row *right) {
     // Validate inputs
-    if (!left || !left->values || left->n_columns == 0 || left->is_deleted) {
+    if (!left || !left->values || !left->n_columns || left->is_deleted) {
         return false;
     }
 
-    if (!right || !right->values || right->n_columns == 0 || right->is_deleted) {
+    if (!right || !right->values || !right->n_columns || right->is_deleted) {
         return false;
     }
 

@@ -143,13 +143,13 @@ static int test_row_get_value() {
     Row *row = row_create(expressions, 2);
     ASSERT(row != NULL);
 
-    // Columns are 1-based indexed
-    Value *expr_1 = row_get_value(row, 1);
+    // Columns are 0-based indexed
+    Value *expr_1 = row_get_value(row, 0);
     ASSERT(expr_1 != NULL);
     ASSERT(expr_1->type == INTEGER);
     ASSERT(expr_1->value.int32_val == -42);
 
-    Value *expr_2 = row_get_value(row, 2);
+    Value *expr_2 = row_get_value(row, 1);
     ASSERT(expr_2 != NULL);
     ASSERT(expr_2->type == TEXT);
     ASSERT(strcmp(expr_2->value.text_val, "hello") == 0);
@@ -182,11 +182,7 @@ static int test_row_get_value_invalid_positions() {
     Row *row = row_create(expressions, 2);
     ASSERT(row != NULL);
 
-    // Out of bounds 1-based indexes at the start of the ExpressionNode ** array
-    Value *expr_1 = row_get_value(row, 0);
-    ASSERT(expr_1 == NULL);
-
-    // Out of bounds 1-based indexes at the end of the ExpressionNode ** array
+    // Out of bounds 0-based indexes at the end of the ExpressionNode ** array
     Value *expr_2 = row_get_value(row, 3);
     ASSERT(expr_2 == NULL);
 
@@ -233,15 +229,15 @@ static int test_row_set_value() {
     Value *new_int_value = value_create(INTEGER, &new_int_input);
     Value *new_text_value = value_create(TEXT, new_text_input);
 
-    ASSERT(row_set_value(row, 1, new_int_value));
-    ASSERT(row_set_value(row, 2, new_text_value));
+    ASSERT(row_set_value(row, 0, new_int_value));
+    ASSERT(row_set_value(row, 1, new_text_value));
 
-    Value *expr_1 = row_get_value(row, 1);
+    Value *expr_1 = row_get_value(row, 0);
     ASSERT(expr_1 != NULL);
     ASSERT(expr_1->type == INTEGER);
     ASSERT(expr_1->value.int32_val == 123);
 
-    Value *expr_2 = row_get_value(row, 2);
+    Value *expr_2 = row_get_value(row, 1);
     ASSERT(expr_2 != NULL);
     ASSERT(expr_2->type == TEXT);
     ASSERT(strcmp(expr_2->value.text_val, "world") == 0);
@@ -279,9 +275,9 @@ static int test_row_set_value_change_types() {
     double double_input = 123.456;
     Value *new_double_value = value_create(DOUBLE, &double_input);
 
-    ASSERT(row_set_value(row, 1, new_double_value));
+    ASSERT(row_set_value(row, 0, new_double_value));
 
-    Value *expr_1 = row_get_value(row, 1);
+    Value *expr_1 = row_get_value(row, 0);
     ASSERT(expr_1 != NULL);
     ASSERT(expr_1->type == DOUBLE);
     ASSERT(expr_1->value.double_val == 123.456);
@@ -320,15 +316,15 @@ static int test_row_set_value_invalid_positions() {
     Value *new_int_value = value_create(INTEGER, &new_int_input);
     Value *new_text_value = value_create(TEXT, new_text_input);
 
-    ASSERT(!row_set_value(row, 0, new_int_value));
+    ASSERT(!row_set_value(row, 2, new_int_value));
     ASSERT(!row_set_value(row, 3, new_text_value));
 
-    Value *expr_1 = row_get_value(row, 1);
+    Value *expr_1 = row_get_value(row, 0);
     ASSERT(expr_1 != NULL);
     ASSERT(expr_1->type == INTEGER);
     ASSERT(expr_1->value.int32_val == -42);
 
-    Value *expr_2 = row_get_value(row, 2);
+    Value *expr_2 = row_get_value(row, 1);
     ASSERT(expr_2 != NULL);
     ASSERT(expr_2->type == TEXT);
     ASSERT(strcmp(expr_2->value.text_val, "hello") == 0);
@@ -344,7 +340,7 @@ static int test_row_set_value_null_input_row() {
     int32_t int_input = -42;
     Value *int_value = value_create(INTEGER, &int_input);
 
-    ASSERT(!row_set_value(NULL, 1, int_value));
+    ASSERT(!row_set_value(NULL, 0, int_value));
 
     value_free(int_value);
     return 0;
@@ -372,7 +368,7 @@ static int test_row_set_value_null_input_value() {
     Row *row = row_create(expressions, 2);
     ASSERT(row != NULL);
 
-    ASSERT(!row_set_value(row, 1, NULL));
+    ASSERT(!row_set_value(row, 0, NULL));
 
     row_free(row);
     return 0;
