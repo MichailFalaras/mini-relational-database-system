@@ -1700,3 +1700,142 @@ TableLookupStatus table_scan(const Table *table, Pager *pager, TableRowResult *r
 
     return TABLE_LOOKUP_SUCCESS; 
 }
+
+
+/* Table entry insert
+ *
+ * If insertion into a secondary index fails after earlier indexes
+ * have already accepted the row, remove the entry from those indexes
+ * in reverse order.
+ *
+ * Full atomicity cannot currently be guaranteed because B+ tree
+ * mutations themselves are not transactional. Transaction/WAL
+ * recovery will be implemented separately.
+ */
+TableMutationStatus table_insert_entry(Table *table, Pager *pager, Row *row, const EvaluationContext *context) {
+    // Validate inputs
+    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+        return TABLE_MUTATION_INVALID_ARGUMENTS;
+    }
+
+    if (!table || 
+        !table->table_schema ||
+        table->name[0] == '\0' ||
+        table->is_deleted || 
+        !table->is_materialized) {
+        return TABLE_MUTATION_INVALID_ARGUMENTS;
+    }
+
+    if (!table->primary_index ||
+        !table->primary_index->key ||
+        !table->primary_index->key->column_index_array ||
+        table->primary_index->key->num_columns == 0) {
+        return TABLE_MUTATION_INVALID_ARGUMENTS;
+    }
+     
+    if (table->primary_index->type != PRIMARY_INDEX ||
+        table->primary_index->root_page_num <= SYSTEM_CATALOG_PAGE_NUM ||
+        table->primary_index->root_page_num >= pager->num_pages || 
+        table->primary_index->root_page_num >= MAX_PAGES) {
+        return TABLE_MUTATION_INVALID_ARGUMENTS;    
+    }
+
+    if (!table->secondary_indexes || table->total_secondary_indexes > MAX_INDEXES) {
+        return TABLE_MUTATION_INVALID_ARGUMENTS;
+    }
+
+    for (uint32_t i = 0; i < table->total_secondary_indexes; i++) {
+        Index *index = table->secondary_indexes[i];
+
+        if (!index ||
+            !index->key ||
+            !index->key->column_index_array ||
+            index->key->num_columns == 0 ||
+            index->type != SECONDARY_INDEX || 
+            index->root_page_num <= SYSTEM_CATALOG_PAGE_NUM ||
+            index->root_page_num >= pager->num_pages ||
+            index->root_page_num >= MAX_PAGES) {
+            return TABLE_MUTATION_INVALID_ARGUMENTS;
+        }
+    }
+
+
+    if (!row || !row->values || row->n_columns == 0 || row->is_deleted) {
+        return TABLE_MUTATION_INVALID_ARGUMENTS;
+    }
+
+    if (table->table_schema->num_columns > 0 && !table->table_schema->columns) {
+        return TABLE_MUTATION_INVALID_ARGUMENTS;
+    }
+
+    for (uint32_t i = 0; i < table->table_schema->num_columns; i++) {
+
+        if (!table->table_schema->columns[i] ||
+            !row->values[i]) {
+            return TABLE_MUTATION_INVALID_ARGUMENTS;
+        }
+    }
+
+    if (!schema_validate_row(table->table_schema, row, context)) {
+        return TABLE_MUTATION_CONSTRAINT_ERROR;
+    }
+
+    // Firstly, (attempt to) insert new Row in the primary index
+    IndexMutationStatus status = index_insert_entry(
+        table->primary_index, 
+        pager, 
+        table->table_schema, 
+        row
+    );
+
+    switch (status) {
+        case INDEX_MUTATION_SUCCESS:
+            break;
+        case INDEX_MUTATION_DUPLICATE_KEY:
+            return TABLE_MUTATION_DUPLICATE_KEY;
+        case INDEX_MUTATION_INVALID_ARGUMENTS:
+            return TABLE_MUTATION_INVALID_ARGUMENTS;
+        case INDEX_MUTATION_ERROR:
+        default:
+            return TABLE_MUTATION_ERROR;
+    }
+
+    // Then, (attempt to) insert new Row in all existing secondary indexes
+    for (uint32_t i = 0; i < table->total_secondary_indexes; i++) {
+        Index *sec_index = table->secondary_indexes[i];
+
+        status = index_insert_entry(sec_index, pager, table->table_schema, row);
+
+        switch (status) {
+            case INDEX_MUTATION_SUCCESS:
+                break;
+            case INDEX_MUTATION_DUPLICATE_KEY:
+                return TABLE_MUTATION_DUPLICATE_KEY;
+            case INDEX_MUTATION_INVALID_ARGUMENTS:
+                return TABLE_MUTATION_INVALID_ARGUMENTS;
+            case INDEX_MUTATION_ERROR:
+            default:
+                return TABLE_MUTATION_ERROR;
+        }
+    }
+
+    // Record table statistics after new row has been successfully inserted in all indexes
+    for (uint32_t i = 0; i < table->table_schema->num_columns; i++) {
+        Column *column = table->table_schema->columns[i];
+
+        if (row->values[i]->null_val) {
+            column->null_rows++;
+        } 
+        else {
+            column->non_null_rows++;
+        }
+    }
+
+    table->row_count++;
+
+    /*
+     * TODO(catalog): Persist row_count and column statistics.
+     */
+
+    return TABLE_MUTATION_SUCCESS;
+}
