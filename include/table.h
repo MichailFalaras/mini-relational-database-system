@@ -53,6 +53,17 @@ typedef struct table_row_result {
     uint32_t capacity;
 } TableRowResult;
 
+
+/* Table mutation-related metadata (insertion/update/deletion of entries) */
+typedef enum table_mutation_status {
+    TABLE_MUTATION_SUCCESS,
+    TABLE_MUTATION_NOT_FOUND,
+    TABLE_MUTATION_DUPLICATE_KEY,
+    TABLE_MUTATION_INVALID_ARGUMENTS,
+    TABLE_MUTATION_CONSTRAINT_ERROR,
+    TABLE_MUTATION_ERROR,
+} TableMutationStatus;
+
 /* Table metadata operations */
 extern Table *table_metadata_create(const char *table_name, const Schema *schema);
 
@@ -110,4 +121,17 @@ extern TableLookupStatus table_find_range(const Table *table, Pager *pager,
 // Full table scan
 extern TableLookupStatus table_scan(const Table *table, Pager *pager, TableRowResult *result);
 
+// Table insert entry
+extern TableMutationStatus table_insert_entry(Table *table, Pager *pager, Row *row, 
+    const EvaluationContext *context);
+
+// Table delete entry
+extern TableMutationStatus table_delete_entry(Table *table, Pager *pager, Row *row, 
+    const EvaluationContext *context);
+
+// Table update entry
+extern TableMutationStatus table_update_entry(Table *table, Pager *pager, Row *old_row, Row *new_row, 
+    const EvaluationContext *context);
+
+    
 #endif
