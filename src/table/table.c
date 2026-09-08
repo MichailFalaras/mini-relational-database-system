@@ -2006,7 +2006,7 @@ TableMutationStatus table_delete_entry(Table *table, Pager *pager, Row *row,
  * delete-then-insert failure window until transaction/recovery support
  * is implemented.
  */
-extern TableMutationStatus table_update_entry(Table *table, Pager *pager, Row *old_row, Row *new_row, 
+TableMutationStatus table_update_entry(Table *table, Pager *pager, Row *old_row, Row *new_row, 
     const EvaluationContext *context) {
 
     // Validate inputs
