@@ -79,7 +79,6 @@ BTreeStatus btree_binary_search(BTreePage *btree_page, BTreeSearchKey *search_ke
 
     /* If there are no cells in the page, return index 0 as insertion position. */
     if (btree_page->cell_count == 0) {
-        fprintf(stderr, "btree_binary_search: Empty node.\n");
         search_result->result_index = 0;
 
         return BTREE_SUCCESS;

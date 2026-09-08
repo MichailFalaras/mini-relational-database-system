@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "expressions.h"
 
 /* Forward Declarations. */
 typedef struct value Value;

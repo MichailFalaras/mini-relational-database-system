@@ -2,15 +2,19 @@
 #include <stdlib.h>
 #include <string.h>
 #include "../include/table.h"
+#include "../src/table/table_utils.h"
 #include "../include/schema.h"
 #include "../include/index.h"
+#include "../src/index/index_utils.h"
 #include "../include/constraints.h"
 #include "../include/data_types.h"
 #include "../include/database.h"
+#include "../include/expressions.h"
 #include "../include/pager.h"
 #include "../include/page.h"
 #include "../include/btree.h"
 #include "../src/btree/btree_utils.h"
+#include "../include/row.h"
 
 #define ASSERT(condition) do { \
     if (!(condition)) { \
@@ -149,7 +153,7 @@ static void destroy_test_pager(TestPager *test_pager) {
     }
 }
 
-// B+ Tree Helpers
+/* ---------- B+ Tree Helpers ---------- */
 
 // A simple deterministic B+ Tree with a root node and 2 children nodes
 typedef struct test_btree {
@@ -274,6 +278,89 @@ static bool contains_page_num(const uint32_t *page_nums, uint32_t count, uint32_
     return false;
 }
 
+
+/* ---------- Table Row mutation helpers ---------- */
+
+// Creates a User(id, email, age) tuple/row
+static Row *create_test_user_row(int32_t id, const char *email, int32_t age) {
+    if (!email) {
+        return NULL;
+    }
+
+    Row *row = (Row *) calloc(1, sizeof(Row));
+    if (!row) {
+        return NULL;
+    }
+
+    row->n_columns = 3;
+    row->values = (Value **) calloc(row->n_columns, sizeof(Value *));
+    if (!row->values) {
+        row_free(row);
+        return NULL;
+    }
+
+    row->values[0] = value_create(INTEGER, &id);
+    row->values[1] = value_create(TEXT, email);
+    row->values[2] = value_create(INTEGER, &age);
+
+    if (!row->values[0] || !row->values[1] || !row->values[2]) {
+        row_free(row);
+        return NULL;
+    }
+
+    return row;
+}
+
+// Check if the user row fields match a particular set of values
+static bool user_row_matches(const Row *row, int32_t id, const char *email, int32_t age) {
+    if (!row || !row->values || row->n_columns != 3 || !email) {
+        return false;
+    }
+
+    if (!row->values[0] || !row->values[1] || !row->values[2]) {
+        return false;
+    }
+
+    if (row->values[0]->type != INTEGER || 
+        row->values[1]->type != TEXT || 
+        row->values[2]->type != INTEGER) {
+        return false;
+    }
+
+    return row->values[0]->value.int32_val == id &&
+           strcmp(row->values[1]->value.text_val, email) == 0 &&
+           row->values[2]->value.int32_val == age;
+}
+
+// Check if index contains a particular user row
+static bool index_contains_user(const Index *index, Pager *pager, Schema *schema, Value **key_values,
+    const uint32_t *column_ids, uint32_t num_columns, int32_t id, const char *email, int32_t age) {
+ 
+    if (!index || !pager || !schema || !key_values || !column_ids) {
+        return false;
+    }
+
+    IndexRangeResult result = {0};
+
+    IndexLookupStatus status = index_find_exact(
+        index, 
+        pager, 
+        schema, 
+        key_values, 
+        column_ids,
+        num_columns,
+        &result 
+    );
+
+    bool found = 
+        status == INDEX_LOOKUP_SUCCESS && 
+        result.count == 1 &&
+        user_row_matches(result.entries[0].row, id, email, age);
+
+    index_range_result_free(&result);
+
+    return found;
+}
 
 /* ---------- table_create unit tests ---------- */
 
@@ -1516,6 +1603,1015 @@ cleanup:
 }
 
 
+/* ---------- table_insert_entry unit tests ---------- */
+
+static int test_table_insert_entry_success() {
+    int result = 1;
+
+    TestPager test_pager = {0};
+    Schema *test_schema = NULL;
+    Table *table = NULL;
+    Row *row = NULL;
+
+    Value *id_key = NULL;
+    Value *email_key = NULL;
+
+    uint32_t primary_columns[] = {0};
+    uint32_t secondary_columns[] = {1};
+
+    Value *primary_values[1] = {0};
+    Value *secondary_values[1] = {0};
+
+    int32_t id = 1;
+
+    ASSERT(create_test_pager(&test_pager));
+
+    test_schema = create_test_schema_with_constraints();
+    ASSERT(test_schema != NULL);
+
+    table = table_create("users", test_schema, test_pager.pager);
+    ASSERT(table != NULL);
+
+    row = create_test_user_row(1, "alice@example.com", 25);
+    ASSERT(row != NULL);
+
+    // Verify new row insertion
+    ASSERT(
+        table_insert_entry(
+            table,
+            test_pager.pager,
+            row,
+            NULL
+        ) == TABLE_MUTATION_SUCCESS
+    );
+
+    // Verify table statistics
+    ASSERT(table->row_count == 1);
+
+    ASSERT(table->table_schema->columns[0]->non_null_rows == 1);
+    ASSERT(table->table_schema->columns[1]->non_null_rows == 1);
+    ASSERT(table->table_schema->columns[2]->non_null_rows == 1);
+
+    // Verify primary index entry
+    id_key = value_create(INTEGER, &id);
+    ASSERT(id_key != NULL);
+
+    primary_values[0] = id_key;
+
+    ASSERT(index_contains_user(
+        table->primary_index,
+        test_pager.pager,
+        table->table_schema,
+        primary_values,
+        primary_columns,
+        1,
+        1,
+        "alice@example.com",
+        25
+    ));
+
+    // Verify secondary index entry    
+    email_key = value_create(TEXT, "alice@example.com");
+    ASSERT(email_key != NULL);
+
+    secondary_values[0] = email_key;
+
+    ASSERT(index_contains_user(
+        table->secondary_indexes[0],
+        test_pager.pager,
+        table->table_schema,
+        secondary_values,
+        secondary_columns,
+        1,
+        1,
+        "alice@example.com",
+        25
+    ));
+
+    result = 0;
+
+
+cleanup:
+    if (id_key) { value_free(id_key); }
+    if (email_key) { value_free(email_key); }
+    if (row) { row_free(row); }
+
+    if (table) {
+        if (table->is_materialized &&
+            table_drop(table, test_pager.pager)) {
+            table = NULL;
+        }
+
+        if (table) {
+            table_free(table);
+        }
+    }
+
+    if (test_schema) { schema_free(test_schema); }
+
+    destroy_test_pager(&test_pager);
+
+    return result;
+}
+
+static int test_table_insert_entry_duplicate_primary_key() {
+    int result = 1;
+
+    TestPager test_pager = {0};
+    Schema *test_schema = NULL;
+    Table *table = NULL;
+    Row *first_row = NULL;
+    Row *duplicate_row = NULL;
+
+    Value *id_key = NULL;
+    Value *primary_values[1] = {0};
+
+    uint32_t primary_columns[] = {0};
+    int32_t id = 1;
+
+    ASSERT(create_test_pager(&test_pager));
+
+    test_schema = create_test_schema_with_constraints();
+    ASSERT(test_schema != NULL);
+
+    table = table_create("users", test_schema, test_pager.pager);
+    ASSERT(table != NULL);
+
+    first_row = create_test_user_row(1, "alice@example.com", 25);
+    ASSERT(first_row != NULL);
+
+    duplicate_row = create_test_user_row(1, "bob@example.com", 30);
+    ASSERT(duplicate_row != NULL);
+
+    // Verify new row insertion
+    ASSERT(
+        table_insert_entry(
+            table,
+            test_pager.pager,
+            first_row,
+            NULL
+        ) == TABLE_MUTATION_SUCCESS
+    );
+
+    ASSERT(table_insert_entry(
+        table,
+        test_pager.pager,
+        duplicate_row,
+        NULL
+    ) == TABLE_MUTATION_DUPLICATE_KEY);
+
+    // Verify statistics
+    ASSERT(table->row_count == 1);
+
+    ASSERT(table->table_schema->columns[0]->non_null_rows == 1);
+    ASSERT(table->table_schema->columns[1]->non_null_rows == 1);
+    ASSERT(table->table_schema->columns[2]->non_null_rows == 1);
+
+    // Original row must remain unchanged
+    id_key = value_create(INTEGER, &id);
+    ASSERT(id_key);
+
+    primary_values[0] = id_key;
+
+    ASSERT(index_contains_user(
+        table->primary_index,
+        test_pager.pager,
+        table->table_schema,
+        primary_values,
+        primary_columns,
+        1,
+        1,
+        "alice@example.com",
+        25
+    ));
+
+    result = 0;
+
+
+cleanup:
+    if (id_key) { value_free(id_key); }
+    if (first_row) { row_free(first_row); }
+    if (duplicate_row) { row_free(duplicate_row); }
+
+    if (table) {
+        if (table->is_materialized &&
+            table_drop(table, test_pager.pager)) {
+            table = NULL;
+        }
+
+        if (table) {
+            table_free(table);
+        }
+    }
+
+    if (test_schema) { schema_free(test_schema); }
+
+    destroy_test_pager(&test_pager);
+
+    return result;
+}
+
+/* ---------- table_delete_entry unit tests ---------- */
+
+static int test_table_delete_entry_success() {
+    int result = 1;
+
+    TestPager test_pager = {0};
+    Schema *test_schema = NULL;
+    Table *table = NULL;
+    Row *row = NULL;
+
+    IndexRangeResult primary_result = {0};
+    IndexRangeResult secondary_result = {0};
+
+    ASSERT(create_test_pager(&test_pager));
+
+    test_schema = create_test_schema_with_constraints();
+    ASSERT(test_schema != NULL);
+
+    table = table_create("users", test_schema, test_pager.pager);
+    ASSERT(table != NULL);
+
+    row = create_test_user_row(1, "alice@example.com", 25);
+    ASSERT(row != NULL);
+
+    // Insert test row
+    ASSERT(table_insert_entry(
+        table,
+        test_pager.pager,
+        row,
+        NULL
+    ) == TABLE_MUTATION_SUCCESS);
+
+    ASSERT(table->row_count == 1);
+
+    // Delete the same test row
+    ASSERT(table_delete_entry(
+        table,
+        test_pager.pager,
+        row,
+        NULL
+    ) == TABLE_MUTATION_SUCCESS);
+
+    ASSERT(table->row_count == 0);
+
+    // Statistics returned to their original values.
+    ASSERT(table->table_schema->columns[0]->non_null_rows == 0);
+    ASSERT(table->table_schema->columns[1]->non_null_rows == 0);
+    ASSERT(table->table_schema->columns[2]->non_null_rows == 0);
+
+    // Primary index is empty
+    ASSERT(index_scan(
+        table->primary_index,
+        test_pager.pager,
+        table->table_schema,
+        &primary_result
+    ) == INDEX_LOOKUP_SUCCESS);
+
+    ASSERT(primary_result.count == 0);
+
+    // Secondary index is also empty
+    ASSERT(index_scan(
+        table->secondary_indexes[0],
+        test_pager.pager,
+        table->table_schema,
+        &secondary_result
+    ) == INDEX_LOOKUP_SUCCESS);
+
+    ASSERT(secondary_result.count == 0);
+
+    result = 0;
+
+cleanup:
+    index_range_result_free(&primary_result);
+    index_range_result_free(&secondary_result);
+
+    if (row) { row_free(row); }
+
+    if (table) {
+        if (table->is_materialized &&
+            table_drop(table, test_pager.pager)) {
+            table = NULL;
+        }
+
+        if (table) { table_free(table); }
+    }
+
+    if (test_schema) { schema_free(test_schema); }
+
+    destroy_test_pager(&test_pager);
+    return result;
+}
+
+static int test_table_delete_entry_not_found() {
+    int result = 1;
+
+    TestPager test_pager = {0};
+    Schema *test_schema = NULL;
+    Table *table = NULL;
+    
+    Row *existing_row = NULL;
+    Row *missing_row = NULL;
+    
+    Value *id_key = NULL;
+    Value *primary_values[1] = {0};
+
+    uint32_t primary_columns[] = {0};
+    int32_t id = 1;
+    
+    ASSERT(create_test_pager(&test_pager));
+
+    test_schema = create_test_schema_with_constraints();
+    ASSERT(test_schema != NULL);
+
+    table = table_create("users", test_schema, test_pager.pager);
+    ASSERT(table != NULL);
+
+    existing_row = create_test_user_row(1, "alice@example.com", 25);
+    ASSERT(existing_row != NULL);
+
+    missing_row = create_test_user_row(2, "missing@example.com", 30);
+    ASSERT(missing_row != NULL);
+
+    // Insert test row
+    ASSERT(table_insert_entry(
+        table,
+        test_pager.pager,
+        existing_row,
+        NULL
+    ) == TABLE_MUTATION_SUCCESS);
+
+    // Attempt to delete the missing row
+    ASSERT(table_delete_entry(
+        table,
+        test_pager.pager,
+        missing_row,
+        NULL
+    ) == TABLE_MUTATION_NOT_FOUND);
+
+    // Statistics remain unaffected after the deletion attempt
+    ASSERT(table->row_count == 1);
+
+    ASSERT(table->table_schema->columns[0]->non_null_rows == 1);
+    ASSERT(table->table_schema->columns[1]->non_null_rows == 1);
+    ASSERT(table->table_schema->columns[2]->non_null_rows == 1);
+
+    id_key = value_create(INTEGER, &id);
+    ASSERT(id_key != NULL);
+
+    primary_values[0] = id_key;
+
+    ASSERT(index_contains_user(
+        table->primary_index,
+        test_pager.pager,
+        table->table_schema,
+        primary_values,
+        primary_columns,
+        1,
+        1,
+        "alice@example.com",
+        25
+    ));
+
+    result = 0;
+
+cleanup:
+    if (id_key) { value_free(id_key); }
+    if (existing_row) { row_free(existing_row); }
+    if (missing_row) { row_free(missing_row); }
+
+    if (table) {
+        if (table->is_materialized &&
+            table_drop(table, test_pager.pager)) {
+            table = NULL;
+        }
+
+        if (table) { table_free(table); }
+    }
+
+    if (test_schema) { schema_free(test_schema); }
+
+    destroy_test_pager(&test_pager);
+    return result;
+}
+
+/* ---------- table_update_entry unit tests ---------- */
+
+static int test_table_update_entry_same_primary_key() {
+    int result = 1;
+
+    TestPager test_pager = {0};
+    Schema *test_schema = NULL;
+    Table *table = NULL;
+
+    Row *old_row = NULL;
+    Row *new_row = NULL;
+    
+    Value *id_key = NULL;
+    Value *old_email_key = NULL;
+    Value *new_email_key = NULL;
+
+    Value *primary_values[1] = {0};
+    Value *secondary_values[1] = {0};
+
+    uint32_t primary_columns[] = {0};
+    uint32_t secondary_columns[] = {1};
+
+    int32_t id = 1;
+
+    IndexRangeResult old_secondary_result = {0};
+
+    ASSERT(create_test_pager(&test_pager));
+
+    test_schema = create_test_schema_with_constraints();
+    ASSERT(test_schema != NULL);
+
+    table = table_create("users", test_schema, test_pager.pager);
+    ASSERT(table != NULL);
+
+    old_row = create_test_user_row(1, "alice@example.com", 25);
+    ASSERT(old_row != NULL);
+
+    new_row = create_test_user_row(1, "alice.new@example.com", 26);
+    ASSERT(new_row != NULL);
+
+    // Insert old row
+    ASSERT(table_insert_entry(
+        table,
+        test_pager.pager,
+        old_row,
+        NULL
+    ) == TABLE_MUTATION_SUCCESS);
+
+    // Update that row
+    ASSERT(table_update_entry(
+        table,
+        test_pager.pager,
+        old_row,
+        new_row,
+        NULL
+    ) == TABLE_MUTATION_SUCCESS);
+
+    // Updates never change row count
+    ASSERT(table->row_count == 1);
+
+    ASSERT(table->table_schema->columns[0]->non_null_rows == 1);
+    ASSERT(table->table_schema->columns[1]->non_null_rows == 1);
+    ASSERT(table->table_schema->columns[2]->non_null_rows == 1);
+
+    // Primary index contains the replacement payload
+    id_key = value_create(INTEGER, &id);
+    ASSERT(id_key);
+
+    primary_values[0] = id_key;
+
+    ASSERT(index_contains_user(
+        table->primary_index,
+        test_pager.pager,
+        table->table_schema,
+        primary_values,
+        primary_columns,
+        1,
+        1,
+        "alice.new@example.com",
+        26
+    ));
+
+    // Old secondary key must no longer exist.
+    old_email_key = value_create(TEXT, "alice@example.com");
+    ASSERT(old_email_key != NULL);
+
+    secondary_values[0] = old_email_key;
+
+    ASSERT(index_find_exact(
+        table->secondary_indexes[0],
+        test_pager.pager,
+        table->table_schema,
+        secondary_values,
+        secondary_columns,
+        1,
+        &old_secondary_result
+    ) == INDEX_LOOKUP_NOT_FOUND);
+
+    index_range_result_free(&old_secondary_result);
+
+    // Replacement secondary key must point to the replacement row.
+    new_email_key = value_create(TEXT, "alice.new@example.com");
+    ASSERT(new_email_key != NULL);
+
+    secondary_values[0] = new_email_key;
+
+    ASSERT(index_contains_user(
+        table->secondary_indexes[0],
+        test_pager.pager,
+        table->table_schema,
+        secondary_values,
+        secondary_columns,
+        1,
+        1,
+        "alice.new@example.com",
+        26
+    ));
+
+    result = 0;
+
+cleanup:
+    index_range_result_free(&old_secondary_result);
+
+    if (id_key) { value_free(id_key); }
+    if (old_email_key) { value_free(old_email_key); }
+    if (new_email_key) { value_free(new_email_key); }
+
+    if (old_row) { row_free(old_row); }
+    if (new_row) { row_free(new_row); }
+
+    if (table) {
+        if (table->is_materialized &&
+            table_drop(table, test_pager.pager)) {
+            table = NULL;
+        }
+
+        if (table) { table_free(table); }
+    }
+
+    if (test_schema) { schema_free(test_schema); }
+
+    destroy_test_pager(&test_pager);
+    return result;
+}
+
+static int test_table_update_entry_changed_primary_key() {
+    int result = 1;
+
+    TestPager test_pager = {0};
+    Schema *test_schema = NULL;
+    Table *table = NULL;
+
+    Row *old_row = NULL;
+    Row *new_row = NULL;
+
+    Value *old_id_key = NULL;
+    Value *new_id_key = NULL;
+
+    Value *primary_values[1] = {0};
+    uint32_t primary_columns[] = {0};
+
+    int32_t old_id = 1;
+    int32_t new_id = 2;
+
+    IndexRangeResult lookup_result = {0};
+
+    ASSERT(create_test_pager(&test_pager));
+
+    test_schema = create_test_schema_with_constraints();
+    ASSERT(test_schema != NULL);
+
+    table = table_create("users", test_schema, test_pager.pager);
+    ASSERT(table != NULL);
+
+    old_row = create_test_user_row(1, "alice@example.com", 25);
+    ASSERT(old_row != NULL);
+
+    new_row = create_test_user_row(2, "alice@example.com", 25);
+    ASSERT(new_row != NULL);
+    
+    // Insert old row
+    ASSERT(table_insert_entry(
+        table,
+        test_pager.pager,
+        old_row,
+        NULL
+    ) == TABLE_MUTATION_SUCCESS);
+
+    // Update that row
+    ASSERT(table_update_entry(
+        table,
+        test_pager.pager,
+        old_row,
+        new_row,
+        NULL
+    ) == TABLE_MUTATION_SUCCESS);
+
+    ASSERT(table->row_count == 1);
+
+    // Old primary key must disappear (search shouldn't find it)
+    old_id_key = value_create(INTEGER, &old_id);
+    ASSERT(old_id_key != NULL);
+
+    primary_values[0] = old_id_key;
+
+    ASSERT(index_find_exact(
+        table->primary_index,
+        test_pager.pager,
+        table->table_schema,
+        primary_values,
+        primary_columns,
+        1,
+        &lookup_result
+    ) == INDEX_LOOKUP_NOT_FOUND);
+
+    index_range_result_free(&lookup_result);
+
+    // New primary key must contain the updated row
+    new_id_key = value_create(INTEGER, &new_id);
+    ASSERT(new_id_key != NULL);
+
+    primary_values[0] = new_id_key;
+
+    ASSERT(index_contains_user(
+        table->primary_index,
+        test_pager.pager,
+        table->table_schema,
+        primary_values,
+        primary_columns,
+        1,
+        2,
+        "alice@example.com",
+        25
+    ));
+
+    result = 0;
+
+cleanup:
+    index_range_result_free(&lookup_result);
+
+    if (old_id_key) { value_free(old_id_key); }
+    if (new_id_key) { value_free(new_id_key); }
+
+    if (old_row) { row_free(old_row); }
+    if (new_row) { row_free(new_row); }
+
+    if (table) {
+        if (table->is_materialized &&
+            table_drop(table, test_pager.pager)) {
+            table = NULL;
+        }
+
+        if (table) { table_free(table); }
+    }
+
+    if (test_schema) { schema_free(test_schema); }
+
+    destroy_test_pager(&test_pager);
+    return result;
+}
+
+static int test_table_update_entry_equal_row() {
+    int result = 1;
+
+    TestPager test_pager = {0};
+    Schema *test_schema = NULL;
+    Table *table = NULL;
+    Row *row = NULL;
+
+    TableRowResult scan_result = {0};
+
+    ASSERT(create_test_pager(&test_pager));
+
+    test_schema = create_test_schema_with_constraints();
+    ASSERT(test_schema != NULL);
+
+    table = table_create("users", test_schema, test_pager.pager);
+    ASSERT(table != NULL);
+
+    row = create_test_user_row(1, "alice@example.com", 25);
+    ASSERT(row != NULL);
+
+    // Insert old entry
+    ASSERT(table_insert_entry(
+        table,
+        test_pager.pager,
+        row,
+        NULL
+    ) == TABLE_MUTATION_SUCCESS);
+
+    // Update old entry with the same row
+    ASSERT(table_update_entry(
+        table,
+        test_pager.pager,
+        row,
+        row,
+        NULL
+    ) == TABLE_MUTATION_SUCCESS);
+
+    ASSERT(table->row_count == 1);
+    ASSERT(table_scan(table, test_pager.pager, &scan_result) == TABLE_LOOKUP_SUCCESS);
+    ASSERT(scan_result.count == 1);
+    ASSERT(user_row_matches(scan_result.rows[0], 1, "alice@example.com", 25));
+
+    result = 0;
+
+cleanup:
+    table_row_result_free(&scan_result);
+
+    if (row) { row_free(row); }
+
+    if (table) {
+        if (table->is_materialized &&
+            table_drop(table, test_pager.pager)) {
+            table = NULL;
+        }
+
+        if (table) { table_free(table); }
+    }
+
+    if (test_schema) { schema_free(test_schema); }
+
+    destroy_test_pager(&test_pager);
+    return result;
+}
+
+static int test_table_update_duplicate_primary_key() {
+    int result = 1;
+
+    TestPager test_pager = {0};
+    Schema *test_schema = NULL;
+    Table *table = NULL;
+
+    Row *old_row = NULL;
+    Row *existing_row = NULL;
+    Row *new_row = NULL;
+
+    TableRowResult scan_result = {0};
+
+    ASSERT(create_test_pager(&test_pager));
+
+    test_schema = create_test_schema_with_constraints();
+    ASSERT(test_schema != NULL);
+
+    table = table_create("users", test_schema, test_pager.pager);
+    ASSERT(table != NULL);
+
+    old_row = create_test_user_row(1, "alice@example.com", 25);
+    ASSERT(old_row != NULL);
+
+    existing_row = create_test_user_row(2, "bob@example.com", 30);
+    ASSERT(existing_row != NULL);
+
+    new_row = create_test_user_row(2, "alice.new@example.com", 26);
+    ASSERT(new_row != NULL);
+
+    ASSERT(table_insert_entry(
+        table,
+        test_pager.pager,
+        old_row,
+        NULL
+    ) == TABLE_MUTATION_SUCCESS);
+
+    ASSERT(table_insert_entry(
+        table,
+        test_pager.pager,
+        existing_row,
+        NULL
+    ) == TABLE_MUTATION_SUCCESS);
+
+    ASSERT(table_update_entry(
+        table,
+        test_pager.pager,
+        old_row,
+        new_row,
+        NULL
+    ) == TABLE_MUTATION_DUPLICATE_KEY);
+
+    // Primary duplicate detection happens before the old entry is removed, so both original rows remain.
+    ASSERT(table->row_count == 2);
+
+    ASSERT(table_scan(
+        table,
+        test_pager.pager,
+        &scan_result
+    ) == TABLE_LOOKUP_SUCCESS);
+
+    ASSERT(scan_result.count == 2);
+
+    bool found_alice = false;
+    bool found_bob = false;
+
+    for (uint32_t i = 0; i < scan_result.count; i++) {
+        if (user_row_matches(scan_result.rows[i], 1, "alice@example.com", 25)) {
+            found_alice = true;
+        }
+
+        if (user_row_matches(scan_result.rows[i], 2, "bob@example.com", 30)) {
+            found_bob = true;
+        }
+    }
+
+    ASSERT(found_alice && found_bob);
+
+    result = 0;
+
+cleanup:
+    table_row_result_free(&scan_result);
+
+    if (old_row) { row_free(old_row); }
+    if (existing_row) { row_free(existing_row); }
+    if (new_row) { row_free(new_row); }
+
+    if (table) {
+        if (table->is_materialized &&
+            table_drop(table, test_pager.pager)) {
+            table = NULL;
+        }
+
+        if (table) { table_free(table); }
+    }
+
+    if (test_schema) { schema_free(test_schema); }
+
+    destroy_test_pager(&test_pager);
+    return result;
+}
+
+
+static int test_table_update_entry_not_found() {
+    int result = 1;
+
+    TestPager test_pager = {0};
+    Schema *test_schema = NULL;
+    Table *table = NULL;
+
+    Row *existing_row = NULL;
+    Row *old_row = NULL;
+    Row *new_row = NULL;
+
+    TableRowResult scan_result = {0};
+
+    ASSERT(create_test_pager(&test_pager));
+
+    test_schema = create_test_schema_with_constraints();
+    ASSERT(test_schema != NULL);
+
+    table = table_create("users", test_schema, test_pager.pager);
+    ASSERT(table != NULL);
+
+    existing_row = create_test_user_row(1, "alice@example.com", 25);
+    ASSERT(existing_row != NULL);
+
+    old_row = create_test_user_row(2, "missing@example.com", 30);
+    ASSERT(old_row != NULL);
+
+    new_row = create_test_user_row(3, "replacement@example.com", 35);
+    ASSERT(new_row != NULL);
+    
+    // Insert existing row
+    ASSERT(table_insert_entry(
+        table,
+        test_pager.pager,
+        existing_row,
+        NULL
+    ) == TABLE_MUTATION_SUCCESS);
+
+    // Attempt to update an entry that doesn't exist in the table
+    ASSERT(table_update_entry(
+        table,
+        test_pager.pager,
+        old_row,
+        new_row,
+        NULL
+    ) == TABLE_MUTATION_NOT_FOUND);
+
+    ASSERT(table->row_count == 1);
+    ASSERT(table_scan(table, test_pager.pager, &scan_result) == TABLE_LOOKUP_SUCCESS);
+
+    ASSERT(scan_result.count == 1);
+    ASSERT(user_row_matches(scan_result.rows[0], 1, "alice@example.com", 25));
+
+    result = 0;
+
+cleanup:
+    table_row_result_free(&scan_result);
+
+    if (existing_row) { row_free(existing_row); }
+    if (old_row) { row_free(old_row); }
+    if (new_row) { row_free(new_row); }
+
+    if (table) {
+        if (table->is_materialized &&
+            table_drop(table, test_pager.pager)) {
+            table = NULL;
+        }
+
+        if (table) { table_free(table); }
+    }
+
+    if (test_schema) { schema_free(test_schema); }
+
+    destroy_test_pager(&test_pager);
+    return result;
+}
+
+
+/* ---------- table_mutation error cases ---------- */
+
+static int test_table_mutation_invalid_arguments() {
+    int result = 1;
+
+    TestPager test_pager = {0};
+    Schema *test_schema = NULL;
+    Table *table = NULL;
+
+    Row *row = NULL;
+    Row *replacement = NULL;
+    Row *short_row = NULL;
+
+    ASSERT(create_test_pager(&test_pager));
+
+    test_schema = create_test_schema_with_constraints();
+    ASSERT(test_schema != NULL);
+
+    table = table_create("users", test_schema, test_pager.pager);
+    ASSERT(table != NULL);
+
+    row = create_test_user_row(1, "alice@example.com", 25);
+    ASSERT(row != NULL);
+
+    replacement = create_test_user_row(2, "alice.new@example.com", 26);
+    ASSERT(replacement != NULL);
+
+    short_row = (Row *) calloc(1, sizeof(Row));
+    ASSERT(short_row != NULL);
+
+    short_row->n_columns = 1;
+    short_row->values = (Value **) calloc(1, sizeof(Value *));
+    ASSERT(short_row->values != NULL);
+
+    short_row->values[0] = value_create(INTEGER, &(int32_t){1});
+    ASSERT(short_row->values[0] != NULL);
+
+    // NULL input table
+    ASSERT(table_insert_entry(
+        NULL,
+        test_pager.pager,
+        row,
+        NULL
+    ) == TABLE_MUTATION_INVALID_ARGUMENTS);
+
+    // NULL input pager
+    ASSERT(table_insert_entry(
+        table,
+        NULL,
+        row,
+        NULL
+    ) == TABLE_MUTATION_INVALID_ARGUMENTS);
+
+    // Invalid input Row structure
+    ASSERT(table_insert_entry(
+        table,
+        test_pager.pager,
+        short_row,
+        NULL
+    ) == TABLE_MUTATION_INVALID_ARGUMENTS);
+
+    // Invalid input Row structure    
+    ASSERT(table_delete_entry(
+        table,
+        test_pager.pager,
+        short_row,
+        NULL
+    ) == TABLE_MUTATION_INVALID_ARGUMENTS);
+
+    // Invalid input Row structure
+    ASSERT(table_update_entry(
+        table,
+        test_pager.pager,
+        row,
+        short_row,
+        NULL
+    ) == TABLE_MUTATION_INVALID_ARGUMENTS);
+
+    // Attempting to insert deleted row
+    row->is_deleted = true;
+
+    ASSERT(table_insert_entry(
+        table,
+        test_pager.pager,
+        row,
+        NULL
+    ) == TABLE_MUTATION_INVALID_ARGUMENTS);
+
+    result = 0;
+
+cleanup:
+    if (row) { row_free(row); }
+    if (replacement) { row_free(replacement); }
+    if (short_row) { row_free(short_row); }
+
+    if (table) {
+        if (table->is_materialized &&
+            table_drop(table, test_pager.pager)) {
+            table = NULL;
+        }
+
+        if (table) { table_free(table); }
+    }
+
+    if (test_schema) { schema_free(test_schema); }
+
+    destroy_test_pager(&test_pager);
+    return result;
+}
+
 /* ---------- Logging Helper ---------- */
 
 void generate_output(int result, int test_num, char *test_desc) {
@@ -1582,6 +2678,34 @@ int main(int argc, char *argv[]) {
     /* ---------- pager persistence integration test ---------- */
     result = test_table_persistence_after_reopen();
     generate_output(result, 21, "test_table_persistence_after_reopen");
+
+    /* ---------- table_insert_entry unit tests ---------- */
+    result = test_table_insert_entry_success();
+    generate_output(result, 22, "test_table_insert_entry_success");
+    result = test_table_insert_entry_duplicate_primary_key();
+    generate_output(result, 23, "test_table_insert_entry_duplicate_primary_key");
+    
+    /* ---------- table_delete_entry unit tests ---------- */
+    result = test_table_delete_entry_success();
+    generate_output(result, 24, "test_table_delete_entry_success");
+    result = test_table_delete_entry_not_found();
+    generate_output(result, 25, "test_table_delete_entry_not_found");
+
+    /* ---------- table_update_entry unit tests ---------- */
+    result = test_table_update_entry_same_primary_key();
+    generate_output(result, 26, "test_table_update_entry_same_primary_key");
+    result = test_table_update_entry_changed_primary_key();
+    generate_output(result, 27, "test_table_update_entry_changed_primary_key");
+    result = test_table_update_entry_equal_row();
+    generate_output(result, 28, "test_table_update_entry_equal_row");
+    result = test_table_update_duplicate_primary_key();
+    generate_output(result, 29, "test_table_update_duplicate_primary_key");
+    result = test_table_update_entry_not_found();
+    generate_output(result, 30, "test_table_update_entry_not_found");
+
+    /* ---------- table_mutation error cases ---------- */
+    result = test_table_mutation_invalid_arguments();
+    generate_output(result, 31, "test_table_mutation_invalid_arguments");
 
     return 0;
 }
