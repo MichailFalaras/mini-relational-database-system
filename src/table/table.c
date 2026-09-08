@@ -1861,7 +1861,7 @@ TableMutationStatus table_insert_entry(Table *table, Pager *pager, Row *row, con
  * A future transaction/WAL layer must restore previously removed index
  * entries or otherwise recover the table to a consistent state.
  */
-extern TableMutationStatus table_delete_entry(Table *table, Pager *pager, Row *row, 
+TableMutationStatus table_delete_entry(Table *table, Pager *pager, Row *row, 
     const EvaluationContext *context) {
     
     // Validate inputs
