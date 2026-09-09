@@ -53,19 +53,20 @@ extern BTreeStatus btree_search_entries_init(BTreeSearchEntries *result);
 extern BTreeStatus btree_search_entries_append(BTreeSearchEntries *result, BTreeEntry *new_entry);
 
 // Free individual cell content structure
-extern void btree_cell_contents_free(BTreeCellContents *cell);
+extern void btree_cell_contents_free(BTreeCellContents *cell, BTreeIndexSpec *spec);
 
 // Free individual cell entries
-extern void btree_entry_free(BTreeEntry *entry);
+extern void btree_entry_free(BTreeEntry *entry, BTreeIndexSpec *spec);
 
 // Free BTreeSearchEntries
-extern void btree_search_entries_free(BTreeSearchEntries *entries);
+extern void btree_search_entries_free(BTreeSearchEntries *entries, BTreeIndexSpec *spec);
 
 
 /* ---------- BTreeIndexSpec Helpers ---------- */
 
 // Initialize BTreeIndexSpec fields
-extern bool btree_index_spec_init(const Index *index, Schema *schema, BTreeIndexSpec *spec);
+extern bool btree_index_spec_init(const Index *index, Schema *schema, BTreePayloadType payload_type,
+    BTreeIndexSpec *spec);
 
 /* Get serialized column/key size or Column pointer. */
 extern uint32_t get_serialized_column_size(BTreeIndexSpec *spec, uint32_t col_idx);
@@ -88,7 +89,7 @@ bool key_contains_null_val(Value **key, uint32_t num_keys);
 void insertion_result_reset(BTreeInsertionResult *insertion_res);
 
 /* Reset deletion result. */
-void deletion_result_reset(BTreeDeletionResult *deletion_res);
+void deletion_result_reset(BTreeDeletionResult *deletion_res, BTreeIndexSpec *spec);
 
 /* Serialized key to Value array conversion. */
 Value **serialized_key_to_values(void *separator_key, uint32_t num_keys, BTreeIndexSpec *index);
