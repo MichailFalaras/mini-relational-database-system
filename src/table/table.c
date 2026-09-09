@@ -11,6 +11,8 @@
 #include "../index/index_utils.h"
 #include "../../include/pager.h"
 #include "../../include/row.h"
+#include "../../include/expressions.h"
+#include "../../include/page.h"
 
 
 /* Creation of logical Table struct */
@@ -513,7 +515,7 @@ bool table_create_index(Table *table, const char *index_name, IndexType type, co
         return false;
     }
 
-    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+    if (!pager || !pager->num_pages) {
         printf("table_create_index: Invalid or uninitialized Pager.\n");
         return false;
     }
@@ -626,7 +628,7 @@ bool table_drop_index(Table *table, const char *index_name, Pager *pager) {
         return false;
     }
 
-    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+    if (!pager || !pager->num_pages) {
         printf("table_drop_index: Invalid or uninitialized Pager.\n");
         return false;
     }
@@ -723,7 +725,7 @@ bool table_truncate(Table *table, Pager *pager) {
         }
     }
 
-    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+    if (!pager || !pager->num_pages) {
         printf("table_truncate: Invalid or uninitialized Pager.\n");
         return false;
     }
@@ -764,7 +766,7 @@ Table *table_create(const char *table_name, const Schema *schema, Pager *pager) 
         return NULL;
     }
 
-    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+    if (!pager || !pager->num_pages) {
         printf("table_create: Invalid or uninitialized Pager.\n");
         return NULL;
     }
@@ -814,7 +816,7 @@ bool table_materialize(Table *table, Pager *pager) {
         return false;
     }
 
-    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+    if (!pager || !pager->num_pages) {
         printf("table_materialize: Invalid or uninitialized Pager.\n");
         return false;
     }
@@ -991,7 +993,7 @@ bool table_drop(Table *table, Pager *pager) {
         return false;
     }
 
-    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+    if (!pager || !pager->num_pages) {
         printf("table_drop: Invalid or uninitialized Pager.\n");
         return false;
     }
@@ -1057,7 +1059,7 @@ TableLookupStatus table_find_exact(const Table *table, Pager *pager, Value **key
         return TABLE_LOOKUP_INVALID_ARGUMENTS;
     }
 
-    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+    if (!pager || !pager->num_pages) {
         printf("table_find_exact: Invalid input Pager.\n");
         return TABLE_LOOKUP_INVALID_ARGUMENTS;
     }
@@ -1222,7 +1224,7 @@ TableLookupStatus table_find_prefix(const Table *table, Pager *pager, Value **ke
         return TABLE_LOOKUP_INVALID_ARGUMENTS;
     }
 
-    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+    if (!pager || !pager->num_pages) {
         printf("table_find_prefix: Invalid input Pager.\n");
         return TABLE_LOOKUP_INVALID_ARGUMENTS;
     }
@@ -1389,7 +1391,7 @@ TableLookupStatus table_find_range(const Table *table, Pager *pager,
         return TABLE_LOOKUP_INVALID_ARGUMENTS;
     }
 
-    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+    if (!pager || !pager->num_pages) {
         printf("table_find_range: Invalid input Pager.\n");
         return TABLE_LOOKUP_INVALID_ARGUMENTS;
     }
@@ -1592,7 +1594,7 @@ TableLookupStatus table_scan(const Table *table, Pager *pager, TableRowResult *r
         return TABLE_LOOKUP_INVALID_ARGUMENTS;
     }
 
-    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+    if (!pager || !pager->num_pages) {
         printf("table_scan: Invalid input Pager.\n");
         return TABLE_LOOKUP_INVALID_ARGUMENTS;
     }
@@ -1714,7 +1716,7 @@ TableLookupStatus table_scan(const Table *table, Pager *pager, TableRowResult *r
  */
 TableMutationStatus table_insert_entry(Table *table, Pager *pager, Row *row, const EvaluationContext *context) {
     // Validate inputs
-    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+    if (!pager || !pager->num_pages) {
         return TABLE_MUTATION_INVALID_ARGUMENTS;
     }
 
@@ -1734,7 +1736,7 @@ TableMutationStatus table_insert_entry(Table *table, Pager *pager, Row *row, con
     }
      
     if (table->primary_index->type != PRIMARY_INDEX ||
-        table->primary_index->root_page_num <= SYSTEM_CATALOG_PAGE_NUM ||
+        table->primary_index->root_page_num == SUPERBLOCK_PAGE_NUM ||
         table->primary_index->root_page_num >= pager->num_pages || 
         table->primary_index->root_page_num >= MAX_PAGES) {
         return TABLE_MUTATION_INVALID_ARGUMENTS;    
@@ -1752,7 +1754,7 @@ TableMutationStatus table_insert_entry(Table *table, Pager *pager, Row *row, con
             !index->key->column_index_array ||
             index->key->num_columns == 0 ||
             index->type != SECONDARY_INDEX || 
-            index->root_page_num <= SYSTEM_CATALOG_PAGE_NUM ||
+            index->root_page_num == SUPERBLOCK_PAGE_NUM ||
             index->root_page_num >= pager->num_pages ||
             index->root_page_num >= MAX_PAGES) {
             return TABLE_MUTATION_INVALID_ARGUMENTS;
@@ -1865,7 +1867,7 @@ TableMutationStatus table_delete_entry(Table *table, Pager *pager, Row *row,
     const EvaluationContext *context) {
     
     // Validate inputs
-    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+    if (!pager || !pager->num_pages) {
         return TABLE_MUTATION_INVALID_ARGUMENTS;
     }
 
@@ -1885,7 +1887,7 @@ TableMutationStatus table_delete_entry(Table *table, Pager *pager, Row *row,
     }
      
     if (table->primary_index->type != PRIMARY_INDEX ||
-        table->primary_index->root_page_num <= SYSTEM_CATALOG_PAGE_NUM ||
+        table->primary_index->root_page_num == SUPERBLOCK_PAGE_NUM ||
         table->primary_index->root_page_num >= pager->num_pages || 
         table->primary_index->root_page_num >= MAX_PAGES) {
         return TABLE_MUTATION_INVALID_ARGUMENTS;    
@@ -1903,7 +1905,7 @@ TableMutationStatus table_delete_entry(Table *table, Pager *pager, Row *row,
             !index->key->column_index_array ||
             index->key->num_columns == 0 ||
             index->type != SECONDARY_INDEX || 
-            index->root_page_num <= SYSTEM_CATALOG_PAGE_NUM ||
+            index->root_page_num == SUPERBLOCK_PAGE_NUM ||
             index->root_page_num >= pager->num_pages ||
             index->root_page_num >= MAX_PAGES) {
             return TABLE_MUTATION_INVALID_ARGUMENTS;
@@ -2010,7 +2012,7 @@ TableMutationStatus table_update_entry(Table *table, Pager *pager, Row *old_row,
     const EvaluationContext *context) {
 
     // Validate inputs
-    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+    if (!pager || !pager->num_pages) {
         return TABLE_MUTATION_INVALID_ARGUMENTS;
     }
 
@@ -2030,7 +2032,7 @@ TableMutationStatus table_update_entry(Table *table, Pager *pager, Row *old_row,
     }
      
     if (table->primary_index->type != PRIMARY_INDEX ||
-        table->primary_index->root_page_num <= SYSTEM_CATALOG_PAGE_NUM ||
+        table->primary_index->root_page_num == SUPERBLOCK_PAGE_NUM ||
         table->primary_index->root_page_num >= pager->num_pages || 
         table->primary_index->root_page_num >= MAX_PAGES) {
         return TABLE_MUTATION_INVALID_ARGUMENTS;    
@@ -2048,7 +2050,7 @@ TableMutationStatus table_update_entry(Table *table, Pager *pager, Row *old_row,
             !index->key->column_index_array ||
             index->key->num_columns == 0 ||
             index->type != SECONDARY_INDEX || 
-            index->root_page_num <= SYSTEM_CATALOG_PAGE_NUM ||
+            index->root_page_num == SUPERBLOCK_PAGE_NUM ||
             index->root_page_num >= pager->num_pages ||
             index->root_page_num >= MAX_PAGES) {
             return TABLE_MUTATION_INVALID_ARGUMENTS;
