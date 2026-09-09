@@ -42,13 +42,13 @@ extern void database_free(Database *db);
 extern bool database_add_table(Database *db, Table *table);
 
 /* Check if database contains a Table */
-extern bool database_has_table(Database *db, const char *table_name);
+extern bool database_has_table(const Database *db, const char *table_name);
 
 /* Check if database contains a Table, and return it */
-extern Table *database_find_table(Database *db, const char *table_name);
+extern Table *database_find_table(const Database *db, const char *table_name);
     
 /* Return a Table's registry index, or UINT32_MAX if not found. */
-extern uint32_t database_find_table_index(Database *db, const char *table_name);
+extern uint32_t database_find_table_index(const Database *db, const char *table_name);
 
 /* Remove and free table metadata owned by the Database. On success, existing pointers to the removed Table become invalid. */
 extern bool database_remove_table(Database *db, const char *table_name);

@@ -7,12 +7,12 @@ typedef struct expression_node ExpressionNode;
 
 /* Constraint Type. */
 typedef enum constraint_type {
-    PRIMARY_KEY,
-    FOREIGN_KEY,
-    UNIQUE,
-    CHECK,
-    NOT_NULL,
-    DEFAULT
+    PRIMARY_KEY = 0,
+    FOREIGN_KEY = 1,
+    UNIQUE = 2,
+    CHECK = 3,
+    NOT_NULL = 4,
+    DEFAULT = 5
 } ConstraintType;
 
 /* Primary key struct containing:
@@ -21,23 +21,26 @@ typedef enum constraint_type {
  * amount_columns: amount of columns. */
 typedef struct primary_key_constraint {
     uint32_t *primary_key_columns;
-    uint8_t amount_columns;
+    uint32_t amount_columns;
 } PrimaryKeyConstraint;
 
 /* Foreign Keys struct containing:
  * foreign_key_columns: array of integers of all columns
  comprising the foreign key
  * amount_foreign_keys: amount of foreign key columns
- * referenced_table: index of referenced table
+
+ * referenced_table_name: referenced table name
+ * Removed index of table name, since index is based on the order
+ * the tables were opened/used by the database.
+ * 
  * referenced_columns: array of integers of all columns
  being referenced in the referenced table
  * amount_referenced_columns: amount of referenced columns. */
 typedef struct foreign_keys_constraint {
-    uint32_t referenced_table;
-
     uint32_t *foreign_key_columns;
     uint32_t amount_columns;
     
+    char referenced_table_name[64];
     uint32_t *referenced_columns;
     uint32_t amount_referenced_columns;
 } ForeignKeyConstraint;
@@ -92,7 +95,7 @@ extern Constraint *constraint_copy(Constraint *source);
 extern Constraint *constraint_create_primary_key(char *constraint_name, uint32_t *column_refs, uint32_t amount_columns);
 
 extern Constraint *constraint_create_foreign_keys(char *constraint_name, uint32_t *foreign_key_columns,
-    uint32_t amount_foreign_keys, uint32_t referenced_table, uint32_t *referenced_columns, uint32_t amount_referenced_columns);
+    uint32_t amount_foreign_keys, char *referenced_table_name, uint32_t *referenced_columns, uint32_t amount_referenced_columns);
 
 extern Constraint *constraint_create_unique(char *constraint_name, uint32_t *column_refs, uint32_t amount_columns);
 
@@ -105,7 +108,7 @@ extern Constraint *constraint_create_default(char *constraint_name, uint32_t col
 
 extern bool constraint_has_column(const Constraint *constraint, uint32_t column_index);
 
-extern bool constraint_references_table(const Constraint *constraint, uint32_t table_index);
+extern bool constraint_references_table(const Constraint *constraint, const char *table_name);
 
 extern bool constraint_references_column(const Constraint *constraint, uint32_t column_ref);
 

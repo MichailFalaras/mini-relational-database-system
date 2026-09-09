@@ -38,13 +38,19 @@ Constraint **create_constraint_array(int amount_constraints) {
     return constraints;
 }
 
-Table *create_table_component() {
+Table *create_table_component(uint32_t table_num) {
+
     Table *table = (Table *) calloc(1, sizeof(Table));
     if (table == NULL) {
         perror("(helper) create_table_component");
         exit(1);
     }
 
+    char table_name[64] = {0};
+    snprintf(table_name, 64, "table%d", table_num);
+    memcpy(table->name, table_name, 64);
+
+    table_num++;
     return table;
 }
 
@@ -124,7 +130,7 @@ void expression_node_array_free(ExpressionNode **expr_node_array, int amount_exp
     } 
 }
 
-void database_free(Database *db) {
+void test_database_free(Database *db) {
     if (db != NULL) {
         for (uint32_t i = 0; i < db->table_count; i++) {
             if (db->tables[i] != NULL) {
@@ -209,7 +215,7 @@ static int test_schema_drop_true() {
     /* Needed components/structs */
     Schema *schema = schema_create(columns, constraints, num_columns, num_constraints);
     Database *db = create_database_component(1);
-    Table *table = create_table_component();
+    Table *table = create_table_component(0);
     table->table_schema = schema;
     db->tables[0] = table;
 
@@ -218,7 +224,7 @@ static int test_schema_drop_true() {
     bool res = schema_can_drop(schema, db);
     ASSERT(res == true);
 
-    database_free(db);
+    test_database_free(db);
     schema_free(schema);
     return 0;
 }
@@ -252,20 +258,19 @@ static int test_schema_drop_false() {
 
     uint32_t foreign_key_columns[1];
     column_refs[0] = 0;
-    uint32_t referenced_table = 0;
     uint32_t referenced_columns[1];
     referenced_columns[0] = 0;
     constraint = constraint_create_foreign_keys("Constraint2", foreign_key_columns,
-                                 1, referenced_table, referenced_columns, 1);
+                                 1, "table0", referenced_columns, 1);
     constraints[0] = constraint;
 
     Schema *schema2 = schema_create(columns, constraints, num_columns, num_constraints);
 
     Database *db = create_database_component(2);
-    Table *table = create_table_component();
+    Table *table = create_table_component(0);
     table->table_schema = schema;
     db->tables[0] = table;
-    table = create_table_component();
+    table = create_table_component(1);
     table->table_schema = schema2;
     db->tables[1] = table;
 
@@ -274,7 +279,7 @@ static int test_schema_drop_false() {
     bool res = schema_can_drop(schema, db);
     ASSERT(res == false);
 
-    database_free(db);
+    test_database_free(db);
     schema_free(schema);
     return 0;
 }
@@ -437,22 +442,21 @@ static int test_schema_drop_column() {
 
     uint32_t foreign_key_columns[1];
     foreign_key_columns[0] = 1;
-    uint32_t referenced_table = 0;
     uint32_t referenced_columns[1];
     referenced_columns[0] = 2;
     constraints = create_constraint_array(num_constraints);
     constraint = constraint_create_foreign_keys("Constraint2", foreign_key_columns,
-                                 1, referenced_table, referenced_columns, 1);
+                                 1, "table0", referenced_columns, 1);
     constraints[0] = constraint;
 
     Schema *schema2 = schema_create(columns, constraints, num_columns, num_constraints);
 
     Database *db = create_database_component(2);
-    Table *table = create_table_component();
-    table->table_schema = schema2;
-    db->tables[1] = table;
-    table = create_table_component();
+    Table *table = create_table_component(0);
     table->table_schema = schema;
+    db->tables[1] = table;
+    table = create_table_component(1);
+    table->table_schema = schema2;
     db->tables[0] = table;
 
     /* This column should be dropped because no constraint is referencing it.*/
@@ -519,7 +523,7 @@ static int test_schema_modify_column() {
     Schema *schema = schema_create(columns, constraints, num_columns, num_constraints);
 
     Database *db = create_database_component(1);
-    Table *table = create_table_component();
+    Table *table = create_table_component(0);
     table->table_schema = schema;
     db->tables[0] = table;
 
@@ -532,7 +536,7 @@ static int test_schema_modify_column() {
     ASSERT(schema->columns[2]->null_rows == 0);
 
     free(new_column);
-    database_free(db);
+    test_database_free(db);
     schema_free(schema);
     return 0;
 }
@@ -597,7 +601,7 @@ static int test_schema_add_constraint_true() {
 
     Schema *schema = schema_create(columns, constraints, num_columns, num_constraints);
     Database *db = create_database_component(1);
-    Table *table = create_table_component();
+    Table *table = create_table_component(0);
     table->table_schema = schema;
     db->tables[0] = table;
 
@@ -606,7 +610,7 @@ static int test_schema_add_constraint_true() {
     ASSERT(!strcmp(schema->constraints[num_constraints]->constraint_name, new_constraint->constraint_name));
 
     constraint_free(new_constraint);
-    database_free(db);
+    test_database_free(db);
     schema_free(schema);
     return 0;
 }
@@ -642,7 +646,7 @@ static int test_schema_add_constraint_false() {
 
     Schema *schema = schema_create(columns, constraints, num_columns, num_constraints);
     Database *db = create_database_component(1);
-    Table *table = create_table_component();
+    Table *table = create_table_component(0);
     table->table_schema = schema;
     db->tables[0] = table;
 
@@ -650,7 +654,7 @@ static int test_schema_add_constraint_false() {
     ASSERT(res == false);
 
     constraint_free(new_constraint);
-    database_free(db);
+    test_database_free(db);
     schema_free(schema);
     return 0;
 }
@@ -686,7 +690,7 @@ static int test_schema_add_duplicate_constraint() {
 
     Schema *schema = schema_create(columns, constraints, num_columns, num_constraints);
     Database *db = create_database_component(1);
-    Table *table = create_table_component();
+    Table *table = create_table_component(0);
     table->table_schema = schema;
     db->tables[0] = table;
 
@@ -694,7 +698,7 @@ static int test_schema_add_duplicate_constraint() {
     ASSERT(res == false);
 
     constraint_free(new_constraint);
-    database_free(db);
+    test_database_free(db);
     schema_free(schema);
     return 0;
 }
