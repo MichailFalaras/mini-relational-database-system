@@ -651,7 +651,7 @@ bool schema_add_constraint(Schema *schema, const Database *db, Constraint *new_c
         return false;
     }
 
-    bool valid = constraint_validate_column_refs(db, new_constraint, schema->num_columns);
+    bool valid = constraint_validate_column_refs(db, schema, new_constraint);
     if (valid == false) {
         return false;
     }
