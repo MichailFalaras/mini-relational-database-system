@@ -12,16 +12,16 @@ typedef struct expression_node ExpressionNode;
 
 /* Enum of potential expression entities */
 typedef enum expression_type {
-    EXPR_LITERAL,
-    EXPR_COLUMN_REF,
-    EXPR_TABLE_REF,
-    EXPR_UNARY,
-    EXPR_BINARY,
-    EXPR_IS_NULL,
-    EXPR_IS_NOT_NULL,
-    EXPR_IN,
-    EXPR_BETWEEN,
-    EXPR_FUNCTIONS
+    EXPR_LITERAL = 0,
+    EXPR_COLUMN_REF = 1,
+    EXPR_TABLE_REF = 2,
+    EXPR_UNARY = 3,
+    EXPR_BINARY = 4,
+    EXPR_IS_NULL = 5,
+    EXPR_IS_NOT_NULL = 6,
+    EXPR_IN = 7,
+    EXPR_BETWEEN = 8,
+    EXPR_FUNCTIONS = 9
 } ExpressionType;
 
 /* Enum of all operator types 
@@ -29,20 +29,20 @@ typedef enum expression_type {
  * Comparison operators: =, <>, <, <=, >, >= 
  * Logical operators: AND, OR, NOT */
 typedef enum operator_type {
-    OP_EQ,
-    OP_NEQ,
-    OP_LT,
-    OP_LTE,
-    OP_GT,
-    OP_GTE,
-    OP_AND,
-    OP_OR,
-    OP_NOT,
-    OP_ADD,
-    OP_SUB,
-    OP_MUL,
-    OP_DIV,
-    OP_ERROR
+    OP_EQ = 0,
+    OP_NEQ = 1,
+    OP_LT = 2,
+    OP_LTE = 3,
+    OP_GT = 4,
+    OP_GTE = 5,
+    OP_AND = 6,
+    OP_OR = 7,
+    OP_NOT = 8,
+    OP_ADD = 9,
+    OP_SUB = 10,
+    OP_MUL = 11,
+    OP_DIV = 12,
+    OP_ERROR = 13
 } OperatorType;
 
 /* Literal value in expression, e.g., integer, float, string */
@@ -100,11 +100,11 @@ typedef struct between {
 } Between;
 
 typedef enum aggregate_function_types {
-    SUM,
-    COUNT,
-    AVG,
-    MIN,
-    MAX
+    SUM = 0,
+    COUNT = 1,
+    AVG = 2,
+    MIN = 3,
+    MAX = 4
 } AggregateFunctionTypes;
 
 typedef struct aggregate_function {
