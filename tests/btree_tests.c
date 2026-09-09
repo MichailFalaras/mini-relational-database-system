@@ -196,7 +196,7 @@ static bool btree_test_context_init(BTreeTestContext *ctx, const char *pathname)
         goto cleanup;
     }
 
-    if (!btree_index_spec_init(ctx->index, ctx->schema, ctx->index_spec)) {
+    if (!btree_index_spec_init(ctx->index, ctx->schema, BTREE_ROW_PAYLOAD, ctx->index_spec)) {
         goto cleanup;
     }
 
@@ -642,7 +642,7 @@ static bool create_empty_leaf_child(BTreeTestContext *ctx, uint32_t parent_page_
 static bool create_internal_cell_contents(BTreeCellContents *cell_contents, BTreeIndexSpec *index_spec,
     uint32_t key_order, uint32_t child_page_num) {
     if (!cell_contents || !index_spec
-        || child_page_num <= SYSTEM_CATALOG_PAGE_NUM
+        || child_page_num == SUPERBLOCK_PAGE_NUM
         || child_page_num >= MAX_PAGES) {
         return false;
     }
@@ -677,7 +677,7 @@ static bool create_internal_cell_contents(BTreeCellContents *cell_contents, BTre
 static bool initialize_test_internal_page(BTreeTestContext *ctx, uint32_t page_num,
     uint32_t parent_page_num, bool is_root, uint32_t rightmost_child_page_num) {
     if (!ctx || page_num >= MAX_PAGES
-        || rightmost_child_page_num <= SYSTEM_CATALOG_PAGE_NUM
+        || rightmost_child_page_num == SUPERBLOCK_PAGE_NUM
         || rightmost_child_page_num >= ctx->pager->num_pages) {
         return false;
     }
@@ -713,8 +713,8 @@ static bool append_test_internal_cell(BTreeTestContext *ctx, BTreePage *internal
     uint32_t key_order, uint32_t left_child_page_num, uint32_t right_child_page_num) {
     if (!ctx || !internal || !internal->page || !internal->data
         || internal->type != BTREE_INTERNAL_NODE
-        || left_child_page_num <= SYSTEM_CATALOG_PAGE_NUM
-        || right_child_page_num <= SYSTEM_CATALOG_PAGE_NUM
+        || left_child_page_num == SUPERBLOCK_PAGE_NUM
+        || right_child_page_num == SUPERBLOCK_PAGE_NUM
         || left_child_page_num >= ctx->pager->num_pages
         || right_child_page_num >= ctx->pager->num_pages) {
         return false;
@@ -2237,7 +2237,8 @@ static int test_reachable_page_traversal() {
 
     ASSERT(visited_pages.count == 7);
 
-    for (uint32_t i = SYSTEM_CATALOG_PAGE_NUM + 1;
+    // This might change later on with System Catalog operations
+    for (uint32_t i = SUPERBLOCK_PAGE_NUM + 2;
          i < ctx.pager->num_pages;
          i++) {
         ASSERT(btree_collection_contains(&visited_pages, i));
@@ -2284,7 +2285,8 @@ static int test_exact_key_lookup() {
             ctx.btree,
             &search_key,
             &search_result,
-            &entries
+            &entries,
+            ctx.index_spec
         );
         ASSERT(status == BTREE_SUCCESS);
 
@@ -2319,7 +2321,7 @@ static int test_exact_key_lookup() {
         ));
 
         free_cell_contents(&expected_cell);
-        btree_search_entries_free(&entries);
+        btree_search_entries_free(&entries, ctx.index_spec);
     }
 
     /* --- LOOKUP MISSING KEY --- */
@@ -2335,7 +2337,8 @@ static int test_exact_key_lookup() {
         ctx.btree,
         &search_key,
         &search_result,
-        &entries
+        &entries,
+        ctx.index_spec
     );
     ASSERT(status == BTREE_NOT_FOUND);
 
@@ -2368,7 +2371,8 @@ static int test_exact_key_lookup() {
         ctx.btree,
         &search_key,
         &search_result,
-        &entries
+        &entries,
+        ctx.index_spec
     );
     ASSERT(status == BTREE_NOT_FOUND);
 
@@ -2431,7 +2435,7 @@ static int test_range_query() {
         11
     ));
 
-    btree_search_entries_free(&range_result);
+    btree_search_entries_free(&range_result, ctx.index_spec);
 
     /* --- EXCLUSIVE BOUNDS --- */
     status = btree_find_range_keys(
@@ -2451,7 +2455,7 @@ static int test_range_query() {
         9
     ));
 
-    btree_search_entries_free(&range_result);
+    btree_search_entries_free(&range_result, ctx.index_spec);
 
     /* --- UNBOUNDED LOWER RANGE --- */
     ASSERT(ordered_search_key_init(
@@ -2477,7 +2481,7 @@ static int test_range_query() {
         6
     ));
 
-    btree_search_entries_free(&range_result);
+    btree_search_entries_free(&range_result, ctx.index_spec);
 
     /* --- UNBOUNDED UPPER RANGE --- */
     ASSERT(ordered_search_key_init(
@@ -2503,7 +2507,7 @@ static int test_range_query() {
         5
     ));
 
-    btree_search_entries_free(&range_result);
+    btree_search_entries_free(&range_result, ctx.index_spec);
 
     /* --- EMPTY MATCHING RANGE --- */
     ASSERT(ordered_search_key_init(
@@ -2529,7 +2533,7 @@ static int test_range_query() {
     ASSERT(status == BTREE_SUCCESS);
     ASSERT(range_result.count == 0);
 
-    btree_search_entries_free(&range_result);
+    btree_search_entries_free(&range_result, ctx.index_spec);
 
     /* --- RANGE CONTAINING ONE KEY --- */
     ASSERT(ordered_search_key_init(
@@ -2560,7 +2564,7 @@ static int test_range_query() {
         1
     ));
 
-    btree_search_entries_free(&range_result);
+    btree_search_entries_free(&range_result, ctx.index_spec);
 
     /* --- START KEY LOWER THAN FIRST TREE KEY --- */
     Value **outside_key_vals = (Value **) calloc(
@@ -2616,7 +2620,7 @@ static int test_range_query() {
         5
     ));
 
-    btree_search_entries_free(&range_result);
+    btree_search_entries_free(&range_result, ctx.index_spec);
 
     /* --- START KEY BIGGER THAN LAST TREE KEY --- */
     outside_key_vals = (Value **) calloc(
@@ -2668,7 +2672,7 @@ static int test_range_query() {
     ASSERT(status == BTREE_SUCCESS);
     ASSERT(range_result.count == 0);
 
-    btree_search_entries_free(&range_result);
+    btree_search_entries_free(&range_result, ctx.index_spec);
 
     /* --- FULL UNBOUNDED RANGE ACROSS LINKED LEAVES --- */
     status = btree_find_range_keys(
@@ -2691,7 +2695,7 @@ static int test_range_query() {
     ASSERT(range_result.entries[0].page_num
         != range_result.entries[range_result.count-1].page_num);
 
-    btree_search_entries_free(&range_result);
+    btree_search_entries_free(&range_result, ctx.index_spec);
 
     /* --- INVALID NEXT SIBLING POINTER --- */
     Page *leftmost_page = NULL;
@@ -2889,7 +2893,7 @@ static int test_find_prefix_keys() {
         }
     }
 
-    btree_search_entries_free(&prefix_result);
+    btree_search_entries_free(&prefix_result, ctx.index_spec);
 
     /* --- TWO-COMPONENT PREFIX: FIVE MATCHES --- */
     for (uint32_t i = 0; i < ctx.index_spec->index_key->num_columns; i++) {
@@ -2962,7 +2966,7 @@ static int test_find_prefix_keys() {
         value_free(expected);
     }
 
-    btree_search_entries_free(&prefix_result);
+    btree_search_entries_free(&prefix_result, ctx.index_spec);
 
     /* --- FULL KEY PREFIX: ONE EXACT MATCH --- */
     for (uint32_t i = 0; i < ctx.index_spec->index_key->num_columns; i++) {
@@ -3009,7 +3013,7 @@ static int test_find_prefix_keys() {
     ASSERT(status == BTREE_SUCCESS);
     ASSERT(result == 0);
 
-    btree_search_entries_free(&prefix_result);
+    btree_search_entries_free(&prefix_result, ctx.index_spec);
 
     /* --- PREFIX MATCHING NO ENTRIES --- */
     for (uint32_t i = 0; i < ctx.index_spec->index_key->num_columns; i++) {
@@ -3047,7 +3051,7 @@ static int test_find_prefix_keys() {
     ASSERT(status == BTREE_SUCCESS);
     ASSERT(prefix_result.count == 0);
 
-    btree_search_entries_free(&prefix_result);
+    btree_search_entries_free(&prefix_result, ctx.index_spec);
 
     /* --- INVALID ARGUMENTS --- */
     prefix_key.num_target_keys = 1;
@@ -4211,10 +4215,10 @@ static int test_btree_delete() {
     BTreeSearchEntries entries = {0};
     ASSERT(ordered_search_key_init(&search_key, ctx.index_spec, 10));
 
-    status = btree_find_exact_key(ctx.btree, &search_key, &search_result, &entries);
+    status = btree_find_exact_key(ctx.btree, &search_key, &search_result, &entries, ctx.index_spec);
     ASSERT(status == BTREE_NOT_FOUND);
 
-    btree_search_entries_free(&entries);
+    btree_search_entries_free(&entries, ctx.index_spec);
     free(search_key.target_key);
     free_cell_contents(&target_cell);
 

@@ -3,6 +3,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <errno.h>
 #include <sys/stat.h>
 #include "../include/pager.h"
 #include "../include/page.h"
@@ -296,16 +297,13 @@ static int test_free_list_index_persistence() {
     return 0;
 }
 
-/* Testing releasing Page 0 or System Catalog root page. */
+/* Testing releasing Page 0*/
 static int test_release_reserved_page() {
     const char *db_path = "build/database2.db";
 
     Pager *pager = pager_open(db_path);
 
     bool res = pager_release_page(pager, 0);
-    ASSERT(res == false);
-
-    res = pager_release_page(pager, 1);
     ASSERT(res == false);
 
     res = pager_close(pager);
@@ -376,8 +374,8 @@ static int test_evict_lru_page() {
 
     res = pager_evict_lru(pager);
     ASSERT(res == true);
-    ASSERT(pager->file_length == 3 *PAGE_SIZE);
-    ASSERT(pager->pages[2] == NULL);
+    ASSERT(pager->file_length == 2 * PAGE_SIZE);
+    ASSERT(pager->pages[1] == NULL);
 
     res = pager_close(pager);
     ASSERT(res == true);

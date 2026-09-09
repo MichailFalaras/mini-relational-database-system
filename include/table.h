@@ -16,6 +16,7 @@ typedef struct column Column;
 typedef struct constraint Constraint;
 typedef struct pager Pager;
 typedef struct database Database;
+typedef struct evaluation_context EvaluationContext;
 
 #define MAX_INDEXES 8
 

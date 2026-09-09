@@ -386,7 +386,7 @@ static int test_index_create_success() {
 
     ASSERT(index->root_page_num == expected_root_page_num);
 
-    ASSERT(index->root_page_num > SYSTEM_CATALOG_PAGE_NUM &&
+    ASSERT(index->root_page_num > SUPERBLOCK_PAGE_NUM &&
            index->root_page_num < test_pager.pager->num_pages);
 
     result = 0;

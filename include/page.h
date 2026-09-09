@@ -8,9 +8,8 @@
 #include <stddef.h>
 
 #define PAGE_SIZE 4096
-#define FREE_LIST_HEAD_OFFSET offsetof(PageZeroMetadata, free_list_head)
-#define SYSTEM_CATALOG_ROOT_PAGE_OFFSET offsetof(PageZeroMetadata, catalog_root)
 
+#define SUPERBLOCK_PAGE_NUM 0
 #define DB_MAGIC_STRING "rdbms-c-v"
 #define DB_MAGIC_STRING_LEN 10
 
@@ -28,12 +27,20 @@ typedef enum page_free_status {
     PAGE_IS_FREE
 } PageFreeStatus;
 
+typedef enum page_zero_offsets {
+    MAGIC_WORD_OFFSET = 0,
+    VERSION_OFFSET = 10,
+    PAGE_SIZE_OFFSET = 14,
+    SYSTEM_CATALOG_ROOT_PAGE_OFFSET = 16,
+    FREE_LIST_HEAD_OFFSET = 20
+} PageZeroOffsets;
+
 /* Page Zero Metada struct to be stored in Page 0.
  * magic: magic string in order for page to be recognized
  * version: version of rdbms
  * page_size: page size constant value
  * catalog_root: page num of System Catalog's page. */
-typedef struct __attribute__((packed)) {
+typedef struct page_zero_metadata {
     char magic[10];
     uint32_t version;
     uint16_t page_size;

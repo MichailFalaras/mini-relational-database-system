@@ -181,6 +181,7 @@ bool schema_can_drop(const Schema *schema, const Database *db) {
     }
 
     // Find target table whose schema is to be deleted
+    char target_table_name[64] = {0};
     uint32_t target_table_index = UINT32_MAX;
 
     for (uint32_t i = 0; i < db->table_count; i++) {
@@ -190,12 +191,13 @@ bool schema_can_drop(const Schema *schema, const Database *db) {
 
         if (db->tables[i]->table_schema == schema) {
             target_table_index = i;
+            memcpy(target_table_name, db->tables[i]->name, sizeof(target_table_name));
             break;
         }
     }
     
     // Table not found
-    if (target_table_index == UINT32_MAX) {
+    if (target_table_name[0] == '\0') {
         return false;
     }
 
@@ -221,7 +223,7 @@ bool schema_can_drop(const Schema *schema, const Database *db) {
             }
 
             if (current_schema->constraints[j]->type == FOREIGN_KEY &&
-                constraint_references_table(current_schema->constraints[j], target_table_index)) {
+                constraint_references_table(current_schema->constraints[j], target_table_name)) {
                 return false;
             }
         }
@@ -321,7 +323,9 @@ bool schema_drop_column(Schema *schema, Database *db, const char *col_name) {
     }
 
     // Find the table's index position across the array of database tables
+    char target_table_name[64] = {0}; 
     uint32_t target_table_index = UINT32_MAX;
+
     for (uint32_t i = 0; i < db->table_count; i++) {
         if (!db->tables[i]) {
             return false;
@@ -329,6 +333,7 @@ bool schema_drop_column(Schema *schema, Database *db, const char *col_name) {
 
         if (db->tables[i]->table_schema == schema) {
             target_table_index = i;
+            memcpy(target_table_name, db->tables[i]->name, sizeof(target_table_name));
             break;
         }
     }
@@ -363,7 +368,7 @@ bool schema_drop_column(Schema *schema, Database *db, const char *col_name) {
                 continue;
             }
             
-            if (constraint_references_table(current_schema->constraints[j], target_table_index) &&
+            if (constraint_references_table(current_schema->constraints[j], target_table_name) &&
                 foreign_key_references_column(current_schema->constraints[j], (uint32_t) col_index)) {
                 return false;
             }
@@ -388,7 +393,7 @@ bool schema_drop_column(Schema *schema, Database *db, const char *col_name) {
             // At this point, on other table references the current table. That's why we check
             // if the foreign key references the same table and the target column.
             bool ref_same_table_column = 
-                constraint_references_table(schema->constraints[i], target_table_index) &&
+                constraint_references_table(schema->constraints[i], target_table_name) &&
                 foreign_key_references_column(schema->constraints[i], (uint32_t) col_index);
 
             uses_column = uses_local_column || ref_same_table_column;
@@ -418,7 +423,7 @@ bool schema_drop_column(Schema *schema, Database *db, const char *col_name) {
             // At this point, on other table references the current table. That's why we check
             // if the foreign key references the same table and the target column.
             bool ref_same_table_column = 
-                constraint_references_table(schema->constraints[i], target_table_index) &&
+                constraint_references_table(schema->constraints[i], target_table_name) &&
                 foreign_key_references_column(schema->constraints[i], (uint32_t) col_index);
 
             uses_column = uses_local_column || ref_same_table_column;
@@ -511,6 +516,7 @@ bool schema_modify_column(Schema *schema, const Database *db, const char *old_co
     if (schema->columns[column_index]->type != new_column->type) {
 
         // Find the target table's position-index
+        char target_table_name[64] = {0};
         uint32_t target_table_index = UINT32_MAX;
 
         for (uint32_t i = 0; i < db->table_count; i++) {
@@ -520,6 +526,7 @@ bool schema_modify_column(Schema *schema, const Database *db, const char *old_co
 
             if (db->tables[i]->table_schema == schema) {
                 target_table_index = i;
+                memcpy(target_table_name, db->tables[i]->name, sizeof(target_table_name));
                 break;
             }
         }
@@ -554,7 +561,7 @@ bool schema_modify_column(Schema *schema, const Database *db, const char *old_co
                     continue;
                 }
 
-                if (constraint_references_table(current_schema->constraints[j], target_table_index) &&
+                if (constraint_references_table(current_schema->constraints[j], target_table_name) &&
                     foreign_key_references_column(current_schema->constraints[j], (uint32_t) column_index)) {
                     return false;
                 }
@@ -579,7 +586,7 @@ bool schema_modify_column(Schema *schema, const Database *db, const char *old_co
             bool uses_local_column = foreign_key_uses_column(schema->constraints[i], (uint32_t) column_index);
 
             bool references_same_table_column =
-                constraint_references_table(schema->constraints[i], target_table_index) &&
+                constraint_references_table(schema->constraints[i], target_table_name) &&
                 foreign_key_references_column(schema->constraints[i], (uint32_t) column_index);
 
             if (uses_local_column || references_same_table_column) {

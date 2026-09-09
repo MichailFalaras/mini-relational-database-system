@@ -30,6 +30,7 @@ void shift_column_refs_after_drop(Schema *schema, Database *db, uint32_t index_t
     }
 
     // Find table that the current schema belongs to
+    char target_table_name[64] = {0};
     uint32_t target_table_index = UINT32_MAX;
 
     for (uint32_t i = 0; i < db->table_count; i++) {
@@ -39,6 +40,7 @@ void shift_column_refs_after_drop(Schema *schema, Database *db, uint32_t index_t
 
         if (db->tables[i]->table_schema == schema) {
             target_table_index = i;
+            memcpy(target_table_name, db->tables[i]->name, sizeof(target_table_name));
             break;
         }
     }
@@ -50,10 +52,6 @@ void shift_column_refs_after_drop(Schema *schema, Database *db, uint32_t index_t
     // Shift the column references of foreign keys that belong to other tables,
     // but reference the current table
     for (uint32_t i = 0; i < db->table_count; i++) {
-        if (i == target_table_index) {
-            continue;
-        }
-
         if (!db->tables[i] || !db->tables[i]->table_schema) {
             return;
         }
@@ -72,15 +70,12 @@ void shift_column_refs_after_drop(Schema *schema, Database *db, uint32_t index_t
                 continue;
             }
 
-            if (constraint_references_table(current_schema->constraints[j], target_table_index)) {
+            if (constraint_references_table(current_schema->constraints[j], target_table_name)) {
                 constraint_shift_referenced_column_refs(current_schema->constraints[j], index_threshold);
             }
         }
     }
 }
-
-
-/* Both functions probably should be moved to a global utils file. */
 
 /* Close array gap when we free pointer in the array. */
 void close_array_gap(void **array, uint32_t count, uint32_t index_of_deletion) {

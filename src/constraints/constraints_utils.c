@@ -10,17 +10,12 @@
 
 /* Helper function to deep-copy uint32_t array (of column_refs). */
 uint32_t *copy_uint32_array(const uint32_t *source, uint32_t amount) {
-
-    if (source == NULL) {
+    if (!source || !amount) {
         return NULL;
     }
 
-    if (amount == 0) {
-        return NULL;
-    }
-
-    uint32_t *copy = (uint32_t *) malloc(amount*sizeof(uint32_t));
-    if (copy == NULL) {
+    uint32_t *copy = (uint32_t *) calloc(amount, sizeof(uint32_t));
+    if (!copy) {
         perror("copy_uint32_array");
         exit(1);
     }
@@ -32,8 +27,7 @@ uint32_t *copy_uint32_array(const uint32_t *source, uint32_t amount) {
 /* When Column gets removed, you have to update the Constraints column refs to
 match the new indexes, which means decrementing the position indexes after the removed Column */
 void constraint_shift_local_column_refs(Constraint *constraint, uint32_t index_threshold) {
-
-    if (constraint == NULL) {
+    if (!constraint) {
         return;
     }
 
@@ -88,7 +82,6 @@ void constraint_shift_local_column_refs(Constraint *constraint, uint32_t index_t
     }
 }
 
-
 /* Decrements the referenced column indexes of another table's constraint */
 void constraint_shift_referenced_column_refs(Constraint *constraint, uint32_t index_threshold) {
     if (!constraint || constraint->type != FOREIGN_KEY) {
@@ -110,8 +103,11 @@ void constraint_shift_referenced_column_refs(Constraint *constraint, uint32_t in
 
 /* Check if column_refs are valid. */
 bool constraint_validate_column_refs(const Database *db, const Constraint *constraint, uint32_t num_columns) {
+    if (!db|| !constraint || !num_columns) {
+        return false;
+    }
 
-    if (db == NULL || constraint == NULL || num_columns == 0) {
+    if (!constraint_validate_definition(constraint)) {
         return false;
     }
 
@@ -135,12 +131,13 @@ bool constraint_validate_column_refs(const Database *db, const Constraint *const
             }
 
             // Referenced table index might not exist too.
-            if (foreign_key->referenced_table >= db->table_count) {
+            Table *referenced_table = database_find_table(db, foreign_key->referenced_table_name);
+            if (!referenced_table || !referenced_table->table_schema) {
                 return false;
             }
 
             /* Checking referenced FOREIGN KEY columns of target table */
-            uint32_t ref_num_columns = db->tables[foreign_key->referenced_table]->table_schema->num_columns;
+            uint32_t ref_num_columns = referenced_table->table_schema->num_columns;
 
             for (uint32_t i = 0; i < foreign_key->amount_referenced_columns; i++) {
                 if (foreign_key->referenced_columns[i] >= ref_num_columns) {

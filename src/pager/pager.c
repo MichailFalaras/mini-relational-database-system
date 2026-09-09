@@ -7,6 +7,7 @@
 #include "../../include/pager.h"
 #include "../../include/page.h"
 #include "pager_utils.h"
+#include "../../include/serialize.h"
 
 /* Create and initialize pager. */
 Pager *pager_create(int fd, size_t file_length, uint32_t num_pages) {
@@ -142,8 +143,12 @@ bool pager_initialize_new_database(Pager *pager) {
         return false;
     }
 
-    /* Struct has attribute "packed" so no padding is being stored. */
-    memcpy(page->page_data, page_zero_metadata, sizeof(PageZeroMetadata));
+    uint8_t *write_offset = page->page_data;
+    if (!serialize_page_zero_metadata(&write_offset, page_zero_metadata)) {
+        free(page_zero_metadata);
+        return false;
+    }
+
     free(page_zero_metadata);
     if (!page_mark_dirty(page)) {
         page_free(page);
@@ -260,8 +265,8 @@ Page *pager_get_page(Pager *pager, uint32_t page_num) {
  * released/freed page resulting in reading garbage values.
  * B+Tree should handle this problem. */
 bool pager_release_page(Pager *pager, uint32_t page_num) {
-
-    if (!pager || page_num >= pager->num_pages) {
+    if (!pager || page_num == SUPERBLOCK_PAGE_NUM 
+        || page_num >= pager->num_pages) {
         return false;
     }
 
@@ -270,28 +275,9 @@ bool pager_release_page(Pager *pager, uint32_t page_num) {
         return false;
     }
 
-    /* Can't release Page 0 or System Catalog.*/
-    uint32_t system_catalog;
-    memcpy(
-        &system_catalog,
-        zero->page_data + SYSTEM_CATALOG_ROOT_PAGE_OFFSET,
-        sizeof(uint32_t)
-    );
-
-    /* Not complete protection of system catalog, since it might
-     * have more than one pages for either internal or leaf nodes.
-     * But that is B+Tree's responsibilities to protect those pages. */
-    if (page_num == 0 || system_catalog == page_num) {
-        return false;
-    }
-
     if (!connect_free_page(pager, page_num)) {
         return false;
     }
-
-    /* Will be extremely resource consuming writing 0s on every page being
-    freed. Just keep the garbage.
-    memset(page->page_data, 0, PAGE_SIZE); */
 
     return true;
 }
@@ -328,7 +314,7 @@ bool pager_evict_lru(Pager *pager) {
     uint64_t lru = pager->access_counter;
     uint32_t lru_page_num;
     bool found = false;
-    for (uint32_t i = 2; i < MAX_PAGES; i++) {
+    for (uint32_t i = 1; i < MAX_PAGES; i++) {
         if (pager->pages[i] == NULL) {
             continue;
         }

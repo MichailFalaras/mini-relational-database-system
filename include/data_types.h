@@ -9,19 +9,19 @@
 
 /* All possible data types used in this database. */
 typedef enum data_types {
-    INTEGER,
-    UNSIGNED_INTEGER,
-    NUMERIC,
-    FLOAT,
-    DOUBLE,
-    CHAR,
-    VARCHAR,
-    TEXT,
-    DATE,
-    TIMESTAMP,
-    BLOB,
-    BOOL,
-    JSONB
+    INTEGER = 0,
+    UNSIGNED_INTEGER = 1,
+    NUMERIC = 2,
+    FLOAT = 3,
+    DOUBLE = 4,
+    CHAR = 5,
+    VARCHAR = 6,
+    TEXT = 7,
+    DATE = 8,
+    TIMESTAMP = 9,
+    BLOB = 10,
+    BOOL = 11,
+    JSONB = 12
 } DataType;
 
 /* NUMERIC/DECIMAL Data Type. */

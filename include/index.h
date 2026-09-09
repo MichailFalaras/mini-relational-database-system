@@ -9,7 +9,7 @@
 #define INVALID_ROOT_PAGE UINT32_MAX
 
 #define SUPERBLOCK_PAGE_NUM 0
-#define SYSTEM_CATALOG_PAGE_NUM  1
+// #define SYSTEM_CATALOG_PAGE_NUM  1
 typedef struct pager Pager;
 typedef struct schema Schema;
 typedef enum data_types DataType;
@@ -17,8 +17,8 @@ typedef struct row Row;
 
 /* Index type. */
 typedef enum index_type {
-    PRIMARY_INDEX,
-    SECONDARY_INDEX,
+    PRIMARY_INDEX = 0,
+    SECONDARY_INDEX = 1,
 } IndexType;
 
 /* Index key contains:

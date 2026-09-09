@@ -13,9 +13,14 @@ typedef struct schema Schema;
 typedef struct catalog_payload CatalogPayload;
 
 typedef enum btree_node_type {
-    BTREE_LEAF_NODE,
-    BTREE_INTERNAL_NODE
+    BTREE_LEAF_NODE = 0,
+    BTREE_INTERNAL_NODE = 1
 } BTreeNodeType;
+
+typedef enum btree_payload_type {
+    BTREE_ROW_PAYLOAD = 0,
+    BTREE_CATALOG_PAYLOAD = 1
+} BTreePayloadType;
 
 typedef enum btree_binary_search_type {
     BTREE_LOWER_BOUND,
@@ -155,6 +160,12 @@ typedef struct btree_index_spec {
     IndexKey *index_key; // Containts columns that comprise the index key
     Schema *schema; // Schema needed for row extraction
     DataType *column_types; // Containts their data type
+
+    // Specify cell payload type.
+    // This should be updated by higher-up function calling B+Tree operations,
+    // so that cells/cell operations are handled correctly
+    BTreePayloadType payload_type; 
+
     bool is_unique; // If Index is unique, for duplicate key checks
     uint16_t key_size; // Key size for specific BTree
 } BTreeIndexSpec;
@@ -269,7 +280,7 @@ extern BTreeStatus btree_traverse_reachable_pages(BTree *btree, BTreePageCollect
 
 // Find B+ Tree Key 
 extern BTreeStatus btree_find_exact_key(BTree *btree, BTreeSearchKey *search_key, BTreeSearchResult *search_result,
-    BTreeSearchEntries *result);
+    BTreeSearchEntries *result, BTreeIndexSpec *index);
 
 // Find B+ Tree Key 
 extern BTreeStatus btree_find_prefix_keys(BTree *btree, BTreeIndexSpec *index, BTreeSearchKey *prefix_key,

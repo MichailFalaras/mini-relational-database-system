@@ -25,8 +25,8 @@ void btree_page_attach(BTreePage *btree_page, Page *page) {
  * Also checks if page is free in the beginning just in case its
  * about to read garbage. */
 BTreeStatus btree_page_validate(Pager *pager, BTreePage *btree_page, BTreeIndexSpec *index) {
-    if (!btree_page || !btree_page->page 
-        || !btree_page->data || !pager) {
+    if (!btree_page || !btree_page->page || !btree_page->data 
+        || !btree_page->page->page_num|| !pager) {
         return BTREE_INVALID_ARGUMENTS;
     }
 
@@ -87,8 +87,7 @@ BTreeStatus btree_page_validate(Pager *pager, BTreePage *btree_page, BTreeIndexS
     }
 
     if (btree_page->type == BTREE_INTERNAL_NODE
-        && (btree_page->type_specific_data.rightmost_child_pointer == 0
-        || btree_page->type_specific_data.rightmost_child_pointer == 1)) {
+        && btree_page->type_specific_data.rightmost_child_pointer == SUPERBLOCK_PAGE_NUM) {
         return BTREE_CORRUPT_PAGE;
     }
 
@@ -103,10 +102,8 @@ BTreeStatus btree_page_validate(Pager *pager, BTreePage *btree_page, BTreeIndexS
     }
 
     if (btree_page->type == BTREE_LEAF_NODE
-        && (btree_page->type_specific_data.siblings.previous_leaf_pointer == 0
-        || btree_page->type_specific_data.siblings.previous_leaf_pointer == 1
-        || btree_page->type_specific_data.siblings.next_leaf_pointer == 0
-        || btree_page->type_specific_data.siblings.next_leaf_pointer == 1)) {
+        && (btree_page->type_specific_data.siblings.previous_leaf_pointer == SUPERBLOCK_PAGE_NUM
+        || btree_page->type_specific_data.siblings.next_leaf_pointer == SUPERBLOCK_PAGE_NUM)) {
         return BTREE_CORRUPT_PAGE;
     }
 
@@ -133,7 +130,7 @@ BTreeStatus btree_page_validate(Pager *pager, BTreePage *btree_page, BTreeIndexS
             uint32_t child_pointer = get_cell_child_pointer(btree_page->data, cell.offset);
 
             if (child_pointer >= pager->num_pages 
-            || child_pointer == 0 || child_pointer == 1) {
+                || child_pointer == SUPERBLOCK_PAGE_NUM) {
                 return BTREE_CORRUPT_PAGE;
             }
         }
@@ -511,7 +508,7 @@ BTreeStatus btree_find_leftmost_page(BTree *btree, BTreeIndexSpec *index, Page *
         uint32_t child_page_num = get_cell_child_pointer(btree_page.data, cell_offset);
 
         // Validate page number
-        if (child_page_num <= SYSTEM_CATALOG_PAGE_NUM ||
+        if (child_page_num == SUPERBLOCK_PAGE_NUM ||
             child_page_num >= btree->pager->num_pages) {
             return BTREE_CORRUPT_PAGE;
         }
@@ -680,13 +677,11 @@ BTreeStatus btree_transfer_cells(BTreePage *src, uint16_t src_idx, BTreePage *de
     set_cell_pointer(dest->data, dest_idx, make_cell_pointer(dest->free_space_offset, src_cell.cell_size));
     
     if (!serialize_cell_contents(dest->data + dest->free_space_offset, dest, &src_cell, index)) {
+        btree_cell_contents_free(&src_cell, index);
         return BTREE_ERROR;
     }
 
-    value_free_array(src_cell.keys, index->index_key->num_columns);
-    if (src->type == BTREE_LEAF_NODE) {
-        value_free_array(src_cell.BTreePayload.row->values, index->index_key->num_columns);
-    }
+    btree_cell_contents_free(&src_cell, index);
     return BTREE_SUCCESS;
 }
 
@@ -850,7 +845,7 @@ bool btree_collection_contains(const BTreePageCollection *visited_pages, uint32_
 // Helper that recursively traverses internal nodes, and backtracking at leaf nodes
 // Create temporary index spec if this is called in index.c or similar files. 
 BTreeStatus btree_traverse_page_recursive(BTree *btree, uint32_t page_num, BTreePageCollection *visited_pages) {
-    if (!btree || !btree->pager || btree->pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+    if (!btree || !btree->pager || !btree->pager->num_pages) {
         printf("btree_traverse_page_recursive: Invalid Pager.\n");
         return BTREE_INVALID_ARGUMENTS;
     }
@@ -860,7 +855,7 @@ BTreeStatus btree_traverse_page_recursive(BTree *btree, uint32_t page_num, BTree
         return BTREE_INVALID_ARGUMENTS;
     }
 
-    if (page_num <= SYSTEM_CATALOG_PAGE_NUM ||
+    if (page_num == SUPERBLOCK_PAGE_NUM ||
         page_num >= btree->pager->num_pages ||
         page_num >= MAX_PAGES) {
         printf("btree_traverse_page_recursive: Invalid root page number.\n");
@@ -1026,7 +1021,7 @@ void insertion_result_reset(BTreeInsertionResult *insertion_res) {
 }
 
 /* Reset deletion result. */
-void deletion_result_reset(BTreeDeletionResult *deletion_res) {
+void deletion_result_reset(BTreeDeletionResult *deletion_res, BTreeIndexSpec *spec) {
     if (!deletion_res) {
         return;
     }
@@ -1035,20 +1030,11 @@ void deletion_result_reset(BTreeDeletionResult *deletion_res) {
     deletion_res->underflow = false;
     deletion_res->page_num = UINT32_MAX;
     deletion_res->first_key_changed = false;
-
-    if (deletion_res->first_cell.keys) {
-        value_free_array(deletion_res->first_cell.keys, deletion_res->first_cell.num_keys);
-        deletion_res->first_cell.keys = NULL;
-    }
-
-    if (deletion_res->first_cell.BTreePayload.row) {
-        row_free(deletion_res->first_cell.BTreePayload.row);
-        deletion_res->first_cell.BTreePayload.row = NULL;
-    }
-    
     deletion_res->first_cell.num_keys = 0;
     deletion_res->first_cell.key_size = 0;
     deletion_res->first_cell.cell_size = 0;
+
+    btree_cell_contents_free(&(deletion_res->first_cell), spec);
 }
 
 /* Reset merge result metadata. */
@@ -1171,7 +1157,7 @@ BTreeStatus prepare_propagated_separator_cell(BTreePage *insertion_page, BTreeCe
     uint32_t pending_right_page, BTreeIndexSpec *index) {
     if (!insertion_page || !insertion_page->page || !insertion_page->data
         || !cell_contents || !index
-        || pending_left_page <= SYSTEM_CATALOG_PAGE_NUM || pending_right_page <= SYSTEM_CATALOG_PAGE_NUM
+        || pending_left_page == SUPERBLOCK_PAGE_NUM || pending_right_page == SUPERBLOCK_PAGE_NUM
         || pending_left_page >= MAX_PAGES || pending_right_page >= MAX_PAGES) {
         return BTREE_INVALID_ARGUMENTS;
     }
@@ -1297,10 +1283,7 @@ BTreeStatus btree_node_can_lend(BTreePage *lender, uint32_t cell_pointer_index, 
 
     status = btree_check_underflow(lender, used_space);
 
-    value_free_array(cell_to_be_lended.keys, cell_to_be_lended.num_keys);
-    if (cell_to_be_lended.type == BTREE_LEAF_NODE) {
-        row_free(cell_to_be_lended.BTreePayload.row);
-    }
+    btree_cell_contents_free(&cell_to_be_lended, index);
     return status;
 }
 
@@ -1327,15 +1310,15 @@ BTreeStatus btree_replace_cell(Pager *pager, BTreePage *btree_page, uint32_t cel
 
     status = btree_page_has_enough_space(&temp, replacement->cell_size);
     if (status != BTREE_SUCCESS && status != BTREE_NEEDS_SPLIT) {
-        btree_cell_contents_free(&to_be_deleted);
+        btree_cell_contents_free(&to_be_deleted, index);
         return status;
     }
 
     if (status == BTREE_NEEDS_SPLIT) {
-        btree_cell_contents_free(&to_be_deleted);
+        btree_cell_contents_free(&to_be_deleted, index);
         return BTREE_ERROR;
     }
-    btree_cell_contents_free(&to_be_deleted);
+    btree_cell_contents_free(&to_be_deleted, index);
 
     status = btree_remove_cell(btree_page, cell_index);
     if (status != BTREE_SUCCESS) {
@@ -1503,8 +1486,8 @@ BTreeStatus btree_search_entries_append(BTreeSearchEntries *result, BTreeEntry *
     return BTREE_SUCCESS;
 }
 
-void btree_cell_contents_free(BTreeCellContents *cell) {
-    if (!cell) {
+void btree_cell_contents_free(BTreeCellContents *cell, BTreeIndexSpec *spec) {
+    if (!cell || !spec) {
         return;
     }
 
@@ -1513,32 +1496,48 @@ void btree_cell_contents_free(BTreeCellContents *cell) {
         cell->keys = NULL;
     }
 
-    if (cell->type == BTREE_LEAF_NODE && cell->BTreePayload.row) {
-        row_free(cell->BTreePayload.row);
-        cell->BTreePayload.row = NULL;
+    if (cell->type == BTREE_LEAF_NODE) {
+        switch (spec->payload_type) {
+            case BTREE_ROW_PAYLOAD:
+                if (cell->BTreePayload.row) {
+                    row_free(cell->BTreePayload.row);
+                    cell->BTreePayload.row = NULL;
+                }
+
+                break;
+            case BTREE_CATALOG_PAYLOAD:
+                if (cell->BTreePayload.catalog) {
+                    free(cell->BTreePayload.catalog);
+                    cell->BTreePayload.catalog = NULL;
+                }
+
+                break;
+            default:
+                fprintf(stderr, "btree_cell_contents_free: BTree Payload type does not match.\n");
+                return;
+        }
     }
 }
 
-void btree_entry_free(BTreeEntry *entry) {
-    if (!entry) {
+void btree_entry_free(BTreeEntry *entry, BTreeIndexSpec *spec) {
+    if (!entry || !spec) {
         return;
     }
 
-    btree_cell_contents_free(&entry->cell);
+    btree_cell_contents_free(&entry->cell, spec);
 
     entry->page_num = UINT32_MAX;
     entry->cell_index = UINT16_MAX;
 }
 
-
-void btree_search_entries_free(BTreeSearchEntries *entries) {
-    if (!entries) {
+void btree_search_entries_free(BTreeSearchEntries *entries, BTreeIndexSpec *spec) {
+    if (!entries || !spec) {
         return;
     }
 
     // Free the allocate Key and Rows for each cell contents entry in the ragne result
     for (uint32_t i = 0; i < entries->count; i++) {
-        btree_entry_free(&entries->entries[i]);
+        btree_entry_free(&entries->entries[i], spec);
     }
 
     free(entries->entries);
@@ -1552,7 +1551,7 @@ void btree_search_entries_free(BTreeSearchEntries *entries) {
 /* ---------- BTreeIndexSpec Helpers ---------- */
 
 // Initialize BTreeIndexSpec fields
-bool btree_index_spec_init(const Index *index, Schema *schema, BTreeIndexSpec *spec) {
+bool btree_index_spec_init(const Index *index, Schema *schema, BTreePayloadType payload_type, BTreeIndexSpec *spec) {
     // Validate inputs
     if (!index || !index->key ||
         !index->key->column_index_array ||
@@ -1568,6 +1567,7 @@ bool btree_index_spec_init(const Index *index, Schema *schema, BTreeIndexSpec *s
 
     spec->schema = schema;
     spec->index_key = index->key;
+    spec->payload_type = payload_type;
     
     spec->column_types = calloc(index->key->num_columns, sizeof(DataType));
     if (!spec->column_types) {
@@ -1638,7 +1638,6 @@ void index_btree_spec_free(BTreeIndexSpec *spec) {
     free(spec->column_types);
     spec->column_types = NULL;
 }
-
 
 /* Get cell contents from a Row */
 BTreeStatus get_cell_contents_from_row(BTreeCellContents *cell_contents, BTreeIndexSpec *spec, Row *row) {
@@ -1746,7 +1745,7 @@ BTreeStatus btree_locate_target_row(BTree *btree, BTreeSearchKey *search_key, co
     // Validate inputs
     if (!btree ||
         !btree->pager ||
-        btree->pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+        !btree->pager->num_pages) {
         return BTREE_INVALID_ARGUMENTS;
     }
 
@@ -1783,24 +1782,24 @@ BTreeStatus btree_locate_target_row(BTree *btree, BTreeSearchKey *search_key, co
     if (index->is_unique) {
         BTreeSearchResult search_result = {0};
 
-        status = btree_find_exact_key(btree, search_key, &search_result, &matches);
+        status = btree_find_exact_key(btree, search_key, &search_result, &matches, index);
         
         if (status != BTREE_SUCCESS) {
-            btree_search_entries_free(&matches);
+            btree_search_entries_free(&matches, index);
             return status;
         }
 
         if (matches.count != 1) {
             BTreeStatus return_status = matches.count == 0 ? BTREE_NOT_FOUND : BTREE_CORRUPT_PAGE;
 
-            btree_search_entries_free(&matches);
+            btree_search_entries_free(&matches, index);
             return return_status;
         }
 
         *page_num = matches.entries[0].page_num;
         *cell_index = matches.entries[0].cell_index;
 
-        btree_search_entries_free(&matches);
+        btree_search_entries_free(&matches, index);
         return BTREE_SUCCESS;
     }
 
@@ -1808,7 +1807,7 @@ BTreeStatus btree_locate_target_row(BTree *btree, BTreeSearchKey *search_key, co
     status = btree_find_range_keys(btree, index, search_key, true, search_key, true, &matches);
 
     if (status != BTREE_SUCCESS) {
-        btree_search_entries_free(&matches);
+        btree_search_entries_free(&matches, index);
         return status;
     }
 
@@ -1816,7 +1815,7 @@ BTreeStatus btree_locate_target_row(BTree *btree, BTreeSearchKey *search_key, co
         Row *row = matches.entries[i].cell.BTreePayload.row;
 
         if (!row) {
-            btree_search_entries_free(&matches);
+            btree_search_entries_free(&matches, index);
             return BTREE_CORRUPT_PAGE;
         }
 
@@ -1826,12 +1825,12 @@ BTreeStatus btree_locate_target_row(BTree *btree, BTreeSearchKey *search_key, co
             *page_num = matches.entries[i].page_num;
             *cell_index = matches.entries[i].cell_index;
 
-            btree_search_entries_free(&matches);
+            btree_search_entries_free(&matches, index);
             return BTREE_SUCCESS;
         }
     }
 
-    btree_search_entries_free(&matches);
+    btree_search_entries_free(&matches, index);
     return BTREE_NOT_FOUND;
 
 }
@@ -1841,7 +1840,7 @@ BTreeStatus btree_node_delete_at(Pager *pager, BTreePage *btree_page, uint16_t c
     BTreeDeletionResult *result, BTreeIndexSpec *index) {
     
     // Validate inputs
-    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+    if (!pager || !pager->num_pages) {
         return BTREE_INVALID_ARGUMENTS;
     }
 
@@ -1864,7 +1863,7 @@ BTreeStatus btree_node_delete_at(Pager *pager, BTreePage *btree_page, uint16_t c
         return BTREE_INVALID_ARGUMENTS; 
     }
 
-    deletion_result_reset(result);
+    deletion_result_reset(result, index);
     result->page_num = btree_page->page->page_num;
 
     // Extract cell contents of target cell
@@ -1873,7 +1872,7 @@ BTreeStatus btree_node_delete_at(Pager *pager, BTreePage *btree_page, uint16_t c
     BTreeStatus status = get_cell_contents(btree_page, cell_index, &cell_to_be_removed, index);
 
     if (status != BTREE_SUCCESS) {
-        btree_cell_contents_free(&cell_to_be_removed);
+        btree_cell_contents_free(&cell_to_be_removed, index);
         return status;
     }
 
@@ -1884,7 +1883,7 @@ BTreeStatus btree_node_delete_at(Pager *pager, BTreePage *btree_page, uint16_t c
 
     status = btree_check_underflow(btree_page, used_space);
 
-    btree_cell_contents_free(&cell_to_be_removed);
+    btree_cell_contents_free(&cell_to_be_removed, index);
 
     if (status == BTREE_NODE_UNDERFLOW) {
         result->underflow = true;
@@ -1912,7 +1911,7 @@ BTreeStatus btree_node_delete_at(Pager *pager, BTreePage *btree_page, uint16_t c
         status = get_cell_contents(btree_page, 0, &new_first_cell, index);
 
         if (status != BTREE_SUCCESS) {
-            btree_cell_contents_free(&new_first_cell);
+            btree_cell_contents_free(&new_first_cell, index);
             return status;
         }
 

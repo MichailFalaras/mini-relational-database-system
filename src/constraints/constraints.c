@@ -7,6 +7,10 @@
 
 /* Allocate memory for Constraint struct. */
 Constraint *constraint_alloc(char *constraint_name, ConstraintType type) {
+    if (!constraint_name || type > DEFAULT) {
+        return NULL;
+    }
+
     Constraint *constraint = (Constraint *) malloc(sizeof(Constraint));
     if (constraint == NULL) {
         perror("constraint_create");
@@ -23,8 +27,7 @@ Constraint *constraint_alloc(char *constraint_name, ConstraintType type) {
 
 /* Deep-copy for Constraint structs. */
 Constraint *constraint_copy(Constraint *source) {
-
-    if (source == NULL) {
+    if (!source) {
         return NULL;
     }
 
@@ -36,7 +39,7 @@ Constraint *constraint_copy(Constraint *source) {
             break;
         case FOREIGN_KEY:
             copy = constraint_create_foreign_keys(source->constraint_name, source->constraint_data.foreign_key.foreign_key_columns,
-                    source->constraint_data.foreign_key.amount_columns, source->constraint_data.foreign_key.referenced_table,
+                    source->constraint_data.foreign_key.amount_columns, source->constraint_data.foreign_key.referenced_table_name,
                     source->constraint_data.foreign_key.referenced_columns, source->constraint_data.foreign_key.amount_referenced_columns);
             break;
         case UNIQUE:
@@ -70,7 +73,8 @@ Constraint *constraint_copy(Constraint *source) {
 Constraint *constraint_create_primary_key(char *constraint_name, uint32_t *column_refs,
     uint32_t amount_columns) {
     
-    if (column_refs == NULL) {
+    if (!constraint_name || constraint_name[0] == '\0'
+        || !column_refs || !amount_columns) {
         return NULL;
     }
 
@@ -84,10 +88,17 @@ Constraint *constraint_create_primary_key(char *constraint_name, uint32_t *colum
 }
 
 Constraint *constraint_create_foreign_keys(char *constraint_name, uint32_t *foreign_key_columns,
-    uint32_t amount_foreign_keys, uint32_t referenced_table, uint32_t *referenced_columns,
+    uint32_t amount_foreign_keys, char *referenced_table_name, uint32_t *referenced_columns,
     uint32_t amount_referenced_columns) {
     
-    if (foreign_key_columns == NULL || referenced_columns == NULL) {
+    if (!constraint_name || constraint_name[0] == '\0'
+        || !foreign_key_columns || !referenced_columns
+        || !referenced_table_name || referenced_table_name[0] == '\0'
+        || !amount_foreign_keys || !amount_referenced_columns) {
+        return NULL;
+    }
+
+    if (strlen(referenced_table_name)+1 > 64) {
         return NULL;
     }
 
@@ -96,7 +107,8 @@ Constraint *constraint_create_foreign_keys(char *constraint_name, uint32_t *fore
     constraint->constraint_data.foreign_key.foreign_key_columns = copy_uint32_array(foreign_key_columns,
                                                                                     amount_foreign_keys);
     constraint->constraint_data.foreign_key.amount_columns = amount_foreign_keys;
-    constraint->constraint_data.foreign_key.referenced_table = referenced_table;
+    strncpy(constraint->constraint_data.foreign_key.referenced_table_name, referenced_table_name, 64);
+    constraint->constraint_data.foreign_key.referenced_table_name[63] = '\0'; 
     constraint->constraint_data.foreign_key.referenced_columns = copy_uint32_array(referenced_columns,
                                                                                     amount_referenced_columns);
     constraint->constraint_data.foreign_key.amount_referenced_columns = amount_referenced_columns;
@@ -107,7 +119,8 @@ Constraint *constraint_create_foreign_keys(char *constraint_name, uint32_t *fore
 Constraint *constraint_create_unique(char *constraint_name, uint32_t *column_refs,
      uint32_t amount_columns) {
     
-    if (column_refs == NULL) {
+    if (!constraint_name || constraint_name[0] == '\0'
+        || !column_refs || !amount_columns) {
         return NULL;
     }
 
@@ -122,7 +135,8 @@ Constraint *constraint_create_unique(char *constraint_name, uint32_t *column_ref
 Constraint *constraint_create_check(char *constraint_name, ExpressionNode *constraint_expr,
     uint32_t *column_refs, uint32_t amount_columns) {
 
-    if (constraint_expr == NULL) {
+    if (!constraint_name || constraint_name[0] == '\0'
+        || !constraint_expr || !column_refs || !amount_columns) {
         return NULL;
     }
 
@@ -135,9 +149,11 @@ Constraint *constraint_create_check(char *constraint_name, ExpressionNode *const
 }
 
 Constraint *constraint_create_not_null(char *constraint_name, uint32_t column_ref) {
+    if (!constraint_name || constraint_name[0] == '\0') {
+        return NULL;
+    }
 
     Constraint *constraint = constraint_alloc(constraint_name, NOT_NULL);
-
     constraint->constraint_data.not_null.column_ref = column_ref;
 
     return constraint;
@@ -145,6 +161,9 @@ Constraint *constraint_create_not_null(char *constraint_name, uint32_t column_re
 
 Constraint *constraint_create_default(char *constraint_name, uint32_t column_ref,
     ExpressionNode *default_expr) {
+    if (!constraint_name || constraint_name[0] == '\0' || !default_expr) {
+        return NULL;
+    }
     
     Constraint *constraint = constraint_alloc(constraint_name, DEFAULT);
 
@@ -156,8 +175,7 @@ Constraint *constraint_create_default(char *constraint_name, uint32_t column_ref
 
 /* Semantic Binder & Query Planner helper functions. */
 bool constraint_has_column(const Constraint *constraint, uint32_t column_index) {
-
-    if (constraint == NULL) {
+    if (!constraint) {
         return false;
     }
 
@@ -214,18 +232,19 @@ bool constraint_has_column(const Constraint *constraint, uint32_t column_index) 
 }
 
 /* For Foreign-Key only. */
-bool constraint_references_table(const Constraint *constraint, uint32_t table_index) {
-    if (constraint == NULL || constraint->type != FOREIGN_KEY) {
+bool constraint_references_table(const Constraint *constraint, const char *table_name) {
+    if (!constraint || constraint->type != FOREIGN_KEY
+        || !table_name || table_name[0] == '\0') {
         return false;
     }
 
-    return constraint->constraint_data.foreign_key.referenced_table == table_index;
+    return !strcasecmp(constraint->constraint_data.foreign_key.referenced_table_name, table_name);
 }
 
 /* For all types of constraints,
  except FOREIGN KEY that can either reference or use a Column */
 bool constraint_references_column(const Constraint *constraint, uint32_t column_ref) {
-    if (constraint == NULL) {
+    if (!constraint) {
         return false;
     }
 
@@ -321,7 +340,7 @@ bool foreign_key_uses_column(const Constraint *constraint, uint32_t column_ref) 
 }  
 
 bool constraint_validate_definition(const Constraint *constraint) {
-    if (constraint == NULL) {
+    if (!constraint) {
         return false;
     }
 
@@ -342,6 +361,10 @@ bool constraint_validate_definition(const Constraint *constraint) {
             }
 
             if (constraint->constraint_data.foreign_key.referenced_columns == NULL) {
+                return false;
+            }
+
+            if (constraint->constraint_data.foreign_key.referenced_table_name[0] == '\0') {
                 return false;
             }
 

@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "../include/index.h"
+#include "../include/page.h"
 
 #define ASSERT(condition) { \
     if (!(condition)) { \
@@ -137,7 +138,7 @@ static int test_index_metadata_create_invalid_pages() {
     ASSERT(!index_metadata_create("New Index", PRIMARY_INDEX, key, SUPERBLOCK_PAGE_NUM, true));
 
     // Page 1: system catalog.
-    ASSERT(!index_metadata_create("New Index", SECONDARY_INDEX, key, SYSTEM_CATALOG_PAGE_NUM, false));
+    ASSERT(!index_metadata_create("New Index", SECONDARY_INDEX, key, SUPERBLOCK_PAGE_NUM, false));
 
     index_key_free(key);
     return 0;

@@ -79,7 +79,7 @@ Index *index_metadata_create(const char *index_name, IndexType type, const Index
         return NULL;
     }
 
-    if (root_page_num <= SYSTEM_CATALOG_PAGE_NUM) {
+    if (root_page_num == SUPERBLOCK_PAGE_NUM) {
         printf("index_metaadata_create: Invalid root page number.\n");
         return NULL;
     }
@@ -235,7 +235,7 @@ Index *index_create(const char *index_name, IndexType type, const IndexKey *key,
         return NULL;
     }
 
-    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+    if (!pager || !pager->num_pages) {
         printf("index_create: Invalid or uninitialized pager.\n");
         return NULL;
     }
@@ -320,12 +320,12 @@ bool index_truncate(Index *index, Pager *pager) {
         return false;
     }
 
-    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+    if (!pager || !pager->num_pages) {
         printf("index_truncate: Invalid or uninitialized pager.\n");
         return false;
     }
 
-    if (index->root_page_num <= SYSTEM_CATALOG_PAGE_NUM ||
+    if (index->root_page_num == SUPERBLOCK_PAGE_NUM ||
         index->root_page_num >= pager->num_pages ||
         index->root_page_num >= MAX_PAGES) {
         printf("index_truncate: Invalid root page number.\n");
@@ -425,12 +425,12 @@ bool index_drop(Index *index, Pager *pager) {
         return false;
     }
 
-    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+    if (!pager || !pager->num_pages) {
         printf("index_drop: Invalid or uninitialized pager.\n");
         return false;
     }
 
-    if (index->root_page_num <= SYSTEM_CATALOG_PAGE_NUM ||
+    if (index->root_page_num == SUPERBLOCK_PAGE_NUM ||
         index->root_page_num >= pager->num_pages ||
         index->root_page_num >= MAX_PAGES) {
         printf("index_drop: Invalid root page number.\n");
@@ -491,12 +491,11 @@ IndexLookupStatus index_find_exact(const Index *index, Pager *pager, Schema *sch
         return INDEX_LOOKUP_INVALID_ARGUMENTS;
     }
 
-    if (!pager ||
-        pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+    if (!pager || !pager->num_pages) {
         return INDEX_LOOKUP_INVALID_ARGUMENTS;
     }
 
-    if (index->root_page_num <= SYSTEM_CATALOG_PAGE_NUM ||
+    if (index->root_page_num == SUPERBLOCK_PAGE_NUM ||
         index->root_page_num >= pager->num_pages ||
         index->root_page_num >= MAX_PAGES) {
         return INDEX_LOOKUP_INVALID_ARGUMENTS;
@@ -526,13 +525,17 @@ IndexLookupStatus index_find_exact(const Index *index, Pager *pager, Schema *sch
     btree.root_page_num = index->root_page_num;
 
     BTreeIndexSpec spec = {0};
-    if (!btree_index_spec_init(index, schema, &spec)) {
+    if (!btree_index_spec_init(index, schema, BTREE_ROW_PAYLOAD, &spec)) {
         return INDEX_LOOKUP_ERROR;
     }
 
     BTreeSearchKey search_key = {0};
     search_key.index = &spec;
     search_key.target_key = values_to_serialized_key(key_values, num_columns, &spec);
+    if (!search_key.target_key) {
+        index_btree_spec_free(&spec);
+        return INDEX_LOOKUP_ERROR;
+    }
     search_key.num_target_keys = num_columns;
 
     BTreeSearchEntries btree_result = {0};
@@ -544,50 +547,53 @@ IndexLookupStatus index_find_exact(const Index *index, Pager *pager, Schema *sch
     // Search the inclusive range: key <= entry_key <= key
     if (index->is_unique) {
         BTreeSearchResult search_result = {0};
-        status = btree_find_exact_key(&btree, &search_key, &search_result, &btree_result);
+        status = btree_find_exact_key(&btree, &search_key, &search_result, &btree_result, &spec);
     }
     else {
         status = btree_find_range_keys(&btree, &spec, &search_key, true, &search_key, true, &btree_result);
     }
 
+    free(search_key.target_key);
+    search_key.target_key = NULL;
+    
     // Evaluating search completion status code
     switch (status) {
         case BTREE_SUCCESS:
             break;
 
         case BTREE_NOT_FOUND:
-            btree_search_entries_free(&btree_result);
+            btree_search_entries_free(&btree_result, &spec);
             index_btree_spec_free(&spec);
             return INDEX_LOOKUP_NOT_FOUND;
 
         case BTREE_INVALID_ARGUMENTS:
-            btree_search_entries_free(&btree_result);
+            btree_search_entries_free(&btree_result, &spec);
             index_btree_spec_free(&spec);
             return INDEX_LOOKUP_INVALID_ARGUMENTS;
 
         default:
-            btree_search_entries_free(&btree_result);
+            btree_search_entries_free(&btree_result, &spec);
             index_btree_spec_free(&spec);
             return INDEX_LOOKUP_ERROR;
     }
 
     // No match was found
     if (btree_result.count == 0) {
-        btree_search_entries_free(&btree_result);
+        btree_search_entries_free(&btree_result, &spec);
         index_btree_spec_free(&spec);
         return INDEX_LOOKUP_NOT_FOUND;
     }
 
     // A match is found, but a unique index cannot return more than 1 matches
     if (index->is_unique && btree_result.count != 1) {
-        btree_search_entries_free(&btree_result);
+        btree_search_entries_free(&btree_result, &spec);
         index_btree_spec_free(&spec);
         return INDEX_LOOKUP_ERROR;
     }
 
     // Initialize index result structure
     if (!index_range_result_init(result)) {
-        btree_search_entries_free(&btree_result);
+        btree_search_entries_free(&btree_result, &spec);
         index_btree_spec_free(&spec);
         return INDEX_LOOKUP_ERROR;
     }
@@ -598,14 +604,14 @@ IndexLookupStatus index_find_exact(const Index *index, Pager *pager, Schema *sch
 
         if (!row) {
             index_range_result_free(result);
-            btree_search_entries_free(&btree_result);
+            btree_search_entries_free(&btree_result, &spec);
             index_btree_spec_free(&spec);
             return INDEX_LOOKUP_ERROR;
         }
 
         if (!index_range_result_append(result, row)) {
             index_range_result_free(result);
-            btree_search_entries_free(&btree_result);
+            btree_search_entries_free(&btree_result, &spec);
             index_btree_spec_free(&spec);
             return INDEX_LOOKUP_ERROR;
         }
@@ -613,9 +619,8 @@ IndexLookupStatus index_find_exact(const Index *index, Pager *pager, Schema *sch
         btree_result.entries[i].cell.BTreePayload.row = NULL;
     }
 
-    btree_search_entries_free(&btree_result);
+    btree_search_entries_free(&btree_result, &spec);
     index_btree_spec_free(&spec);
-
     return INDEX_LOOKUP_SUCCESS;
 }
 
@@ -631,11 +636,11 @@ IndexLookupStatus index_find_prefix(const Index *index, Pager *pager, Schema *sc
         return INDEX_LOOKUP_INVALID_ARGUMENTS;
     }
 
-    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+    if (!pager || !pager->num_pages) {
         return INDEX_LOOKUP_INVALID_ARGUMENTS;
     }
 
-    if (index->root_page_num <= SYSTEM_CATALOG_PAGE_NUM ||
+    if (index->root_page_num == SUPERBLOCK_PAGE_NUM ||
         index->root_page_num >= pager->num_pages ||
         index->root_page_num >= MAX_PAGES) {
         return INDEX_LOOKUP_INVALID_ARGUMENTS;
@@ -659,49 +664,56 @@ IndexLookupStatus index_find_prefix(const Index *index, Pager *pager, Schema *sc
     btree.root_page_num = index->root_page_num;
 
     BTreeIndexSpec spec = {0};
-    if (!btree_index_spec_init(index, schema, &spec)) {
+    if (!btree_index_spec_init(index, schema, BTREE_ROW_PAYLOAD, &spec)) {
         return INDEX_LOOKUP_ERROR;
     }
 
     BTreeSearchKey prefix_key = {0};
     prefix_key.index = &spec;
     prefix_key.target_key = values_to_serialized_key(prefix_key_values, prefix_num_columns, &spec);
+    if (!prefix_key.target_key) {
+        index_btree_spec_free(&spec);
+        return INDEX_LOOKUP_ERROR;
+    }
     prefix_key.num_target_keys = prefix_num_columns;
 
     BTreeSearchEntries btree_result = {0};
 
     BTreeStatus status = btree_find_prefix_keys(&btree, &spec, &prefix_key, &btree_result);
 
+    free(prefix_key.target_key);
+    prefix_key.target_key = NULL;
+
     switch (status) {
         case BTREE_SUCCESS:
             break;
 
         case BTREE_NOT_FOUND:
-            btree_search_entries_free(&btree_result);
+            btree_search_entries_free(&btree_result, &spec);
             index_btree_spec_free(&spec);
             return INDEX_LOOKUP_NOT_FOUND;
 
         case BTREE_INVALID_ARGUMENTS:
-            btree_search_entries_free(&btree_result);
+            btree_search_entries_free(&btree_result, &spec);
             index_btree_spec_free(&spec);
             return INDEX_LOOKUP_INVALID_ARGUMENTS;
 
         default:
-            btree_search_entries_free(&btree_result);
+            btree_search_entries_free(&btree_result, &spec);
             index_btree_spec_free(&spec);
             return INDEX_LOOKUP_ERROR;
     }
 
     // No matches were found
     if (btree_result.count == 0) {
-        btree_search_entries_free(&btree_result);
+        btree_search_entries_free(&btree_result, &spec);
         index_btree_spec_free(&spec);
         return INDEX_LOOKUP_NOT_FOUND;
     }
 
     // Initialize the index result's structure
     if (!index_range_result_init(result)) {
-        btree_search_entries_free(&btree_result);
+        btree_search_entries_free(&btree_result, &spec);
         index_btree_spec_free(&spec);
         return INDEX_LOOKUP_ERROR;
     }
@@ -712,13 +724,13 @@ IndexLookupStatus index_find_prefix(const Index *index, Pager *pager, Schema *sc
 
         if (!row) {
             index_range_result_free(result);
-            btree_search_entries_free(&btree_result);
+            btree_search_entries_free(&btree_result, &spec);
             index_btree_spec_free(&spec);
             return INDEX_LOOKUP_ERROR;
         }
 
         if (!index_range_result_append(result, row)) {
-            btree_search_entries_free(&btree_result);
+            btree_search_entries_free(&btree_result, &spec);
             index_btree_spec_free(&spec);
 
             // If append fails, we also need to free the already transferred rows
@@ -732,9 +744,8 @@ IndexLookupStatus index_find_prefix(const Index *index, Pager *pager, Schema *sc
         btree_result.entries[i].cell.BTreePayload.row = NULL;
     }
 
-    btree_search_entries_free(&btree_result);
+    btree_search_entries_free(&btree_result, &spec);
     index_btree_spec_free(&spec);
-
     return INDEX_LOOKUP_SUCCESS;
 }
 
@@ -752,11 +763,11 @@ IndexLookupStatus index_find_range(const Index *index, Pager *pager, Schema *sch
         return INDEX_LOOKUP_INVALID_ARGUMENTS;
     }
 
-    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+    if (!pager || !pager->num_pages) {
         return INDEX_LOOKUP_INVALID_ARGUMENTS;
     }
 
-    if (index->root_page_num <= SYSTEM_CATALOG_PAGE_NUM ||
+    if (index->root_page_num == SUPERBLOCK_PAGE_NUM ||
         index->root_page_num >= pager->num_pages ||
         index->root_page_num >= MAX_PAGES) {
         return INDEX_LOOKUP_INVALID_ARGUMENTS;
@@ -812,7 +823,7 @@ IndexLookupStatus index_find_range(const Index *index, Pager *pager, Schema *sch
     btree.root_page_num = index->root_page_num;
 
     BTreeIndexSpec spec = {0};
-    if (!btree_index_spec_init(index, schema, &spec)) {
+    if (!btree_index_spec_init(index, schema, BTREE_ROW_PAYLOAD, &spec)) {
         return INDEX_LOOKUP_ERROR;
     }
 
@@ -822,12 +833,24 @@ IndexLookupStatus index_find_range(const Index *index, Pager *pager, Schema *sch
     if (has_start) {
         start_search_key.index = &spec;
         start_search_key.target_key = values_to_serialized_key(start_key_values, start_num_columns, &spec);
+        if (!start_search_key.target_key) {
+            index_btree_spec_free(&spec);
+            return INDEX_LOOKUP_ERROR;
+        }
+
         start_search_key.num_target_keys = start_num_columns;
     }
     
     if (has_end) {
         end_search_key.index = &spec;
         end_search_key.target_key = values_to_serialized_key(end_key_values, end_num_columns, &spec);
+        if (!end_search_key.target_key) {
+            free(start_search_key.target_key);
+            start_search_key.target_key = NULL;
+            index_btree_spec_free(&spec);
+            return INDEX_LOOKUP_ERROR;
+        }
+
         end_search_key.num_target_keys = end_num_columns;
     }
 
@@ -839,29 +862,34 @@ IndexLookupStatus index_find_range(const Index *index, Pager *pager, Schema *sch
     BTreeStatus status = btree_find_range_keys(&btree, &spec, 
         start_search_ptr, include_start, end_search_ptr, include_end, &btree_result);
 
+    free(start_search_key.target_key);
+    start_search_key.target_key = NULL;
+    free(end_search_key.target_key);
+    end_search_key.target_key = NULL;
+
     switch (status) {
         case BTREE_SUCCESS:
             break;
 
         case BTREE_NOT_FOUND:
+            btree_search_entries_free(&btree_result, &spec);
             index_btree_spec_free(&spec);
-            btree_search_entries_free(&btree_result);
             return INDEX_LOOKUP_NOT_FOUND;
 
         case BTREE_INVALID_ARGUMENTS:
+            btree_search_entries_free(&btree_result, &spec);
             index_btree_spec_free(&spec);
-            btree_search_entries_free(&btree_result);
             return INDEX_LOOKUP_INVALID_ARGUMENTS;
 
         default:
+            btree_search_entries_free(&btree_result, &spec);
             index_btree_spec_free(&spec);
-            btree_search_entries_free(&btree_result);
             return INDEX_LOOKUP_ERROR;
     }
 
     // An exact non-unique range lookup that found no matching rows should return a success status code
     if (btree_result.count == 0) {
-        btree_search_entries_free(&btree_result);
+        btree_search_entries_free(&btree_result, &spec);
         index_btree_spec_free(&spec);
 
         // result was already initialized to {NULL, 0, 0}
@@ -870,8 +898,8 @@ IndexLookupStatus index_find_range(const Index *index, Pager *pager, Schema *sch
 
     // Allocate the range result entries 
     if (!index_range_result_init(result)) {
+        btree_search_entries_free(&btree_result, &spec);
         index_btree_spec_free(&spec);
-        btree_search_entries_free(&btree_result);
 
         return INDEX_LOOKUP_ERROR;
     }
@@ -882,15 +910,15 @@ IndexLookupStatus index_find_range(const Index *index, Pager *pager, Schema *sch
 
         if (!row) {
             index_range_result_free(result);
-            btree_search_entries_free(&btree_result);
+            btree_search_entries_free(&btree_result, &spec);
             index_btree_spec_free(&spec);
 
             return INDEX_LOOKUP_ERROR;
         }
 
         if (!index_range_result_append(result, row)) {
+            btree_search_entries_free(&btree_result, &spec);
             index_btree_spec_free(&spec);
-            btree_search_entries_free(&btree_result);
 
             // If append fails, we also need to free the already transferred rows
             index_range_result_free(result);
@@ -902,9 +930,8 @@ IndexLookupStatus index_find_range(const Index *index, Pager *pager, Schema *sch
         btree_result.entries[i].cell.BTreePayload.row = NULL;
     }
 
-    index_btree_spec_free(&spec);
-    btree_search_entries_free(&btree_result);
-    
+    btree_search_entries_free(&btree_result, &spec);
+    index_btree_spec_free(&spec); 
     return INDEX_LOOKUP_SUCCESS;
 }
 
@@ -945,11 +972,11 @@ IndexMutationStatus index_insert_entry(Index *index, Pager *pager, Schema *schem
         return INDEX_MUTATION_INVALID_ARGUMENTS;
     }
 
-    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+    if (!pager || !pager->num_pages) {
         return INDEX_MUTATION_INVALID_ARGUMENTS;
     }
 
-    if (index->root_page_num <= SYSTEM_CATALOG_PAGE_NUM ||
+    if (index->root_page_num == SUPERBLOCK_PAGE_NUM ||
         index->root_page_num >= pager->num_pages ||
         index->root_page_num >= MAX_PAGES) {
         return INDEX_MUTATION_INVALID_ARGUMENTS;
@@ -965,7 +992,7 @@ IndexMutationStatus index_insert_entry(Index *index, Pager *pager, Schema *schem
     btree.root_page_num = index->root_page_num;
 
     BTreeIndexSpec spec = {0};
-    if (!btree_index_spec_init(index, schema, &spec)) {
+    if (!btree_index_spec_init(index, schema, BTREE_ROW_PAYLOAD, &spec)) {
         return INDEX_MUTATION_ERROR;
     }
 
@@ -1047,11 +1074,11 @@ IndexMutationStatus index_delete_entry(Index *index, Pager *pager, Schema *schem
         return INDEX_MUTATION_INVALID_ARGUMENTS;
     }
 
-    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+    if (!pager || !pager->num_pages) {
         return INDEX_MUTATION_INVALID_ARGUMENTS;
     }
 
-    if (index->root_page_num <= SYSTEM_CATALOG_PAGE_NUM ||
+    if (index->root_page_num == SUPERBLOCK_PAGE_NUM ||
         index->root_page_num >= pager->num_pages ||
         index->root_page_num >= MAX_PAGES) {
         return INDEX_MUTATION_INVALID_ARGUMENTS;
@@ -1067,7 +1094,7 @@ IndexMutationStatus index_delete_entry(Index *index, Pager *pager, Schema *schem
     btree.root_page_num = index->root_page_num;
 
     BTreeIndexSpec spec = {0};
-    if (!btree_index_spec_init(index, schema, &spec)) {
+    if (!btree_index_spec_init(index, schema, BTREE_ROW_PAYLOAD, &spec)) {
         return INDEX_MUTATION_ERROR;
     }
 
@@ -1124,6 +1151,7 @@ IndexMutationStatus index_delete_entry(Index *index, Pager *pager, Schema *schem
     target_cell.keys = NULL;
     target_cell.BTreePayload.row = NULL;
 
+    deletion_result_reset(&deletion_result, &spec);
     index_btree_spec_free(&spec);
     return mutation_status;
 }
@@ -1142,11 +1170,11 @@ IndexMutationStatus index_update_entry(Index *index, Pager *pager, Schema *schem
         return INDEX_MUTATION_INVALID_ARGUMENTS;
     }
 
-    if (!pager || pager->num_pages <= SYSTEM_CATALOG_PAGE_NUM) {
+    if (!pager || !pager->num_pages) {
         return INDEX_MUTATION_INVALID_ARGUMENTS;
     }
 
-    if (index->root_page_num <= SYSTEM_CATALOG_PAGE_NUM ||
+    if (index->root_page_num == SUPERBLOCK_PAGE_NUM ||
         index->root_page_num >= pager->num_pages ||
         index->root_page_num >= MAX_PAGES) {
         return INDEX_MUTATION_INVALID_ARGUMENTS;
@@ -1170,7 +1198,7 @@ IndexMutationStatus index_update_entry(Index *index, Pager *pager, Schema *schem
     btree.root_page_num = index->root_page_num;
 
     BTreeIndexSpec spec = {0};
-    if (!btree_index_spec_init(index, schema, &spec)) {
+    if (!btree_index_spec_init(index, schema, BTREE_ROW_PAYLOAD, &spec)) {
         return INDEX_MUTATION_ERROR;
     }
 
@@ -1326,7 +1354,7 @@ IndexMutationStatus index_update_entry(Index *index, Pager *pager, Schema *schem
         BTreeSearchResult search_result = {0};
         BTreeSearchEntries entries = {0};
 
-        status = btree_find_exact_key(&btree, &replacement_key, &search_result, &entries);
+        status = btree_find_exact_key(&btree, &replacement_key, &search_result, &entries, &spec);
         
         free(replacement_key.target_key);
         replacement_key.target_key = NULL; 
@@ -1342,7 +1370,7 @@ IndexMutationStatus index_update_entry(Index *index, Pager *pager, Schema *schem
             old_cell.BTreePayload.row = NULL;
             new_cell.BTreePayload.row = NULL;
 
-            btree_search_entries_free(&entries);
+            btree_search_entries_free(&entries, &spec);
             index_btree_spec_free(&spec);
             return mutation_status;
         }
@@ -1359,12 +1387,12 @@ IndexMutationStatus index_update_entry(Index *index, Pager *pager, Schema *schem
             old_cell.BTreePayload.row = NULL;
             new_cell.BTreePayload.row = NULL;
 
-            btree_search_entries_free(&entries);
+            btree_search_entries_free(&entries, &spec);
             index_btree_spec_free(&spec);
             return mutation_status;
         }
 
-        btree_search_entries_free(&entries);
+        btree_search_entries_free(&entries, &spec);
     }
 
     // Delete old Row
@@ -1461,6 +1489,7 @@ IndexMutationStatus index_update_entry(Index *index, Pager *pager, Schema *schem
     old_cell.BTreePayload.row = NULL;
     new_cell.BTreePayload.row = NULL;
 
+    deletion_result_reset(&deletion_result, &spec);
     index_btree_spec_free(&spec);
     return mutation_status;   
 }
