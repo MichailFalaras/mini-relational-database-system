@@ -466,3 +466,105 @@ bool constraint_validate_row(Pager *pager, const Constraint *constraint, const S
 
     return true;
 }
+
+// Check whether a Primary Key or Unique constraint is referenced
+// by any Foreign Key in the database
+bool constraint_is_referenced_by_foreign_key(const Database *db, const Table *table, 
+    const Constraint *target_constraint) {
+    
+    if (!db || !table || !table->table_schema || !target_constraint) {
+        return false;
+    }
+
+    if (db->table_count > 0 && !db->tables) {
+        return false;
+    }
+
+    // Determine the type of constraint and target columns to search for
+    uint32_t *target_columns = NULL;
+    uint32_t target_column_count = 0;
+
+    switch (target_constraint->type) {
+        case PRIMARY_KEY:
+            target_columns = target_constraint->constraint_data.primary_key.primary_key_columns;
+            target_column_count = target_constraint->constraint_data.primary_key.amount_columns;
+            break;
+
+        case UNIQUE:
+            target_columns = target_constraint->constraint_data.unique_cols.column_refs;
+            target_column_count = target_constraint->constraint_data.unique_cols.amount_columns;
+            break;
+
+        default:
+            return false;
+    }
+
+    if (!target_columns || target_column_count == 0) {
+        return false;
+    }
+
+    // Search all tables including the current one because self-referencing Foreign Keys are valid
+    for (uint32_t i = 0; i < db->table_count; i++) {
+        Table *current_table = db->tables[i];
+
+        if (!current_table || !current_table->table_schema) {
+            return false;
+        }
+
+        Schema *schema = current_table->table_schema;
+
+        if (!schema->constraints) {
+            return false;
+        }
+
+        // No constraints to inspect for the current table
+        if (schema->num_constraints == 0) {
+            continue;
+        }
+
+        // Inspect every constraint for a Foreign Key
+        for (uint32_t j = 0; j < schema->num_constraints; j++) {
+            Constraint *constraint = schema->constraints[j];
+            if (!constraint) {
+                return false;
+            }
+
+            if (constraint->type != FOREIGN_KEY) {
+                continue;
+            }
+
+            const ForeignKeyConstraint *foreign_key = &constraint->constraint_data.foreign_key;
+
+            // Foreign Key doesn't reference current table
+            if (strcmp(
+                    foreign_key->referenced_table_name,
+                    table->name) != 0) {
+                continue;
+            }
+
+            // Numbers of referenced columns don't match
+            if (foreign_key->amount_referenced_columns != target_column_count) {
+                continue;
+            }
+
+            if (!foreign_key->referenced_columns) {
+                return false;
+            }
+
+            bool matches = true;
+
+            for (uint32_t k = 0; k < target_column_count; k++) {
+                if (foreign_key->referenced_columns[k] != target_columns[k]) {
+                    matches = false;
+                    break;
+                }
+            }
+
+            if (matches) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
