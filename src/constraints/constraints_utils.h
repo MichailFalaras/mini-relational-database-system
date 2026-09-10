@@ -17,3 +17,6 @@ extern bool constraint_column_refs_are_unique(const uint32_t *column_refs, uint3
 
 extern bool constraint_validate_foreign_key(const Database *db, const Schema *local_schema, 
     const Constraint *constraint);
+
+extern bool constraint_validate_row(Pager *pager, const Constraint *constraint, const Schema *schema,
+    const Row *row, const EvaluationContext *context);

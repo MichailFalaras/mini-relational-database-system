@@ -7,6 +7,10 @@
 #include "constraints_utils.h"
 #include "../../include/database.h"
 #include "../../include/table.h"
+#include "../../include/row.h"
+#include "../../include/table.h"
+#include "../table/table_utils.h"
+#include "../../include/pager.h"
 
 /* Helper function to deep-copy uint32_t array (of column_refs). */
 uint32_t *copy_uint32_array(const uint32_t *source, uint32_t amount) {
@@ -328,6 +332,136 @@ bool constraint_validate_foreign_key(const Database *db, const Schema *local_sch
 
     if (!references_candidate_key) {
         return false;
+    }
+
+    return true;
+}
+
+// Validates a constraint against a single row
+bool constraint_validate_row(Pager *pager, const Constraint *constraint, const Schema *schema, 
+    const Row *row, const EvaluationContext *context) {
+    
+    // Validate inputs
+    if (!constraint || 
+        !schema || 
+        !row || 
+        !row->values ||
+        row->n_columns != schema->num_columns ||
+        !context) {
+        return false;
+    }
+    
+    // Validate per row constraint
+    switch (constraint->type) {
+        case NOT_NULL: {
+            // If the referenced column is NULL, the current row fails to satisfy the constraint
+            uint32_t column_ref = constraint->constraint_data.not_null.column_ref;
+
+            if (column_ref >= schema->num_columns || !row->values[column_ref]) {
+                return false;
+            }
+            
+            if (row->values[column_ref]->null_val) {
+                return false;
+            }
+
+            break;
+        }
+
+        case CHECK: {
+            const CheckConstraint *check = &constraint->constraint_data.check;
+            if (!check->constraint_expr) {
+                return false;
+            }
+
+            Value *result = evaluate_expression(check->constraint_expr, context);
+            if (!result) {
+                return false;
+            }
+
+            bool valid = (result->type == BOOL && !result->null_val && result->value.bool_val);
+
+            value_free(result);
+            return valid;
+        }
+
+        case FOREIGN_KEY: {
+            if (!pager || !pager->num_pages || !context->db) {
+                return false;
+            }
+
+            const ForeignKeyConstraint *foreign_key = &constraint->constraint_data.foreign_key;
+
+            // Firstly, inspect local Foreign Key values
+            // A NULL-containing Foreign Key doesn't require a referenced row
+            for (uint32_t i = 0; i < foreign_key->amount_columns; i++) {
+                uint32_t local_col = foreign_key->foreign_key_columns[i];
+
+                if (local_col >= row->n_columns || !row->values[local_col]) {
+                    return false;
+                }
+
+                if (row->values[local_col]->null_val) {
+                    return true;
+                }
+            }
+
+            // At this point, no Foreign Key column is NULL, so we locate the referenced table
+            Table *referenced_table = database_find_table(
+                context->db, 
+                foreign_key->referenced_table_name
+            );
+
+            if (!referenced_table) {
+                return false;
+            }
+
+            // Build the referenced set of columns that will be used as a search key
+            // to validate the existence of the referenced row in the referenced table
+            Value **key_values = (Value **) calloc(foreign_key->amount_columns, sizeof(Value *));
+            if (!key_values) {
+                return false;
+            }
+
+            for (uint32_t i = 0; i < foreign_key->amount_columns; i++) {
+                key_values[i] = row->values[foreign_key->foreign_key_columns[i]];
+            }
+
+            // Search for referenced row
+            TableRowResult result = {0};
+
+            TableLookupStatus status = table_find_exact(
+                referenced_table,
+                pager,
+                key_values,
+                foreign_key->referenced_columns,
+                foreign_key->amount_referenced_columns,
+                &result
+            );
+
+            free(key_values);
+
+            if (status != TABLE_LOOKUP_SUCCESS) {
+                table_row_result_free(&result);
+                return false;
+            }
+            
+            // If it exists, the constraint is validated
+            bool exists = result.count > 0;
+
+            table_row_result_free(&result);
+            return exists;
+        }
+
+    
+        // Those constraints are not validated per row, so return true
+        case PRIMARY_KEY:
+        case UNIQUE:
+        case DEFAULT:
+            return true;
+
+        default:
+            return false;
     }
 
     return true;
