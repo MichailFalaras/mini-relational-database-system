@@ -7,6 +7,7 @@
 #include "../../include/schema.h"
 #include "../schema/schema_utils.h"
 #include "../../include/constraints.h"
+#include "../constraints/constraints_utils.h"
 #include "../../include/index.h"
 #include "../index/index_utils.h"
 #include "../../include/pager.h"
@@ -2151,4 +2152,309 @@ TableMutationStatus table_update_entry(Table *table, Pager *pager, Row *old_row,
      */
 
     return TABLE_MUTATION_SUCCESS;
+}
+
+
+/*
+ * Add a constraint to an existing table.
+ *
+ * Constraint definitions are validated before type-specific physical
+ * or existing-row validation is performed.
+ *
+ * PRIMARY KEY creation is currently supported only for an empty table.
+ * UNIQUE constraints are validated by building a unique secondary index
+ * and backfilling it from the canonical primary index.
+ *
+ * CHECK, NOT NULL, and FOREIGN KEY constraints validate all existing
+ * rows before their logical constraint metadata is added. DEFAULT
+ * constraints require no existing-row validation.
+ *
+ * TODO(transaction):
+ * Constraint addition is not currently atomic. If creation/backfill of
+ * a physical PRIMARY or UNIQUE index succeeds and a later operation,
+ * such as schema_add_constraint(), fails, the earlier physical change
+ * is not automatically rolled back.
+ *
+ * Cleanup of a partially-built UNIQUE index is currently best-effort;
+ * full recovery requires future transaction/WAL support.
+ */
+bool table_add_constraint(Table *table, Pager *pager, Constraint *new_constraint, const EvaluationContext *context) {
+    // Validate inputs
+    if (!table ||
+        table->name[0] == '\0' ||
+        !table->table_schema ||
+        !table->is_materialized ||
+        table->is_deleted ||
+        !table->secondary_indexes) {
+        return false;
+    }
+
+    if (table->total_secondary_indexes > MAX_INDEXES) {
+        return false;
+    }
+
+    if (!pager || !pager->num_pages) {
+        return false;
+    }
+
+    if (!new_constraint || !new_constraint->constraint_name[0] == '\0') {
+        return false;
+    }
+
+    if (!context || !context->db) {
+        return false;
+    }
+
+    // Validate that a constraint with the same name doesn't already exist
+    if (schema_find_constraint_index(table->table_schema, new_constraint->constraint_name) >= 0) {
+        return false;
+    }
+
+    // Validate constraint definition and column references
+    if (!constraint_validate_column_refs(context->db, table->table_schema, new_constraint)) {
+        return false;
+    }
+
+    // Since the constraint's name becomes the name for a primary or unique index,
+    // verify that it doesn't already exist
+    if ((new_constraint->type == PRIMARY_KEY || new_constraint->type == UNIQUE) &&
+        table_find_index(table, new_constraint->constraint_name)) {
+
+        return false;
+    }
+
+    
+    // Handle each constraint type 
+    switch (new_constraint->type) {
+         
+        case PRIMARY_KEY: {
+            // Create primary index only upon table creation (no rows), and reject it otherwise
+            if (table->primary_index || table->row_count != 0) {
+                return false;
+            }
+
+            // Create primary index's key, name, and create the physical index
+            const PrimaryKeyConstraint *pk_constraint = &new_constraint->constraint_data.primary_key;
+
+            IndexKey *key = index_key_create(
+                pk_constraint->primary_key_columns,
+                pk_constraint->amount_columns
+            );
+
+            if (!key) {
+                return false;
+            }
+            
+            Index *primary_index = index_create(
+                new_constraint->constraint_name,
+                PRIMARY_INDEX, 
+                key, 
+                pager, 
+                true
+            );
+            
+            index_key_free(key);
+            if (!primary_index) {
+                return false;
+            }
+
+            table->primary_index = primary_index;
+            break;
+        }
+
+        case UNIQUE: {
+            // Check if a new secondary index can be added
+            // Reject an existing secondary index with exactly the same ordered key
+            if (table->total_secondary_indexes >= MAX_INDEXES) {
+                return false;
+            }
+
+            const UniqueConstraint *unique = &new_constraint->constraint_data.unique_cols;
+
+            for (uint32_t i = 0; i < table->total_secondary_indexes; i++) {
+                Index *index = table->secondary_indexes[i];
+                
+                if (!index) {
+                    return false;
+                }
+
+                if (index_key_matches_key(index, unique->column_refs, unique->amount_columns)) {
+                    return false;
+                }
+            }
+
+            // Scan the table and retrieve all rows
+            TableRowResult rows = {0};
+            TableLookupStatus scan_status = table_scan(table, pager, &rows);
+
+            if (scan_status != TABLE_LOOKUP_SUCCESS) {
+                table_row_result_free(&rows);
+                return false;
+            }
+
+            IndexKey *key = index_key_create(unique->column_refs, unique->amount_columns);
+            if (!key) {
+                table_row_result_free(&rows);
+                return false;
+            }
+
+            Index *unique_index = index_create(
+                new_constraint->constraint_name,
+                SECONDARY_INDEX,
+                key,
+                pager,
+                true
+            );
+
+            index_key_free(key);
+
+            if (!unique_index) {
+                table_row_result_free(&rows);
+                return false;
+            }
+
+            for (uint32_t i = 0; i < rows.count; i++) {
+                IndexMutationStatus status = index_insert_entry(
+                    unique_index,
+                    pager,
+                    table->table_schema,
+                    rows.rows[i]
+                );
+
+                if (status != INDEX_MUTATION_SUCCESS) {
+                    index_drop(unique_index, pager);
+                    table_row_result_free(&rows);
+                    return false;
+                }
+            }
+
+            table_row_result_free(&rows);
+            
+            table->secondary_indexes[table->total_secondary_indexes] = unique_index;
+            table->total_secondary_indexes++;
+
+            break;
+        }
+
+        case FOREIGN_KEY: {
+            // Scan the table and retrieve all rows
+            TableRowResult rows = {0};
+            TableLookupStatus scan_status = table_scan(table, pager, &rows);
+
+            if (scan_status != TABLE_LOOKUP_SUCCESS) {
+                table_row_result_free(&rows);
+                return false;
+            }
+
+            // Validate each row against the FOREIGN KEY constraint
+            for (uint32_t i = 0; i < rows.count; i++) {
+                Row *current_row = rows.rows[i];
+
+                if (!constraint_validate_row(
+                    pager,
+                    new_constraint,
+                    table->table_schema,
+                    current_row,
+                    context
+                )) {
+                    table_row_result_free(&rows);
+                    return false;
+                }
+            }
+
+            table_row_result_free(&rows);
+            break;
+        }
+
+        case CHECK: {
+            // Scan the table and retrieve all rows
+            TableRowResult rows = {0};
+            TableLookupStatus scan_status = table_scan(table, pager, &rows);
+
+            if (scan_status != TABLE_LOOKUP_SUCCESS) {
+                table_row_result_free(&rows);
+                return false;
+            }
+
+            // Create a single relation about the current table
+            RelationContext relation = {
+                .table = table,
+                .row = NULL
+            };
+
+            // And an evaluation context that uses the above relation,
+            // and binds a different row in each iteration of the validation loop below
+            EvaluationContext row_context = {
+                .db = context->db,
+                .relation_context = &relation,
+                .relations_count = 1,
+                .transaction = context->transaction
+            };
+
+            // Validate each row against the CHECK constraint
+            for (uint32_t i = 0; i < rows.count; i++) {
+                relation.row = rows.rows[i];
+
+                if (!constraint_validate_row(
+                        pager,
+                        new_constraint,
+                        table->table_schema,
+                        rows.rows[i],
+                        &row_context)) {
+
+                    table_row_result_free(&rows);
+                    return false;
+                }
+            }
+
+            table_row_result_free(&rows);
+            break;
+        }
+
+        case NOT_NULL: {
+            // Scan the table and retrieve all rows
+            TableRowResult rows = {0};
+            TableLookupStatus scan_status = table_scan(table, pager, &rows);
+
+            if (scan_status != TABLE_LOOKUP_SUCCESS) {
+                table_row_result_free(&rows);
+                return false;
+            }
+
+            // Validate each row against the NOT NULL constraint
+            for (uint32_t i = 0; i < rows.count; i++) {
+                Row *current_row = rows.rows[i];
+
+                if (!constraint_validate_row(
+                        pager,
+                        new_constraint,
+                        table->table_schema,
+                        current_row,
+                        context)) {
+
+                    table_row_result_free(&rows);
+                    return false;
+                }
+            }
+
+            table_row_result_free(&rows);
+            break;
+        }
+
+        // The DEFAULT constraint doesn't need validation, 
+        // since it refers to the default initial value of newly-inserted rows
+        case DEFAULT:
+            break;
+
+        default:
+            return false;
+    }
+
+    // After successful validation and potential index creation
+    // add the constraint to the Schema structure
+    if (!schema_add_constraint(table->table_schema, context->db, new_constraint)) {
+        return false;
+    }    
+
+    return true;
 }

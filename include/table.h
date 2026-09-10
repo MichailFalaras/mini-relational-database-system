@@ -135,5 +135,8 @@ extern TableMutationStatus table_delete_entry(Table *table, Pager *pager, Row *r
 extern TableMutationStatus table_update_entry(Table *table, Pager *pager, Row *old_row, Row *new_row, 
     const EvaluationContext *context);
 
-    
+// Table add constraint
+extern bool table_add_constraint(Table *table, Constraint *new_constraint, 
+    const EvaluationContext *context);
+
 #endif
