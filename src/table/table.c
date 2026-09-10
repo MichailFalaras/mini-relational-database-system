@@ -2197,7 +2197,7 @@ bool table_add_constraint(Table *table, Pager *pager, Constraint *new_constraint
         return false;
     }
 
-    if (!new_constraint || !new_constraint->constraint_name[0] == '\0') {
+    if (!new_constraint || new_constraint->constraint_name[0] == '\0') {
         return false;
     }
 
@@ -2455,6 +2455,105 @@ bool table_add_constraint(Table *table, Pager *pager, Constraint *new_constraint
     if (!schema_add_constraint(table->table_schema, context->db, new_constraint)) {
         return false;
     }    
+
+    return true;
+}
+
+
+/*
+ * Remove a constraint from an existing table.
+ *
+ * Non-index-backed constraints only modify schema metadata.
+ * UNIQUE constraints first remove their physical secondary index,
+ * then remove the corresponding logical schema constraint.
+ *
+ * PRIMARY KEY removal is currently unsupported while the primary
+ * index serves as the table's canonical physical row store.
+ *
+ * TODO(transaction):
+ * Constraint removal is not currently atomic across physical index
+ * and schema metadata changes.
+ *
+ * If a physical index is successfully dropped and the subsequent
+ * schema_drop_constraint() operation fails, the table may be left
+ * with inconsistent physical and logical constraint state.
+ *
+ * Automatic rollback/reconstruction of the removed index requires
+ * future transaction/WAL recovery support.
+ */
+bool table_remove_constraint(Table *table, Pager *pager, const char *constraint_name, const EvaluationContext *context) {
+    // Validate inputs
+    if (!table ||
+        table->name[0] == '\0' ||
+        !table->table_schema ||
+        !table->is_materialized ||
+        table->is_deleted ||
+        !table->secondary_indexes) {
+        return false;
+    }
+
+    if (table->total_secondary_indexes > MAX_INDEXES) {
+        return false;
+    }
+
+    if (!pager || !pager->num_pages) {
+        return false;
+    }
+
+    if (!constraint_name || constraint_name[0] == '\0') {
+        return false;
+    }
+
+    if (!context || !context->db) {
+        return false;
+    }
+
+    // Validate that a constraint with the same name doesn't exists
+    int32_t constraint_index = schema_find_constraint_index(table->table_schema, constraint_name);
+    
+    if (constraint_index < 0) {
+        return false;
+    }
+
+    // Remove the actual constraint on the table's schema
+    Constraint *target_constraint = table->table_schema->constraints[constraint_index];
+
+    if (!target_constraint) {
+        return false;
+    }
+
+    switch (target_constraint->type) {
+        // PRIMARY KEY constraint removal is unsupported
+        // because the primary index is the canonical table row store
+        case PRIMARY_KEY:
+            return false;
+
+        // First check if another table's Foreign Key depends on this UNIQUE candidate key
+        case UNIQUE: 
+            if (constraint_is_referenced_by_foreign_key(context->db, table, target_constraint)) {
+                return false;
+            }
+
+            if (!table_drop_index(table, target_constraint->constraint_name, pager)) {
+                return false;
+            }
+            break;
+
+        // These constraint types don't require an index to be dropped
+        case FOREIGN_KEY:
+        case CHECK:
+        case NOT_NULL:
+        case DEFAULT:
+            break;
+            
+        default:
+            return false;
+
+    }
+
+    if (!schema_drop_constraint(table->table_schema, target_constraint->constraint_name)) {
+        return false;
+    }
 
     return true;
 }
