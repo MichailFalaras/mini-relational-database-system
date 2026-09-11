@@ -13,6 +13,7 @@ TESTS_DIR := tests
 # Convert list of src files to object files
 SRC := $(wildcard $(SRC_DIR)/btree/*.c) \
 		$(wildcard $(SRC_DIR)/constraints/*.c) \
+		$(wildcard $(SRC_DIR)/database/*.c) \
 		$(wildcard $(SRC_DIR)/data_types/*.c) \
 		$(wildcard $(SRC_DIR)/execution_engine/*.c) \
 		$(wildcard $(SRC_DIR)/expressions/*.c) \
