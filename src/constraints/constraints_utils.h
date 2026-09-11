@@ -3,7 +3,12 @@
 
 /* Forward Declarations. */
 typedef struct database Database;
-typedef struct constraint Constraint;
+typedef struct schema Schema;
+typedef struct pager Pager;
+typedef struct row Row;
+typedef struct table Table;
+typedef struct evaluation_context EvaluationContext;
+
 
 extern uint32_t *copy_uint32_array(const uint32_t *source, uint32_t amount);
 

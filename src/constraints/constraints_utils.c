@@ -11,6 +11,7 @@
 #include "../../include/table.h"
 #include "../table/table_utils.h"
 #include "../../include/pager.h"
+#include "../../include/expressions.h"
 
 /* Helper function to deep-copy uint32_t array (of column_refs). */
 uint32_t *copy_uint32_array(const uint32_t *source, uint32_t amount) {
