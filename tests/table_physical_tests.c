@@ -7,6 +7,7 @@
 #include "../include/index.h"
 #include "../src/index/index_utils.h"
 #include "../include/constraints.h"
+#include "../src/constraints/constraints_utils.h"
 #include "../include/data_types.h"
 #include "../include/database.h"
 #include "../include/expressions.h"
@@ -360,6 +361,92 @@ static bool index_contains_user(const Index *index, Pager *pager, Schema *schema
     index_range_result_free(&result);
 
     return found;
+}
+
+/* ---------- Table constraint alteration helpers ---------- */
+
+static bool init_test_database(Database *db, Pager *pager, Table **tables, uint32_t table_count) {
+    if (!db || !pager || !tables || table_count > MAX_TABLES) {
+        return false;
+    }
+
+    memset(db, 0, sizeof(Database));
+
+    db->pager = pager;
+    db->tables = (Table **) calloc(MAX_TABLES, sizeof(Table *));
+    if (!db->tables) {
+        return false;
+    }
+
+    for (uint32_t i = 0; i < table_count; i++) {
+        if (!tables[i]) {
+            free(db->tables);
+            db->tables = NULL;
+            db->pager = NULL;
+            return false;
+        }
+
+        db->tables[i] = tables[i];
+    }
+
+    db->table_count = table_count;
+    return true;
+}
+
+static void destroy_test_database_metadata(Database *db) {
+    if (!db) {
+        return;
+    }
+
+    // Individual tables are separately freed by the tests
+    free(db->tables);
+    db->tables = NULL;
+    db->table_count = 0;
+    db->pager = NULL;
+}
+
+static Schema *create_test_schema_with_primary_key() {
+    Column id = { .name = "id", .type = INTEGER, .non_null_rows = 0, .null_rows = 0 };
+    Column email = { .name = "email", .type = TEXT, .non_null_rows = 0, .null_rows = 0 };
+    Column age = { .name = "age", .type = INTEGER, .non_null_rows = 0, .null_rows = 0 };
+
+    Column *columns[] = { &id, &email, &age };
+
+    uint32_t primary_columns[] = {0};
+
+    Constraint *primary_key = constraint_create_primary_key("pk_users", primary_columns, 1);
+    if (!primary_key) {
+        return NULL;
+    }
+
+    Constraint *constraints[] = {primary_key};
+
+    Schema *schema = schema_create(columns, constraints, 3, 1);
+    
+    constraint_free(primary_key);
+    return schema;
+}
+
+static Schema *create_test_orders_schema_primary_only() {
+    Column id = {.name = "id", .type = INTEGER, .non_null_rows = 0, .null_rows = 0};
+    Column user_email = {.name = "user_email", .type = TEXT, .non_null_rows = 0, .null_rows = 0};
+    Column *columns[] = { &id, &user_email };
+
+    uint32_t primary_columns[] = {0};
+
+    Constraint *primary_key = constraint_create_primary_key("pk_orders", primary_columns, 1);
+
+    if (!primary_key) {
+        return NULL;
+    }
+
+    Constraint *constraints[] = { primary_key };
+
+    Schema *schema = schema_create(columns, constraints, 2, 1);
+
+    constraint_free(primary_key);
+
+    return schema;
 }
 
 /* ---------- table_create unit tests ---------- */
@@ -2612,6 +2699,1034 @@ cleanup:
     return result;
 }
 
+
+/* ---------- table_add_constraint unit tests ---------- */
+
+static int test_table_add_constraint_primary_key_success() {
+    int result = 1;
+
+    TestPager test_pager = {0};
+    Schema *schema = NULL;
+    Table *table = NULL;
+    Constraint *primary_key = NULL;
+
+    Database db = {0};
+    bool db_initialized = false;
+
+    uint32_t id_column[] = {0};
+
+    // Initialize data
+    ASSERT(create_test_pager(&test_pager));
+
+    schema = create_test_schema_without_constraints();
+    ASSERT(schema != NULL);
+    
+    table = table_create("users", schema, test_pager.pager);
+    ASSERT(table != NULL);
+    ASSERT(table->primary_index == NULL);
+    ASSERT(table->row_count == 0);
+    ASSERT(table->table_schema->num_constraints == 0);
+
+    Table *tables[] = {table};
+
+    ASSERT(init_test_database(&db, test_pager.pager, tables, 1));
+    db_initialized = true;    
+
+    EvaluationContext context = {
+        .db =  &db,
+        .relation_context = NULL,
+        .relations_count = 0,
+        .transaction = NULL
+    };
+
+    // Add primary key constraint to the table
+    primary_key = constraint_create_primary_key("pk_users", id_column, 1);
+    ASSERT(primary_key != NULL);
+
+    ASSERT(table_add_constraint(table, test_pager.pager, primary_key, &context));
+
+    
+    // Validate logical constraint metadata
+    ASSERT(table->table_schema->num_constraints == 1);
+    ASSERT(schema_find_constraint_index(table->table_schema, "pk_users") >= 0);
+
+    // Validate physical Primary Index
+    ASSERT(table->primary_index != NULL);
+    ASSERT(strcmp(table->primary_index->name, "pk_users") == 0);
+    ASSERT(table->primary_index->type == PRIMARY_INDEX);
+    ASSERT(table->primary_index->is_unique);
+
+    ASSERT(table->primary_index->key != NULL);
+    ASSERT(table->primary_index->key->num_columns == 1);
+    ASSERT(table->primary_index->key->column_index_array[0] == 0);
+    ASSERT(table->primary_index->root_page_num != INVALID_ROOT_PAGE);
+
+    Page *root = pager_get_page(test_pager.pager, table->primary_index->root_page_num);
+
+    ASSERT(root != NULL);
+    ASSERT(is_empty_btree_root(root));
+
+    result = 0;
+
+cleanup:
+    constraint_free(primary_key);
+
+    if (db_initialized) {
+        destroy_test_database_metadata(&db);
+    }
+
+    if (table) {
+        if (table->is_materialized &&
+            table_drop(table, test_pager.pager)) {
+            table = NULL;
+        }
+
+        if (table) {
+            table_free(table);
+        }
+    }
+
+    schema_free(schema);
+    destroy_test_pager(&test_pager);
+
+    return result;
+}
+
+static int test_table_add_constraint_unique_success() {
+    int result = 1;
+
+    TestPager test_pager = {0};
+    Schema *schema = NULL;
+    Table *table = NULL;
+    Constraint *unique = NULL;
+
+    Database db = {0};
+    bool db_initialized = false;
+
+    uint32_t email_column[] = {1};
+
+    // Initialize data
+    ASSERT(create_test_pager(&test_pager));
+
+    schema = create_test_schema_with_primary_key();
+    ASSERT(schema != NULL);
+
+    table = table_create("users", schema, test_pager.pager);
+    ASSERT(table != NULL);
+
+    ASSERT(table->primary_index != NULL);
+    ASSERT(strcmp(table->primary_index->name, "pk_users") == 0);
+
+    ASSERT(table->total_secondary_indexes == 0);
+    ASSERT(table->table_schema->num_constraints == 1);
+
+    Table *tables[] = {table};
+
+    ASSERT(init_test_database(&db, test_pager.pager, tables, 1));
+    db_initialized = true;
+
+    EvaluationContext context = {
+        .db = &db,
+        .relation_context = NULL,
+        .relations_count = 0,
+        .transaction = NULL
+    };
+
+    // Add unique constraint
+    unique = constraint_create_unique("uq_users_email", email_column, 1);
+    ASSERT(unique != NULL);
+
+    ASSERT(table_add_constraint(table, test_pager.pager, unique, &context));
+    
+    // Validate logical metadata
+    ASSERT(table->table_schema->num_constraints == 2);
+    ASSERT(table->secondary_indexes[0] != NULL);
+
+    // Validate physical secondary index
+    Index *index = table_find_index(table, "uq_users_email");
+
+    ASSERT(index != NULL);
+    ASSERT(index == table->secondary_indexes[0]);
+    ASSERT(index->type == SECONDARY_INDEX);
+    ASSERT(index->is_unique);
+
+    ASSERT(index->key != NULL);
+    ASSERT(index->key->num_columns == 1);
+    ASSERT(index->key->column_index_array[0] == 1);
+
+    ASSERT(index->root_page_num != INVALID_ROOT_PAGE);
+
+    result = 0;
+
+cleanup:
+    constraint_free(unique);
+
+    if (db_initialized) {
+        destroy_test_database_metadata(&db);
+    }
+
+    if (table) {
+        if (table->is_materialized &&
+            table_drop(table, test_pager.pager)) {
+            table = NULL;
+        }
+
+        if (table) {
+            table_free(table);
+        }
+    }
+
+    schema_free(schema);
+    destroy_test_pager(&test_pager);
+    return result;
+}
+
+static int test_table_add_constraint_not_null_success() {
+    int result = 1;
+
+    TestPager test_pager = {0};
+    Schema *schema = NULL;
+    Table *table = NULL;
+
+    Database db = {0};
+    bool db_initialized = false;
+
+    // Initialize data
+    ASSERT(create_test_pager(&test_pager));
+
+    schema = create_test_schema_with_primary_key();
+    ASSERT(schema != NULL);
+
+    table = table_create("users", schema, test_pager.pager);
+    ASSERT(table != NULL);
+
+    ASSERT(table->primary_index != NULL);
+    ASSERT(strcmp(table->primary_index->name, "pk_users") == 0);
+
+    ASSERT(table->total_secondary_indexes == 0);
+    ASSERT(table->table_schema->num_constraints == 1);
+
+    Table *tables[] = {table};
+
+    ASSERT(init_test_database(&db, test_pager.pager, tables, 1));
+    db_initialized = true;
+
+    EvaluationContext context = {
+        .db = &db,
+        .relation_context = NULL,
+        .relations_count = 0,
+        .transaction = NULL
+    };
+
+    // Add Not Null constraint
+    uint32_t original_indexes = table->total_secondary_indexes;
+
+    Constraint *not_null = constraint_create_not_null("nn_users_email", 1);
+    ASSERT(not_null != NULL);
+
+    ASSERT(table_add_constraint(table, test_pager.pager, not_null, &context));
+
+    ASSERT(schema_find_constraint_index(table->table_schema, "nn_users_email") >= 0);
+
+    // NOT NULL creates no physical index
+    ASSERT(table->total_secondary_indexes == original_indexes);
+
+    ASSERT(table_find_index(table, "nn_users_email") == NULL);
+    
+    result = 0;
+
+cleanup:
+    constraint_free(not_null);
+
+    if (db_initialized) {
+        destroy_test_database_metadata(&db);
+    }
+
+    if (table) {
+        if (table->is_materialized &&
+            table_drop(table, test_pager.pager)) {
+            table = NULL;
+        }
+
+        if (table) {
+            table_free(table);
+        }
+    }
+
+    schema_free(schema);
+    destroy_test_pager(&test_pager);
+    return result;
+}
+
+static int test_table_add_constraint_duplicate_name() {
+    int result = 1;
+
+    TestPager test_pager = {0};
+    Schema *schema = NULL;
+    Table *table = NULL;
+    Constraint *duplicate = NULL;
+
+    Database db = {0};
+    bool db_initialized = false;
+
+    uint32_t age_column[] = {2};
+
+    // Initialize data
+    ASSERT(create_test_pager(&test_pager));
+
+    schema = create_test_schema_with_constraints();
+    ASSERT(schema != NULL);
+
+    table = table_create("users", schema, test_pager.pager);
+    ASSERT(table != NULL);
+
+    Table *tables[] = {table};
+
+    ASSERT(init_test_database(&db, test_pager.pager, tables, 1));
+    db_initialized = true;
+
+    EvaluationContext context = {
+        .db = &db,
+        .relation_context = NULL,
+        .relations_count = 0,
+        .transaction = NULL
+    };
+
+    uint32_t original_constraints = table->table_schema->num_constraints;
+
+    uint32_t original_indexes = table->total_secondary_indexes;
+
+    // Existing schema already contains constraint named uq_users_email.
+    duplicate = constraint_create_unique("uq_users_email", age_column, 1);
+
+    ASSERT(duplicate != NULL);
+
+    ASSERT(!table_add_constraint(table, test_pager.pager, duplicate, &context));
+
+    // Verify that no duplicate constraint was added
+    ASSERT(table->table_schema->num_constraints == original_constraints);
+
+    ASSERT(table->total_secondary_indexes == original_indexes);
+
+    result = 0;
+
+cleanup:
+    constraint_free(duplicate);
+
+    if (db_initialized) {
+        destroy_test_database_metadata(&db);
+    }
+
+    if (table) {
+        if (table->is_materialized &&
+            table_drop(table, test_pager.pager)) {
+            table = NULL;
+        }
+
+        if (table) {
+            table_free(table);
+        }
+    }
+
+    schema_free(schema);
+    destroy_test_pager(&test_pager);
+    return result;
+}
+
+static int test_table_add_constraint_second_primary_key_rejected() {
+    int result = 1;
+
+    TestPager test_pager = {0};
+    Schema *schema = NULL;
+    Table *table = NULL;
+    Constraint *primary_key = NULL;
+
+    Database db = {0};
+    bool db_initialized = false;
+
+    uint32_t age_column[] = {2};
+
+    // Initialize data
+    ASSERT(create_test_pager(&test_pager));
+
+    schema = create_test_schema_with_constraints();
+    ASSERT(schema != NULL);
+
+    table = table_create("users", schema, test_pager.pager);
+    ASSERT(table != NULL);
+    ASSERT(table->primary_index != NULL);
+
+    Table *tables[] = {table};
+
+    ASSERT(init_test_database(&db, test_pager.pager, tables, 1));
+    db_initialized = true;
+
+    EvaluationContext context = {
+        .db = &db,
+        .relation_context = NULL,
+        .relations_count = 0,
+        .transaction = NULL
+    };
+
+    // Create second Primary Key constraint
+    primary_key = constraint_create_primary_key("pk_users_age", age_column, 1);
+    ASSERT(primary_key != NULL);
+
+    Index *original_primary = table->primary_index;
+    uint32_t original_constraints = table->table_schema->num_constraints;
+
+    // Attempt to add second Primary Key
+    ASSERT(!table_add_constraint(table, test_pager.pager, primary_key, &context));
+
+    // and validate that it doesn't get added
+    ASSERT(table->primary_index == original_primary);
+    ASSERT(table->table_schema->num_constraints == original_constraints);
+
+    result = 0;
+
+cleanup:
+    constraint_free(primary_key);
+
+    if (db_initialized) {
+        destroy_test_database_metadata(&db);
+    }
+
+    if (table) {
+        if (table->is_materialized &&
+            table_drop(table, test_pager.pager)) {
+            table = NULL;
+        }
+
+        if (table) {
+            table_free(table);
+        }
+    }
+
+    schema_free(schema);
+    destroy_test_pager(&test_pager);
+    return result;
+}
+
+static int test_table_add_constraint_unique_duplicate_existing_rows() {
+    int result = 1;
+
+    TestPager test_pager = {0};
+    Schema *schema = NULL;
+    Table *table = NULL;
+
+    Constraint *unique = NULL;
+    Row *row1 = NULL;
+    Row *row2 = NULL;
+
+    Database db = {0};
+    bool db_initialized = false;
+
+    uint32_t email_column[] = {1};
+
+    // Initialize data
+    ASSERT(create_test_pager(&test_pager));
+
+    schema = create_test_schema_with_primary_key();
+    ASSERT(schema != NULL);
+
+    table = table_create("users", schema, test_pager.pager);
+    ASSERT(table != NULL);
+
+    Table *tables[] = {table};
+
+    ASSERT(init_test_database(&db, test_pager.pager, tables, 1));
+    db_initialized = true;
+
+    EvaluationContext context = {
+        .db = &db,
+        .relation_context = NULL,
+        .relations_count = 0,
+        .transaction = NULL
+    };
+
+    // Add rows to the table with duplicate emails
+    row1 = create_test_user_row(1, "duplicate@email.com", 20);
+    row2 = create_test_user_row(2, "duplicate@email.com", 30);
+
+    ASSERT(row1 != NULL);
+    ASSERT(row2 != NULL);
+
+    ASSERT(table_insert_entry(table, test_pager.pager, row1, &context) == TABLE_MUTATION_SUCCESS);
+    ASSERT(table_insert_entry(table, test_pager.pager, row2, &context) == TABLE_MUTATION_SUCCESS);
+    ASSERT(table->row_count == 2);
+    ASSERT(table->total_secondary_indexes == 0);
+
+    // Attempt to a unique constraint for emails
+    uint32_t original_constraints = table->table_schema->num_constraints;
+
+    unique = constraint_create_unique("uq_users_email", email_column, 1);
+    ASSERT(unique != NULL);
+
+    ASSERT(!table_add_constraint(table, test_pager.pager, unique, &context));
+    
+    // Verify no logical constraint metadata was added
+    ASSERT(table->table_schema->num_constraints == original_constraints);
+    ASSERT(schema_find_constraint_index(table->table_schema, "uq_users_email") < 0);
+
+    // Verify that no partially built index was attached
+    ASSERT(table->total_secondary_indexes == 0);
+    ASSERT(table_find_index(table, "uq_users_email") == NULL);
+
+    ASSERT(table->row_count == 2);
+    
+    result = 0;
+
+cleanup:
+    constraint_free(unique);
+    row_free(row1);
+    row_free(row2);
+
+    if (db_initialized) {
+        destroy_test_database_metadata(&db);
+    }
+
+    if (table) {
+        if (table->is_materialized &&
+            table_drop(table, test_pager.pager)) {
+            table = NULL;
+        }
+
+        if (table) {
+            table_free(table);
+        }
+    }
+
+    schema_free(schema);
+    destroy_test_pager(&test_pager);
+    return result;
+}
+
+static int test_table_add_constraint_invalid_arguments() {
+    int result = 1;
+
+    TestPager test_pager = {0};
+    Schema *schema = NULL;
+    Table *table = NULL;
+    Constraint *constraint = NULL;
+
+    Database db = {0};
+    bool db_initialized = false;
+
+    uint32_t email_column[] = {1};
+
+    // Initialize data
+    ASSERT(create_test_pager(&test_pager));
+
+    schema = create_test_schema_with_primary_key();
+    ASSERT(schema != NULL);
+
+    table = table_create("users", schema, test_pager.pager);
+    ASSERT(table != NULL);
+
+    Table *tables[] = {table};
+
+    ASSERT(init_test_database(&db,test_pager.pager,tables,1));
+    db_initialized = true;
+
+    EvaluationContext context = {
+        .db = &db,
+        .relation_context = NULL,
+        .relations_count = 0,
+        .transaction = NULL
+    };
+
+    constraint = constraint_create_unique("uq_email", email_column, 1);
+    ASSERT(constraint != NULL);
+
+    // Invalid argument cases
+    ASSERT(!table_add_constraint(NULL, test_pager.pager, constraint, &context));
+
+    ASSERT(!table_add_constraint(table, NULL, constraint, &context));
+
+    Pager invalid_pager = {0};
+
+    ASSERT(!table_add_constraint(table, &invalid_pager, constraint, &context));
+
+    ASSERT(!table_add_constraint(table, test_pager.pager, NULL, &context));
+
+    ASSERT(!table_add_constraint(table, test_pager.pager, constraint, NULL));
+
+    EvaluationContext invalid_context = {0};
+
+    ASSERT(!table_add_constraint(table, test_pager.pager, constraint, &invalid_context));
+
+    ASSERT(table_find_index(table, "uq_email") == NULL);
+    ASSERT(schema_find_constraint_index(table->table_schema, "uq_email") < 0);
+    
+    result = 0;
+
+cleanup:
+    constraint_free(constraint);
+
+    if (db_initialized) {
+        destroy_test_database_metadata(&db);
+    }
+
+    if (table) {
+        if (table->is_materialized &&
+            table_drop(table, test_pager.pager)) {
+            table = NULL;
+        }
+
+        if (table) {
+            table_free(table);
+        }
+    }
+
+    schema_free(schema);
+    destroy_test_pager(&test_pager);
+    return result;
+}
+
+/* ---------- table_remove_constraint unit tests ---------- */
+
+static int test_table_remove_constraint_unique_success() {
+    int result = 1;
+
+    TestPager test_pager = {0};
+    Schema *schema = NULL;
+    Table *table = NULL;
+
+    Database db = {0};
+    bool db_initialized = false;
+
+    // Initialize data
+    ASSERT(create_test_pager(&test_pager));
+
+    schema = create_test_schema_with_constraints();
+    ASSERT(schema != NULL);
+
+    table = table_create("users", schema, test_pager.pager);
+    ASSERT(table != NULL);
+
+    ASSERT(table->total_secondary_indexes == 1);
+    ASSERT(table_find_index(table, "uq_users_email") != NULL);
+
+    Table *tables[] = {table};
+
+    ASSERT(init_test_database(&db, test_pager.pager, tables, 1));
+    db_initialized = true;
+
+    EvaluationContext context = {
+        .db = &db,
+        .relation_context = NULL,
+        .relations_count = 0,
+        .transaction = NULL
+    };
+
+    // Remove unique constraint
+    uint32_t old_constraint_count = table->table_schema->num_constraints;
+    uint32_t dropped_root = table_find_index(table, "uq_users_email")->root_page_num;
+
+    ASSERT(table_remove_constraint(table, test_pager.pager, "uq_users_email", &context));
+
+    // Verification of logical metadata constraint removal 
+    ASSERT(table->table_schema->num_constraints == old_constraint_count - 1);
+    ASSERT(schema_find_constraint_index(table->table_schema, "uq_users_email") < 0);
+
+    // Verification that the physical index was removed
+    ASSERT(table->total_secondary_indexes == 0);
+    ASSERT(table->secondary_indexes[0] == NULL);
+
+    ASSERT(table_find_index(table, "uq_users_email") == NULL);
+
+    // Released index root should be reusable
+    uint32_t reused_page = UINT32_MAX;
+    ASSERT(pager_allocate_page(test_pager.pager, &reused_page));
+
+    ASSERT((reused_page == dropped_root));
+
+    result = 0;
+
+cleanup:
+    if (db_initialized) {
+        destroy_test_database_metadata(&db);
+    }
+
+    if (table) {
+        if (table->is_materialized &&
+            table_drop(table, test_pager.pager)) {
+            table = NULL;
+        }
+
+        if (table) {
+            table_free(table);
+        }
+    }
+
+    schema_free(schema);
+    destroy_test_pager(&test_pager);
+    return result;
+}
+
+static int test_table_remove_constraint_primary_key_rejected() {
+    int result = 1;
+
+    TestPager test_pager = {0};
+    Schema *schema = NULL;
+    Table *table = NULL;
+
+    Database db = {0};
+    bool db_initialized = false;
+
+    // Initialize data
+    ASSERT(create_test_pager(&test_pager));
+
+    schema = create_test_schema_with_constraints();
+    ASSERT(schema != NULL);
+
+    table = table_create("users", schema, test_pager.pager);
+    ASSERT(table != NULL);
+
+    ASSERT(table->total_secondary_indexes == 1);
+    ASSERT(table_find_index(table, "uq_users_email") != NULL);
+
+    Table *tables[] = {table};
+
+    ASSERT(init_test_database(&db, test_pager.pager, tables, 1));
+    db_initialized = true;
+
+    EvaluationContext context = {
+        .db = &db,
+        .relation_context = NULL,
+        .relations_count = 0,
+        .transaction = NULL
+    };
+
+    // Reject the attempted removal of the Primary Key
+    Index *original_primary = table->primary_index;
+    uint32_t original_constraint_count = table->table_schema->num_constraints;
+
+    ASSERT(!table_remove_constraint(table, test_pager.pager, "pk_users", &context));
+
+    // Validate that the primary key remained intact
+    ASSERT(table->primary_index == original_primary);
+    ASSERT(table->table_schema->num_constraints == original_constraint_count);
+
+    ASSERT(schema_find_constraint_index(table->table_schema, "pk_users") >= 0);
+
+    result = 0;
+
+cleanup:
+    if (db_initialized) {
+        destroy_test_database_metadata(&db);
+    }
+
+    if (table) {
+        if (table->is_materialized &&
+            table_drop(table, test_pager.pager)) {
+            table = NULL;
+        }
+
+        if (table) {
+            table_free(table);
+        }
+    }
+
+    schema_free(schema);
+    destroy_test_pager(&test_pager);
+    return result;
+}
+
+static int test_table_remove_constraint_missing_constraint() {
+    int result = 1;
+
+    TestPager test_pager = {0};
+    Schema *schema = NULL;
+    Table *table = NULL;
+
+    Database db = {0};
+    bool db_initialized = false;
+
+    // Initialize data
+    ASSERT(create_test_pager(&test_pager));
+
+    schema = create_test_schema_with_constraints();
+    ASSERT(schema != NULL);
+
+    table = table_create("users", schema, test_pager.pager);
+    ASSERT(table != NULL);
+
+    ASSERT(table->total_secondary_indexes == 1);
+    ASSERT(table_find_index(table, "uq_users_email") != NULL);
+
+    Table *tables[] = {table};
+
+    ASSERT(init_test_database(&db, test_pager.pager, tables, 1));
+    db_initialized = true;
+
+    EvaluationContext context = {
+        .db = &db,
+        .relation_context = NULL,
+        .relations_count = 0,
+        .transaction = NULL
+    };
+
+    // Attempt to remove a non-existent constraint
+    uint32_t old_constraints = table->table_schema->num_constraints;
+    uint32_t old_indexes = table->total_secondary_indexes;
+
+    ASSERT(!table_remove_constraint(table, test_pager.pager, "does_not_exist", &context));
+
+    // Validate the initial constriant set remained intact
+    ASSERT(table->table_schema->num_constraints == old_constraints);
+    ASSERT(table->total_secondary_indexes == old_indexes);
+    
+    result = 0;
+
+cleanup:
+    if (db_initialized) {
+        destroy_test_database_metadata(&db);
+    }
+
+    if (table) {
+        if (table->is_materialized &&
+            table_drop(table, test_pager.pager)) {
+            table = NULL;
+        }
+
+        if (table) {
+            table_free(table);
+        }
+    }
+
+    schema_free(schema);
+    destroy_test_pager(&test_pager);
+    return result;
+}
+
+static int test_table_remove_constraint_unique_referenced_by_fk() {
+    int result = 1;
+
+    TestPager test_pager = {0};
+    Schema *users_schema = NULL;
+    Schema *orders_schema = NULL;
+    
+    Table *users_table = NULL;
+    Table *orders_table = NULL;
+
+    Constraint *orders_fk = NULL;
+
+    Database db = {0};
+    bool db_initialized = false;
+
+    uint32_t orders_user_email_col[] = {1};
+    uint32_t users_email_col[] = {1};
+
+    // Initialize data
+    ASSERT(create_test_pager(&test_pager));
+
+    users_schema = create_test_schema_with_constraints();
+    ASSERT(users_schema != NULL);
+
+    orders_schema = create_test_orders_schema_primary_only();
+    ASSERT(orders_schema != NULL);
+
+    users_table = table_create("users", users_schema, test_pager.pager);
+    ASSERT(users_table != NULL);
+
+    orders_table = table_create("orders", orders_schema, test_pager.pager);
+    ASSERT(orders_table != NULL);
+
+    ASSERT(users_table != NULL);
+    ASSERT(orders_table != NULL);
+
+    Table *tables[] = {users_table, orders_table};
+
+    ASSERT(init_test_database(&db, test_pager.pager, tables, 2));
+
+    db_initialized = true;
+
+    EvaluationContext context = {
+        .db = &db,
+        .relation_context = NULL,
+        .relations_count = 0,
+        .transaction = NULL
+    };
+
+    orders_fk = constraint_create_foreign_keys(
+        "fk_orders_user_email",
+        orders_user_email_col,
+        1,
+        "users",
+        users_email_col,
+        1
+    );
+
+    ASSERT(orders_fk != NULL);
+
+    ASSERT(table_add_constraint(orders_table, test_pager.pager, orders_fk, &context));
+
+    Index *unique_index = table_find_index(users_table, "uq_users_email");
+    ASSERT(unique_index != NULL);
+
+    uint32_t original_constraints = users_table->table_schema->num_constraints;
+    uint32_t original_indexes = users_table->total_secondary_indexes;
+
+    ASSERT(!table_remove_constraint(users_table, test_pager.pager, "uq_users_email", &context));
+
+    // Both logical and physical state remain intact
+    ASSERT(users_table->table_schema->num_constraints == original_constraints);
+    ASSERT(users_table->total_secondary_indexes == original_indexes);
+
+    ASSERT(schema_find_constraint_index(users_table->table_schema, "uq_users_email") >= 0);
+    ASSERT(table_find_index(users_table, "uq_users_email") == unique_index);
+    
+    result = 0;
+
+cleanup:
+    constraint_free(orders_fk);
+
+    if (db_initialized) {
+        destroy_test_database_metadata(&db);
+    }
+
+    if (orders_table) {
+        if (orders_table->is_materialized &&
+            table_drop(orders_table, test_pager.pager)) {
+            orders_table = NULL;
+        }
+
+        if (orders_table) {
+            table_free(orders_table);
+        }
+    }
+
+    if (users_table) {
+        if (users_table->is_materialized &&
+            table_drop(users_table, test_pager.pager)) {
+            users_table = NULL;
+        }
+
+        if (users_table) {
+            table_free(users_table);
+        }
+    }
+
+    schema_free(users_schema);
+    schema_free(orders_schema);
+
+    destroy_test_pager(&test_pager);
+    return result;
+}
+
+static int test_table_remove_constraint_invalid_arguments() {
+    int result = 1;
+
+    TestPager test_pager = {0};
+    Schema *schema = NULL;
+    Table *table = NULL;
+
+    Database db = {0};
+    bool db_initialized = false;
+
+    ASSERT(create_test_pager(&test_pager));
+
+    schema = create_test_schema_with_constraints();
+    ASSERT(schema != NULL);
+
+    table = table_create("users", schema, test_pager.pager);
+    ASSERT(table != NULL);
+
+    Table *tables[] = { table };
+
+    ASSERT(init_test_database(&db, test_pager.pager, tables, 1));
+
+    db_initialized = true;
+
+    EvaluationContext context = {
+        .db = &db,
+        .relation_context = NULL,
+        .relations_count = 0,
+        .transaction = NULL
+    };
+
+    uint32_t original_constraints = table->table_schema->num_constraints;
+
+    uint32_t original_indexes = table->total_secondary_indexes;
+
+    Index *original_primary = table->primary_index;
+
+    Index *original_unique = table_find_index(table, "uq_users_email");
+
+    ASSERT(original_primary != NULL);
+    ASSERT(original_unique != NULL);
+
+    // Invalid argument cases
+    ASSERT(!table_remove_constraint(NULL, test_pager.pager, "uq_users_email", &context));
+
+    ASSERT(!table_remove_constraint(table, NULL, "uq_users_email", &context));
+
+    ASSERT(!table_remove_constraint(table, test_pager.pager, NULL, &context));
+    
+    ASSERT(!table_remove_constraint(table, test_pager.pager, "", &context));
+
+    ASSERT(!table_remove_constraint(table, test_pager.pager, "uq_users_email", NULL));
+
+    EvaluationContext invalid_context = {
+        .db = NULL,
+        .relation_context = NULL,
+        .relations_count = 0,
+        .transaction = NULL
+    };
+
+    ASSERT(!table_remove_constraint(table, test_pager.pager, "uq_users_email", &invalid_context));
+
+    table->is_materialized = false;
+
+    ASSERT(!table_remove_constraint(table, test_pager.pager, "uq_users_email", &context));
+    
+    table->is_materialized = true;
+
+    table->is_deleted = true;
+
+    ASSERT(!table_remove_constraint(table, test_pager.pager, "uq_users_email", &context));
+
+    table->is_deleted = false;
+
+
+    // Validate the original table metadata remained intact after all the attempts
+    ASSERT(table->table_schema->num_constraints == original_constraints);
+    ASSERT(table->total_secondary_indexes == original_indexes);
+    ASSERT(table->primary_index == original_primary);
+
+    ASSERT(table_find_index(table, "uq_users_email") == original_unique);
+    ASSERT(schema_find_constraint_index(table->table_schema, "uq_users_email") >= 0);
+
+    result = 0;
+
+cleanup:
+    if (db_initialized) {
+        destroy_test_database_metadata(&db);
+    }
+
+    if (table) {
+        // Restore these in case an ASSERT jumped to cleanup 
+        // while one of the temporary corruption tests was active.
+        table->is_materialized = true;
+        table->is_deleted = false;
+
+        if (table->is_materialized && table_drop(table, test_pager.pager)) {
+            table = NULL;
+        }
+
+        if (table) {
+            table_free(table);
+        }
+    }
+
+    schema_free(schema);
+    destroy_test_pager(&test_pager);
+
+    return result;
+}
+
+
 /* ---------- Logging Helper ---------- */
 
 void generate_output(int result, int test_num, char *test_desc) {
@@ -2706,6 +3821,34 @@ int main(int argc, char *argv[]) {
     /* ---------- table_mutation error cases ---------- */
     result = test_table_mutation_invalid_arguments();
     generate_output(result, 31, "test_table_mutation_invalid_arguments");
+
+    /* ---------- table_add_constraint unit tests ---------- */
+    result = test_table_add_constraint_primary_key_success();
+    generate_output(result, 32, "test_table_add_constraint_primary_key_success");
+    result = test_table_add_constraint_unique_success();
+    generate_output(result, 33, "test_table_add_constraint_unique_success");
+    result = test_table_add_constraint_not_null_success();
+    generate_output(result, 34, "test_table_add_constraint_not_null_success");
+    result = test_table_add_constraint_duplicate_name();
+    generate_output(result, 35, "test_table_add_constraint_duplicate_name");
+    result = test_table_add_constraint_second_primary_key_rejected();
+    generate_output(result, 36, "test_table_add_constraint_second_primary_key_rejected");
+    result = test_table_add_constraint_unique_duplicate_existing_rows();
+    generate_output(result, 37, "test_table_add_constraint_unique_duplicate_existing_rows");
+    result = test_table_add_constraint_invalid_arguments();
+    generate_output(result, 38, "test_table_add_constraint_invalid_arguments");
+    
+    /* ---------- table_remove_constraint unit tests ---------- */
+    result = test_table_remove_constraint_unique_success();
+    generate_output(result, 39, "test_table_remove_constraint_unique_success");
+    result = test_table_remove_constraint_primary_key_rejected();
+    generate_output(result, 40, "test_table_remove_constraint_primary_key_rejected");
+    result = test_table_remove_constraint_missing_constraint();
+    generate_output(result, 41, "test_table_remove_constraint_missing_constraint");
+    result = test_table_remove_constraint_unique_referenced_by_fk();
+    generate_output(result, 42, "test_table_remove_constraint_unique_referenced_by_fk");
+    result = test_table_remove_constraint_invalid_arguments();
+    generate_output(result, 43, "test_table_remove_constraint_invalid_arguments");
 
     return 0;
 }
