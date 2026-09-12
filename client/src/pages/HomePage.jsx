@@ -423,7 +423,7 @@ function HomePage() {
 
     // Execute SQL query
     function handleQueryRun() {
-        if (!isRunning) {
+        if (isRunning) {
             return;
         }
 
