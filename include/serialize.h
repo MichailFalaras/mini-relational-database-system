@@ -103,5 +103,20 @@ extern bool serialize_page_zero_metadata(uint8_t **write_offset, const PageZeroM
 
 extern bool deserialize_page_zero_metadata(uint8_t **read_offset, PageZeroMetadata *page_zero);
 
+/* ---------- SERIALIZED PAGE SIZE ---------- */
+
+extern size_t serialized_index_metadata_size(const Index *index);
+
+extern size_t serialized_table_metadata_size(const Table *table);
+
+extern size_t serialized_schema_size(const Schema *schema);
+
+extern size_t serialized_column_size(Column *column);
+
+extern size_t serialized_constraint_size(Constraint *constraint);
+
+extern size_t serialized_literal_value_size(Value *literal);
+
+extern size_t serialized_expression_node_size(ExpressionNode *expr_node);
 
 #endif
