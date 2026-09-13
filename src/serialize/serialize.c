@@ -1959,7 +1959,7 @@ size_t serialized_index_metadata_size(const Index *index) {
     }
 
     if (!index->key->num_columns || !index->key->column_index_array) {
-        return false;
+        return (size_t) 0;
     }
     size_t size = 0;
 
@@ -1990,11 +1990,11 @@ size_t serialized_schema_size(const Schema *schema) {
     }
 
     if (schema->num_columns > 0 && !schema->columns) {
-        return 0;
+        return (size_t) 0;
     }
 
     if (schema->num_constraints > 0 && !schema->constraints) {
-        return 0;
+        return (size_t) 0;
     }
     size_t size = 0;
 
@@ -2039,49 +2039,60 @@ size_t serialized_constraint_size(Constraint *constraint) {
         case PRIMARY_KEY: {
             if (constraint->constraint_data.primary_key.amount_columns > 0
                 && !constraint->constraint_data.primary_key.primary_key_columns) {
-                return 0;
+                return (size_t) 0;
             }
-
-            size += sizeof(uint32_t) + sizeof(uint32_t);
+for (uint32_t i = 0; i < constraint->constraint_data.primary_key.amount_columns; i++) {
+      size += sizeof(uint32_t);
+}
+            size += sizeof(uint32_t);
             break;
         }
         case FOREIGN_KEY:
             if (constraint->constraint_data.foreign_key.amount_columns > 0
                 && !constraint->constraint_data.foreign_key.foreign_key_columns) {
-                return 0;
+                return (size_t) 0;
             }
 
             if (constraint->constraint_data.foreign_key.amount_referenced_columns > 0
                 && !constraint->constraint_data.foreign_key.referenced_columns) {
-                return 0;
+                return (size_t) 0;
             }
+for (uint32_t i = 0; i < constraint_data.foreign_key.amount_columns; i++) {
+      size += sizeof(uint32_t);
+}
 
+for (uint32_t i = 0; i < constraint_data.foreign_key.amount_referenced_columns; i++) {
+     size += sizeof(uint32_t);
+}
             size += sizeof(uint32_t)
                     + sizeof(uint32_t)
-                    + sizeof(uint8_t)
-                    + sizeof(uint32_t)
-                    + sizeof(uint32_t);
+                    + 64 * sizeof(uint8_t)
+     
+                    
             break;
         case UNIQUE:
             if (constraint->constraint_data.unique_cols.amount_columns > 0
                 && !constraint->constraint_data.unique_cols.column_refs) {
-                return 0;
+                return (size_t) 0;
             }
-
-            size += sizeof(uint32_t) + sizeof(uint32_t);
+for (uint32_t i = 0; i < constraint_data.unique_cols.amount_cols; i++) {
+      size += sizeof(uint32_t);
+}
+            size += sizeof(uint32_t);
             break;
         case CHECK:
             if (constraint->constraint_data.check.amount_columns > 0
                 && !constraint->constraint_data.check.column_refs) {
-                return 0;
+                return (size_t) 0;
             }
 
             if (!constraint->constraint_data.check.constraint_expr) {
-                return 0;
+                return (size_t) 0;
             }
-
+for (uint32_t i = 0; i < constraint_data.check.amount_columns; i++) {
+      size += sizeof(uint32_t);
+}
             size += sizeof(uint32_t)
-                    + sizeof(uint32_t)
                     + serialized_expression_node_size(constraint->constraint_data.check.constraint_expr);
 
             break;
@@ -2090,7 +2101,7 @@ size_t serialized_constraint_size(Constraint *constraint) {
             break;
         case DEFAULT:
             if (!constraint->constraint_data.default_value.default_expr) {
-                return 0;
+                return (size_t) 0;
             }
 
             size += sizeof(uint32_t)
@@ -2099,7 +2110,7 @@ size_t serialized_constraint_size(Constraint *constraint) {
             break;
         default:
             fprintf(stderr, "serialized_constraint_size: Constraint type does not match.\n");
-            return false;
+            return (size_t) 0;
     }
 
     return size;
@@ -2107,7 +2118,7 @@ size_t serialized_constraint_size(Constraint *constraint) {
 
 size_t serialized_literal_value_size(Value *literal) {
     if (!literal) {
-        return 0;
+        return (size_t) 0;
     }
     size_t size = 0;
 
@@ -2122,7 +2133,7 @@ size_t serialized_literal_value_size(Value *literal) {
             break;
         case CHAR:
             if (!literal->value.char_val.string) {
-                return 0;
+                return (size_t) 0;
             }
 
             size += sizeof(uint32_t) + literal->value.char_val.n*sizeof(uint8_t);             
@@ -2141,7 +2152,7 @@ size_t serialized_literal_value_size(Value *literal) {
         // case JSONB:
         default:
             printf("serialize_literal_value_size: Unsupported data type.\n");
-            return false;
+            return (size_t) 0;
     }
 
     return size;
@@ -2149,7 +2160,7 @@ size_t serialized_literal_value_size(Value *literal) {
 
 size_t serialized_expression_node_size(ExpressionNode *expr_node) {
     if (!expr_node) {
-        return 0;
+        return (size_t) 0;
     }
     size_t size = 0;
 
@@ -2195,7 +2206,7 @@ size_t serialized_expression_node_size(ExpressionNode *expr_node) {
 
             if (expr_node->expression_data.in_expr.option_count > 0
                 && !expr_node->expression_data.in_expr.set_options) {
-                return 0;
+                return (size_t) 0;
             }
 
             size += sizeof(uint32_t);
@@ -2219,7 +2230,7 @@ size_t serialized_expression_node_size(ExpressionNode *expr_node) {
         }
         default:
             fprintf(stderr, "serialized_expression_node_size: Expression type does not match.\n");
-            return false;
+            return (size_t) 0;
     }
 
     return size;
