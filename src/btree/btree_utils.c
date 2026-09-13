@@ -1934,25 +1934,24 @@ BTreeStatus btree_node_delete_at(Pager *pager, BTreePage *btree_page, uint16_t c
         return status;
     }
 
-    if (index->payload_type == BTREE_ROW_PAYLOAD) {
-        // Verify its deletion doesn't cause underflow
-        uint32_t used_space = 
-            (btree_page->cell_count - 1) * sizeof(uint32_t) +
-            (PAGE_SIZE - btree_page->free_space_offset - cell_to_be_removed.cell_size);
+    // Verify its deletion doesn't cause underflow
+    uint32_t used_space = 
+        (btree_page->cell_count - 1) * sizeof(uint32_t) +
+        (PAGE_SIZE - btree_page->free_space_offset - cell_to_be_removed.cell_size);
 
-        status = btree_check_underflow(btree_page, used_space);
+    status = btree_check_underflow(btree_page, used_space);
 
-        btree_cell_contents_free(&cell_to_be_removed, index);
+    btree_cell_contents_free(&cell_to_be_removed, index);
 
-        if (status == BTREE_NODE_UNDERFLOW) {
-            result->underflow = true;
-            return BTREE_NODE_UNDERFLOW;
-        }
-
-        if (status != BTREE_SUCCESS) {
-            return status;
-        }
+    if (status == BTREE_NODE_UNDERFLOW) {
+        result->underflow = true;
+        return BTREE_NODE_UNDERFLOW;
     }
+
+    if (status != BTREE_SUCCESS) {
+        return status;
+    }
+
 
     // Delete cell since it doesn't cause underflow at this point
     status = btree_remove_cell(btree_page, cell_index);
