@@ -58,3 +58,9 @@
     line-height: 1.65;
     border: none;
 }
+
+.sql-matching-bracket {
+    border: 1px solid #6366f1;
+	border-radius: 2px;
+	background-color: rgba(99, 102, 241, 0.04);
+}
