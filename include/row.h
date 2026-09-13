@@ -20,6 +20,8 @@ typedef struct row {
 
 extern Row *row_create(ExpressionNode **values, uint32_t n_columns);
 
+extern Row *row_copy(const Row *original);
+
 extern bool row_mark_deleted(Row *row);
 
 extern Value *row_get_value(const Row *row, uint32_t column_pos);

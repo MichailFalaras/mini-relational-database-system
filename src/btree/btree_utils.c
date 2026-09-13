@@ -10,6 +10,7 @@
 #include "../../include/index.h"
 #include "../../include/row.h"
 #include "../../include/schema.h"
+#include "../src/catalog/catalog_utils.h"
 
 /* Pass address of BTreePage in Stack and then logically connect it with a page. */
 void btree_page_attach(BTreePage *btree_page, Page *page) {
@@ -1428,6 +1429,63 @@ bool key_contains_null_val(Value **key, uint32_t num_keys) {
     return false;
 } 
 
+/* BTreeCellContents deep-copy. */
+BTreeCellContents *btree_cell_contents_copy(Pager *pager, const BTreeCellContents *original, BTreeIndexSpec *spec) {
+    if (original->type > BTREE_INTERNAL_NODE || !original->num_keys
+        || !original->keys || !original->key_size || !original->cell_size) {
+        return NULL;
+    } 
+
+    if (!spec || !spec->schema || spec->payload_type > BTREE_CATALOG_PAYLOAD
+        || !spec->key_size || !spec->index_key || !spec->column_types) {
+        return NULL;
+    }
+
+    BTreeCellContents *copy = (BTreeCellContents *) calloc(1, sizeof(BTreeCellContents));
+    if (!copy) {
+        return NULL;
+    }
+
+    copy->type = original->type;
+    copy->num_keys = original->num_keys;
+    copy->key_size = original->key_size;
+    copy->cell_size = original->cell_size;
+
+    copy->keys = value_array_copy(original->keys, original->num_keys);
+    if (!copy->keys) {
+        return NULL;
+    }
+
+    switch (original->type) {
+        case BTREE_INTERNAL_NODE:
+            copy->BTreePayload.child_pointer = original->BTreePayload.child_pointer;
+            break;
+        case BTREE_LEAF_NODE:
+            if (spec->payload_type == BTREE_CATALOG_PAYLOAD) {
+                copy->BTreePayload.catalog = catalog_payload_copy(pager, original->BTreePayload.catalog);
+                if (!copy->BTreePayload.catalog) {
+                    btree_cell_contents_free(copy, spec);
+                    return NULL;
+                }
+
+                break;
+            }
+
+            copy->BTreePayload.row = row_copy(original->BTreePayload.row);
+            if (!copy->BTreePayload.row) {
+                btree_cell_contents_free(copy, spec);
+                return NULL;
+            }
+            break;
+        default:
+            fprintf(stderr, "btree_cell_contents_copy: Cell Contents Node Type does not match.\n");
+            btree_cell_contents_free(copy, spec);
+            return NULL;
+    }
+
+    return copy;
+}
+
 /* ---------- BTreeSearchEntries Helpers ---------- */
 
 /* The caller owns the BTreeSearchEntries struct */
@@ -1876,22 +1934,24 @@ BTreeStatus btree_node_delete_at(Pager *pager, BTreePage *btree_page, uint16_t c
         return status;
     }
 
-    // Verify its deletion doesn't cause underflow
-    uint32_t used_space = 
-        (btree_page->cell_count - 1) * sizeof(uint32_t) +
-        (PAGE_SIZE - btree_page->free_space_offset - cell_to_be_removed.cell_size);
+    if (index->payload_type == BTREE_ROW_PAYLOAD) {
+        // Verify its deletion doesn't cause underflow
+        uint32_t used_space = 
+            (btree_page->cell_count - 1) * sizeof(uint32_t) +
+            (PAGE_SIZE - btree_page->free_space_offset - cell_to_be_removed.cell_size);
 
-    status = btree_check_underflow(btree_page, used_space);
+        status = btree_check_underflow(btree_page, used_space);
 
-    btree_cell_contents_free(&cell_to_be_removed, index);
+        btree_cell_contents_free(&cell_to_be_removed, index);
 
-    if (status == BTREE_NODE_UNDERFLOW) {
-        result->underflow = true;
-        return BTREE_NODE_UNDERFLOW;
-    }
+        if (status == BTREE_NODE_UNDERFLOW) {
+            result->underflow = true;
+            return BTREE_NODE_UNDERFLOW;
+        }
 
-    if (status != BTREE_SUCCESS) {
-        return status;
+        if (status != BTREE_SUCCESS) {
+            return status;
+        }
     }
 
     // Delete cell since it doesn't cause underflow at this point

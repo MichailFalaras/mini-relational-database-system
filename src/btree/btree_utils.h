@@ -188,7 +188,9 @@ BTreeStatus btree_node_can_lend(BTreePage *lender, uint32_t cell_pointer_index, 
 /* Replace cell by removing what was in its position and inserting another one. */
 BTreeStatus btree_replace_cell(Pager *pager, BTreePage *btree_page, uint32_t cell_pointer_index,
     BTreeCellContents *replacement, BTreeIndexSpec *index);
- 
+    
+/* BTreeCellContents deep-copy. */
+BTreeCellContents *btree_cell_contents_copy(Pager *pager, const BTreeCellContents *original, BTreeIndexSpec *spec);
 
 /* ---------- Shift Cell Pointers & Cell Contents ---------- */
 

@@ -19,6 +19,25 @@ Page *page_create(Pager *pager, uint32_t page_num) {
     return page;
 }
 
+Page *page_copy(Pager *pager, uint32_t page_num) {
+    Page *copy = (Page *) calloc(1, sizeof(Page));
+    if (!copy) {
+        return NULL;
+    }
+
+    Page *original = pager_get_page(pager, page_num);
+    if (!original) {
+        return NULL;
+    }
+
+    copy->is_dirty = original->is_dirty;
+    // copy->last_interacted = original->last_interacted;
+    // last_interacted should be updated regardless
+    memcpy(copy->page_data, original->page_data, PAGE_SIZE);
+    
+    return copy;
+}
+
 /* Create PageZeroMetadata struct & initialize it. */
 PageZeroMetadata *page_zero_create(void) {
     PageZeroMetadata *page_zero = (PageZeroMetadata *) calloc(1, sizeof(PageZeroMetadata));
