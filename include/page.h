@@ -67,6 +67,8 @@ typedef struct page {
 
 extern Page *page_create(Pager *pager, uint32_t page_num);
 
+extern Page *page_copy(Pager *pager, uint32_t page_num);
+
 extern PageZeroMetadata *page_zero_create(void);
 
 extern bool page_mark_dirty(Page *page);

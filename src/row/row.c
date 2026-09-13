@@ -37,6 +37,26 @@ Row *row_create(ExpressionNode **values, uint32_t n_columns) {
     return row;
 }
 
+Row *row_copy(const Row *original) {
+    if (!original || !original->n_columns || !original->values) {
+        return NULL;
+    }
+    
+    Row *copy = (Row *) calloc(1, sizeof(Row));
+    if (!copy) {
+        return NULL;
+    }
+
+    copy->is_deleted = original->is_deleted;
+    copy->n_columns = original->n_columns;
+    copy->values = value_array_copy(original->values, original->n_columns);
+    if (!copy->values) {
+        return NULL;
+    }
+
+    return copy;
+}
+
 /* Mark Row as deleted without freeing it/completely removing
 it from the database. */
 bool row_mark_deleted(Row *row) {
