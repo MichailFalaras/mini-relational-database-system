@@ -6,6 +6,7 @@
 
 typedef struct pager Pager;
 typedef struct table Table;
+typedef struct catalog Catalog;
 
 #define MAX_TABLES 16  
 #define DATABASE_PATH_MAX 256
@@ -17,7 +18,10 @@ typedef struct table Table;
  * table_count: amount of tables in database */
 typedef struct database {
     char pathname[DATABASE_PATH_MAX];
+
+    Catalog *catalog;
     Pager *pager;
+
     Table **tables;
     uint32_t table_count;
 } Database;

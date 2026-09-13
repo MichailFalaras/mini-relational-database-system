@@ -2066,7 +2066,8 @@ retry_deletion:
     // If deletion fails because leaf node is going to underflow after deletion,
     // keep the target entry in place for now and repair the tree,
     // before attempting to deletio again
-    if (status == BTREE_NODE_UNDERFLOW && deletion_res->underflow) {
+    if (index->payload_type == BTREE_ROW_PAYLOAD && // Underflow SHOULD NEVER be checked for Catalog Nodes
+        status == BTREE_NODE_UNDERFLOW && deletion_res->underflow) {
         BTreePage current = leaf_node;
         BTreeMergeResult merge_result = {0};
 

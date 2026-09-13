@@ -7,6 +7,7 @@
 #include "../../include/database.h"
 #include "../../include/pager.h"
 #include "../../include/table.h"
+#include "../../include/catalog.h"
 
 
 /*

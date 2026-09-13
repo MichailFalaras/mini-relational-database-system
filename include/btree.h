@@ -190,6 +190,7 @@ typedef struct btree_entry {
     uint32_t page_num;
     uint16_t cell_index;
 } BTreeEntry;
+
 typedef struct btree_search_entries {
     BTreeEntry *entries;
     uint32_t count;
