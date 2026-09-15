@@ -1136,8 +1136,11 @@ bool serialize_expression_node(uint8_t **write_offset, const ExpressionNode *exp
     return true;
 }
 
-bool deserialize_index_metadata(uint8_t **read_offset, Index **index) {
-    if (!read_offset || !*read_offset || !index) {
+bool deserialize_index_metadata(Pager *pager, BTreeCellContents *catalog_cell, Index **index) {
+    if (!catalog_cell || !catalog_cell->BTreePayload.catalog
+        || catalog_cell->BTreePayload.catalog->type > CATALOG_INDEX
+        || !catalog_cell->BTreePayload.catalog->root_page_num
+        || !catalog_cell->BTreePayload.catalog->metadata_page_num || !index) {
         return false;
     }
 
@@ -1146,9 +1149,21 @@ bool deserialize_index_metadata(uint8_t **read_offset, Index **index) {
         return false;
     }
 
+    // Copy over metadata already stored in CatalogPayload
+    memcpy((*index)->name, catalog_cell->keys[2]->value.char_val.string, 64); // Index name
+    (*index)->root_page_num = catalog_cell->BTreePayload.catalog->root_page_num; // Index Root Page Num
+
+    Page *metadata_page = pager_get_page(pager, catalog_cell->BTreePayload.catalog->metadata_page_num);
+    if (!metadata_page) {
+        index_free(*index);
+        *index = NULL;
+        return false;
+    }
+    uint8_t *read_offset = metadata_page->page_data + sizeof(uint32_t);
+
     uint8_t index_type;
-    memcpy(&index_type, *read_offset, sizeof(uint8_t));
-    *read_offset += sizeof(uint8_t);
+    memcpy(&index_type, read_offset, sizeof(uint8_t));
+    read_offset += sizeof(uint8_t);
 
     if (index_type > SECONDARY_INDEX) {
         index_free(*index);
@@ -1165,8 +1180,8 @@ bool deserialize_index_metadata(uint8_t **read_offset, Index **index) {
         return false;
     }
 
-    memcpy(&(*index)->key->num_columns, *read_offset, sizeof(uint32_t));
-    *read_offset += sizeof(uint32_t);
+    memcpy(&(*index)->key->num_columns, read_offset, sizeof(uint32_t));
+    read_offset += sizeof(uint32_t);
 
     if ((*index)->key->num_columns == 0) {
         index_free(*index);
@@ -1182,13 +1197,13 @@ bool deserialize_index_metadata(uint8_t **read_offset, Index **index) {
     }
 
     for (uint32_t i = 0; i < (*index)->key->num_columns; i++) {
-        memcpy(&(*index)->key->column_index_array[i], *read_offset, sizeof(uint32_t));
-        *read_offset += sizeof(uint32_t);
+        memcpy(&(*index)->key->column_index_array[i], read_offset, sizeof(uint32_t));
+        read_offset += sizeof(uint32_t);
     }
 
     uint8_t is_unique;
-    memcpy(&is_unique, *read_offset, sizeof(uint8_t));
-    *read_offset += sizeof(uint8_t);
+    memcpy(&is_unique, read_offset, sizeof(uint8_t));
+    read_offset += sizeof(uint8_t);
 
     if (is_unique > 1) {
         index_free(*index);
@@ -1206,8 +1221,11 @@ bool deserialize_index_metadata(uint8_t **read_offset, Index **index) {
     return true;
 }
 
-bool deserialize_table_metadata(uint8_t **read_offset, Table **table) {
-    if (!read_offset || !(*read_offset) || !table) {
+bool deserialize_table_metadata(Pager *pager, BTreeCellContents *catalog_cell, Table **table) {
+    if (!catalog_cell || !catalog_cell->BTreePayload.catalog
+        || catalog_cell->BTreePayload.catalog->type > CATALOG_INDEX
+        || !catalog_cell->BTreePayload.catalog->root_page_num
+        || !catalog_cell->BTreePayload.catalog->metadata_page_num || !table) {
         return false;
     }
 
@@ -1216,9 +1234,20 @@ bool deserialize_table_metadata(uint8_t **read_offset, Table **table) {
         return false;
     }
 
+    memcpy((*table)->name, catalog_cell->keys[0]->value.char_val.string, 64); // Table name
+    (*table)->is_deleted = false; // Since we deserialize this from disk means it wasn't deleted
+
+    Page *metadata_page = pager_get_page(pager, catalog_cell->BTreePayload.catalog->metadata_page_num);
+    if (!metadata_page) {
+        table_free(*table);
+        *table = NULL;
+        return false;
+    }
+    uint8_t *read_offset = metadata_page->page_data + sizeof(uint32_t);
+
     uint8_t is_materialized;
-    memcpy(&is_materialized, *read_offset, sizeof(uint8_t));
-    *read_offset += sizeof(uint8_t);
+    memcpy(&is_materialized, read_offset, sizeof(uint8_t));
+    read_offset += sizeof(uint8_t);
 
     if (is_materialized > 1) {
         table_free(*table);
@@ -1230,10 +1259,10 @@ bool deserialize_table_metadata(uint8_t **read_offset, Table **table) {
     // Should be increased when reconstructing indexes
     (*table)->total_secondary_indexes = 0;
 
-    memcpy(&((*table)->row_count), *read_offset, sizeof(uint32_t));
-    *read_offset += sizeof(uint32_t);
+    memcpy(&((*table)->row_count), read_offset, sizeof(uint32_t));
+    read_offset += sizeof(uint32_t);
 
-    (*table)->table_schema = deserialize_schema_metadata(read_offset);
+    (*table)->table_schema = deserialize_schema_metadata(&read_offset);
     if (!(*table)->table_schema) {
         table_free(*table);
         *table = NULL;
@@ -2057,16 +2086,18 @@ for (uint32_t i = 0; i < constraint->constraint_data.primary_key.amount_columns;
                 && !constraint->constraint_data.foreign_key.referenced_columns) {
                 return (size_t) 0;
             }
-for (uint32_t i = 0; i < constraint_data.foreign_key.amount_columns; i++) {
-      size += sizeof(uint32_t);
-}
 
-for (uint32_t i = 0; i < constraint_data.foreign_key.amount_referenced_columns; i++) {
-     size += sizeof(uint32_t);
-}
+            for (uint32_t i = 0; i < constraint->constraint_data.foreign_key.amount_columns; i++) {
+                size += sizeof(uint32_t);
+            }
+
+            for (uint32_t i = 0; i < constraint->constraint_data.foreign_key.amount_referenced_columns; i++) {
+                size += sizeof(uint32_t);
+            }
+
             size += sizeof(uint32_t)
                     + sizeof(uint32_t)
-                    + 64 * sizeof(uint8_t)
+                    + 64 * sizeof(uint8_t);
      
                     
             break;
@@ -2075,9 +2106,11 @@ for (uint32_t i = 0; i < constraint_data.foreign_key.amount_referenced_columns; 
                 && !constraint->constraint_data.unique_cols.column_refs) {
                 return (size_t) 0;
             }
-for (uint32_t i = 0; i < constraint_data.unique_cols.amount_cols; i++) {
-      size += sizeof(uint32_t);
-}
+
+            for (uint32_t i = 0; i < constraint->constraint_data.unique_cols.amount_columns; i++) {
+                size += sizeof(uint32_t);
+            }
+
             size += sizeof(uint32_t);
             break;
         case CHECK:
@@ -2089,9 +2122,11 @@ for (uint32_t i = 0; i < constraint_data.unique_cols.amount_cols; i++) {
             if (!constraint->constraint_data.check.constraint_expr) {
                 return (size_t) 0;
             }
-for (uint32_t i = 0; i < constraint_data.check.amount_columns; i++) {
-      size += sizeof(uint32_t);
-}
+
+            for (uint32_t i = 0; i < constraint->constraint_data.check.amount_columns; i++) {
+                size += sizeof(uint32_t);
+            }
+            
             size += sizeof(uint32_t)
                     + serialized_expression_node_size(constraint->constraint_data.check.constraint_expr);
 
@@ -2168,7 +2203,7 @@ size_t serialized_expression_node_size(ExpressionNode *expr_node) {
 
     switch (expr_node->type) {
         case EXPR_LITERAL:
-            size += serialized_literal_value_size(&expr_node->expression_data.literal_value);
+            size += serialized_literal_value_size(expr_node->expression_data.literal_value.literal);
             break;
         case EXPR_COLUMN_REF:
             size += 64*sizeof(uint8_t)
