@@ -1430,7 +1430,7 @@ bool key_contains_null_val(Value **key, uint32_t num_keys) {
 } 
 
 /* BTreeCellContents deep-copy. */
-BTreeCellContents *btree_cell_contents_copy(Pager *pager, const BTreeCellContents *original, BTreeIndexSpec *spec) {
+BTreeCellContents *btree_cell_contents_copy(const BTreeCellContents *original, BTreeIndexSpec *spec) {
     if (original->type > BTREE_INTERNAL_NODE || !original->num_keys
         || !original->keys || !original->key_size || !original->cell_size) {
         return NULL;
@@ -1462,7 +1462,7 @@ BTreeCellContents *btree_cell_contents_copy(Pager *pager, const BTreeCellContent
             break;
         case BTREE_LEAF_NODE:
             if (spec->payload_type == BTREE_CATALOG_PAYLOAD) {
-                copy->BTreePayload.catalog = catalog_payload_copy(pager, original->BTreePayload.catalog);
+                copy->BTreePayload.catalog = catalog_payload_copy(original->BTreePayload.catalog);
                 if (!copy->BTreePayload.catalog) {
                     btree_cell_contents_free(copy, spec);
                     return NULL;

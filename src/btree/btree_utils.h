@@ -190,7 +190,7 @@ BTreeStatus btree_replace_cell(Pager *pager, BTreePage *btree_page, uint32_t cel
     BTreeCellContents *replacement, BTreeIndexSpec *index);
     
 /* BTreeCellContents deep-copy. */
-BTreeCellContents *btree_cell_contents_copy(Pager *pager, const BTreeCellContents *original, BTreeIndexSpec *spec);
+BTreeCellContents *btree_cell_contents_copy(const BTreeCellContents *original, BTreeIndexSpec *spec);
 
 /* ---------- Shift Cell Pointers & Cell Contents ---------- */
 

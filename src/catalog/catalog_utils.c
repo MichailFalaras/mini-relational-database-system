@@ -2,9 +2,12 @@
 #include <stdlib.h>
 #include "../../include/catalog.h"
 #include "../../include/btree.h"
+#include "../src/btree/btree_utils.h"
 #include "../../include/data_types.h"
 #include "../../include/pager.h"
 #include "../../include/page.h"
+#include "../../include/serialize.h"
+#include "../../include/index.h"
 
 /* Create Catalog Key from CatalogRecordInfo.
  *
@@ -13,8 +16,8 @@
  * object_name: CHAR(64). */
 bool create_catalog_key(CatalogRecordInfo *record_info, Value ***key) {
     if (!record_info || record_info->type > CATALOG_INDEX
-        || !record_info->table_name || record_info->table_name[0] == '\0'
-        || !record_info->object_name || !record_info->root_page_num || !key) {
+        || record_info->table_name[0] == '\0' || record_info->table_name[0] == '\0'
+        || record_info->object_name[0] == '\0' || !record_info->root_page_num || !key) {
         return false;
     }
 
@@ -68,8 +71,8 @@ bool create_catalog_key(CatalogRecordInfo *record_info, Value ***key) {
 /* Returns Table's/Index's serialized metadata size. */
 size_t get_catalog_payload_serialized_size(CatalogRecordInfo *record_info) {
     if (!record_info || record_info->type > CATALOG_INDEX
-        || !record_info->table_name || record_info->table_name[0] == '\0'
-        || !record_info->object_name || !record_info->root_page_num) {
+        || record_info->table_name[0] == '\0' || record_info->table_name[0] == '\0'
+        || record_info->object_name[0] == '\0' || !record_info->root_page_num) {
         return 0;
     }
 
@@ -87,8 +90,8 @@ size_t get_catalog_payload_serialized_size(CatalogRecordInfo *record_info) {
 /* Persist Catalog payload. (Table/Index metadata). */
 bool persist_catalog_payload(CatalogRecordInfo *record_info, uint8_t **write_offset) {
     if (!record_info || record_info->type > CATALOG_INDEX
-        || !record_info->table_name || record_info->table_name[0] == '\0'
-        || !record_info->object_name || !record_info->root_page_num) {
+        || record_info->table_name[0] == '\0' || record_info->table_name[0] == '\0'
+        || record_info->object_name[0] == '\0' || !record_info->root_page_num) {
         return false;
     }
 
@@ -116,25 +119,28 @@ bool persist_catalog_payload(CatalogRecordInfo *record_info, uint8_t **write_off
 }
 
 /* Deserialize Catalog Payload. (Table/Index metadata). */
-bool read_catalog_payload(CatalogRecordInfo *record_info, uint8_t **read_offset) {
+bool read_catalog_payload(Pager *pager, CatalogRecordInfo *record_info, BTreeCellContents *catalog_cell) {
     if (!record_info || record_info->type > CATALOG_INDEX
-        || !record_info->table_name || record_info->table_name[0] == '\0'
-        || !record_info->object_name || !record_info->root_page_num) {
+        || record_info->table_name[0] == '\0' || record_info->table_name[0] == '\0'
+        || record_info->object_name[0] == '\0' || !record_info->root_page_num) {
         return false;
     }
 
-    if (!read_offset || !(*read_offset)) {
+    if (!catalog_cell || !catalog_cell->BTreePayload.catalog
+        || catalog_cell->BTreePayload.catalog->type > CATALOG_INDEX
+        || !catalog_cell->BTreePayload.catalog->root_page_num
+        || !catalog_cell->BTreePayload.catalog->metadata_page_num || !pager) {
         return false;
     }
 
     switch (record_info->type) {
         case CATALOG_TABLE:
-            if (!deserialize_table_metadata(read_offset, record_info->object.table)) {
+            if (!deserialize_table_metadata(pager, catalog_cell, record_info->object.table)) {
                 return false;
             }
             break;
         case CATALOG_INDEX:
-            if (!deserialize_index_metadata(read_offset, record_info->object.index)) {
+            if (!deserialize_index_metadata(pager, catalog_cell, record_info->object.index)) {
                 return false;
             }
             break;
@@ -315,8 +321,8 @@ copies_cleanup:
 }
 
 /* CatalogPayload metadata copy. */
-CatalogPayload *catalog_payload_copy(Pager *pager, const CatalogPayload *payload) {
-    if (!pager || !payload || !payload->metadata_page_num
+CatalogPayload *catalog_payload_copy(const CatalogPayload *payload) {
+    if (!payload || !payload->metadata_page_num
         || !payload->root_page_num || payload->type > CATALOG_INDEX) {
         return NULL;
     }
@@ -331,4 +337,126 @@ CatalogPayload *catalog_payload_copy(Pager *pager, const CatalogPayload *payload
     copy->metadata_page_num = payload->metadata_page_num;
 
     return copy;
+}
+
+/* BTreeSearchEntries to CatalogLookupResult. */
+bool btree_search_entries_to_lookup_result(BTreeIndexSpec *spec, BTreeSearchEntries *search_entries, CatalogLookupResult **lookup_result) {
+    if (!search_entries || !search_entries->entries
+        || !search_entries->capacity || !search_entries->count) {
+        return false;
+    }
+
+    if ( !spec->schema || spec->payload_type != BTREE_CATALOG_PAYLOAD
+        || spec->key_size != CATALOG_KEY_SIZE || !spec->is_unique 
+        || !spec->index_key || !spec->index_key->column_index_array
+        || !spec->index_key->num_columns || !spec->column_types) {
+        return false;
+    }
+
+    if (!lookup_result || !(*lookup_result)) {
+        return false;
+    }
+
+    (*lookup_result)->num_records = search_entries->count;
+    (*lookup_result)->records = (CatalogRecord *) calloc((*lookup_result)->num_records, sizeof(CatalogRecord));
+    if (!(*lookup_result)->records) {
+        return false;
+    }
+
+    for (uint32_t i = 0; i < (*lookup_result)->num_records; i++) {
+        (*lookup_result)->records[i].cell = btree_cell_contents_copy(&search_entries->entries[i].cell, spec);
+        if (!(*lookup_result)->records[i].cell) {
+            for (uint32_t j = 0; j < i; j++) {
+                btree_cell_contents_free((*lookup_result)->records[j].cell, spec);
+            }
+            return false;
+        }
+
+        (*lookup_result)->records[i].cell_index = search_entries->entries[i].cell_index;
+        (*lookup_result)->records[i].page_num = search_entries->entries[i].page_num;
+    }
+
+    return true;
+}
+
+/* BTreeCellContents to CatalogRecordInfo for lookup purposes. */
+bool btree_cell_contents_to_catalog_record_info(BTreeIndexSpec *spec, BTreeCellContents *cell, CatalogRecordInfo *record_info) {
+    if (!cell || cell->type != BTREE_LEAF_NODE
+        || cell->num_keys != CATALOG_KEY_COUNT || !cell->keys
+        || cell->key_size != CATALOG_KEY_SIZE || cell->cell_size != CATALOG_CELL_SIZE
+        || !cell->BTreePayload.catalog || cell->BTreePayload.catalog->type > CATALOG_INDEX
+        || !cell->BTreePayload.catalog->root_page_num || !cell->BTreePayload.catalog->metadata_page_num) {
+        return false;
+    }
+
+    if (!record_info || spec->payload_type != BTREE_CATALOG_PAYLOAD) {
+        return false;
+    }
+
+    if (cell->keys[0]->type != CHAR || cell->keys[0]->value.char_val.n >= 64
+        || cell->keys[1]->type != UNSIGNED_INTEGER
+        || cell->keys[2]->type != CHAR || cell->keys[2]->value.char_val.n >= 64) {
+        return false;
+    }
+
+    memcpy(record_info->table_name, cell->keys[0]->value.char_val.string, 64);
+    record_info->table_name[63] = '\0';
+
+    record_info->type = cell->BTreePayload.catalog->type;
+
+    memcpy(record_info->object_name, cell->keys[2]->value.char_val.string, 64);
+    record_info->object_name[63] = '\0';
+
+    return true;
+}
+
+/* Replace specific catalog cell/record with a new one. */
+CatalogStatus catalog_replace_record(const Catalog *catalog, CatalogRecordInfo *record_info, BTreeCellContents *cell) {
+    if (!catalog || !catalog->btree 
+        || !catalog->btree->pager || !catalog->btree->root_page_num
+        || !catalog->spec.schema || catalog->spec.payload_type != BTREE_CATALOG_PAYLOAD
+        || catalog->spec.key_size != CATALOG_KEY_SIZE || !catalog->spec.is_unique 
+        || !catalog->spec.index_key || !catalog->spec.index_key->column_index_array
+        || !catalog->spec.index_key->num_columns || !catalog->spec.column_types) {
+        return CATALOG_INVALID_ARGUMENTS;
+    }
+
+    if (!cell || cell->type != BTREE_LEAF_NODE
+        || cell->num_keys != CATALOG_KEY_COUNT || !cell->keys
+        || cell->key_size != CATALOG_KEY_SIZE || cell->cell_size != CATALOG_CELL_SIZE
+        || !cell->BTreePayload.catalog || cell->BTreePayload.catalog->type > CATALOG_INDEX
+        || !cell->BTreePayload.catalog->root_page_num || !cell->BTreePayload.catalog->metadata_page_num) {
+        return CATALOG_INVALID_ARGUMENTS;
+    }
+
+    CatalogLookupResult lookup_result = {0};
+    CatalogLookupStatus status = catalog_lookup_record(catalog, record_info, &lookup_result);
+    if (status != CATALOG_LOOKUP_SUCCESS) {
+        if (lookup_result.records) {
+            if (lookup_result.records[0].cell) {
+                btree_cell_contents_free(lookup_result.records[0].cell, &catalog->spec);
+            }
+            free(lookup_result.records);
+        }
+        
+        return status;
+    }
+
+    status = catalog_delete_record(catalog, lookup_result.records[0].cell);
+    if (status != CATALOG_SUCCESS) {
+        if (lookup_result.records[0].cell) { btree_cell_contents_free(lookup_result.records[0].cell, &catalog->spec); }
+        free(lookup_result.records);
+        return status;
+    }
+    
+    status = catalog_insert_record(catalog, cell);
+    if (status != CATALOG_SUCCESS) {
+        btree_cell_contents_free(lookup_result.records[0].cell, &catalog->spec);
+        free(lookup_result.records);
+        return status;
+    }
+
+    btree_cell_contents_free(lookup_result.records[0].cell, &catalog->spec);
+    free(lookup_result.records);
+    return CATALOG_SUCCESS;
 }

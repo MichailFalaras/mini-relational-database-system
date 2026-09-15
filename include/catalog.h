@@ -62,9 +62,15 @@ typedef struct catalog_payload {
     uint32_t metadata_page_num;
 } CatalogPayload;
 
-typedef struct catalog_lookup_result {
+typedef struct catalog_record {
     BTreeCellContents *cell;
+    uint32_t cell_index;
     uint32_t page_num;
+} CatalogRecord;
+
+typedef struct catalog_lookup_result {
+    CatalogRecord *records;
+    uint32_t num_records;
 } CatalogLookupResult;
 
 typedef struct catalog_metadata_pages {
@@ -89,11 +95,16 @@ extern CatalogStatus catalog_create_metadata_pages(const Catalog *catalog, Catal
 /* Store all Table's/Index's metadata throughout all pages created. */
 extern CatalogStatus catalog_persist_metadata_pages(const Catalog *catalog, CatalogRecordInfo *record_info, uint32_t metadata_page_num);
 
-/* Reconstruct Table's/Index's metadata from Metadata Pages. */
-extern CatalogStatus catalog_read_metadata_pages(const Catalog *catalog, CatalogRecordInfo *record_info, uint32_t metadata_page_num);
+/* Reconstruct Table's/Index's as a complete struct from Metadata Pages
+ * & corresponding Catalog Cell. */
+extern CatalogStatus catalog_read_metadata_pages(const Catalog *catalog, BTreeCellContents *catalog_cell, CatalogRecordInfo *record_info,
+    uint32_t metadata_page_num);
 
 /* Release all Metadata Pages from last to first. */
 extern CatalogStatus catalog_release_metadata_pages(const Catalog *catalog, uint32_t metadata_page_num);
+
+/* Catalog scan and return all Leaf Node Catalog Cells in CatalogLookupResult. */
+extern CatalogLookupStatus catalog_scan(const Catalog *catalog, CatalogLookupResult *lookup_result);
 
 /* ---------- CATALOG ORCHESTRATION ---------- */
 
