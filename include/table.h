@@ -104,6 +104,9 @@ extern bool table_truncate(Table *table, Pager *pager);
 extern bool table_create_index(Table *table, const char *index_name, IndexType type, 
     const IndexKey *key, Pager *page, bool is_unique);
 
+/* Append already initialized Index to Table's Index ptrs. */
+extern bool table_append_index(Table *table, Index *index);
+
 extern bool table_drop_index(Table *table, const char *index_name, Pager *page);
 
 // Exact key search
