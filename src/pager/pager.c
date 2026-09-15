@@ -108,13 +108,6 @@ Pager *pager_open(const char *pathname) {
             close(fd);
             return NULL;
         }
-
-        page = pager_get_page(pager, 1);
-        if (!page) {
-            pager_free(pager);
-            close(fd);
-            return NULL;
-        }
     }
     return pager;
 }
@@ -156,29 +149,7 @@ bool pager_initialize_new_database(Pager *pager) {
         return false;
     }
 
-    if (!pager_allocate_page(pager, &page_num)) {
-        return false;
-    }
-    /* Should be: page_num == 1 */
-    page = pager_get_page(pager, page_num);
-    if (!page) {
-        page_free(page);
-        page_free(pager->pages[0]);
-        pager->pages[0] = NULL;
-        pager->pages[1] = NULL;
-        return false;
-    }
-    /* B+Tree functions responsible for storing information in system catalog
-     * since it's normal B+Tree. */
-    if (!page_clear(pager, page)) {
-        page_free(page);
-        page_free(pager->pages[0]);
-        pager->pages[0] = NULL;
-        pager->pages[1] = NULL;
-        return false;
-    }
-
-    pager->num_pages = 2;
+    pager->num_pages = 1;
     return true;
 }
 

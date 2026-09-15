@@ -12,6 +12,7 @@
 #define SUPERBLOCK_PAGE_NUM 0
 #define DB_MAGIC_STRING "rdbms-c-v"
 #define DB_MAGIC_STRING_LEN 10
+#define RDBMS_VERSION 1
 
 typedef struct pager Pager;
 

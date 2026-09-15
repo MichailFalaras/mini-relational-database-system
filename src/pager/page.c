@@ -49,7 +49,7 @@ PageZeroMetadata *page_zero_create(void) {
     memcpy(page_zero->magic, DB_MAGIC_STRING, DB_MAGIC_STRING_LEN);
     page_zero->version = 1;
     page_zero->page_size = PAGE_SIZE;
-    page_zero->catalog_root = 1;
+    page_zero->catalog_root = UINT32_MAX;
     page_zero->free_list_head = 0;
     
     return page_zero;
