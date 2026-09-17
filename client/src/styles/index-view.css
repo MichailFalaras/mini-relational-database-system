@@ -5,20 +5,20 @@
     overflow: auto;
 }
 
-table {
+#index-view table {
     min-width: 100%;
     border-collapse: collapse;
     font-size: 0.75rem;
 }
 
-thead {
+#index-view thead {
     background-color: #F9FAFB;
     position: sticky;
     top: 0;
     z-index: 10;
 }
 
-thead > tr {
+#index-view thead > tr {
     border-bottom: 1px solid rgba(0, 0, 0, 0.07);
 }
 

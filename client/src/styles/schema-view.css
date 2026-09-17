@@ -39,20 +39,20 @@
     color: #9CA3AF;
 }
 
-table {
+#table-schema table {
     min-width: 100%;
     border-collapse: collapse;
     font-size: 12px;
 }
 
-thead {
+#table-schema thead {
     background-color: #F9FAFB;
     position: sticky;
     top: 0;
     z-index: 10;
 }
 
-thead > tr {
+#table-schema thead > tr {
     border-bottom: 1px solid rgba(0,0,0,0.07);
 }
 
