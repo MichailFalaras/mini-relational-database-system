@@ -43,10 +43,10 @@ function ResultsPanel({ result, isRunning, tables, indexes, activeTable, updateS
 				})}
 
 				<div id="execution-time">
-					{result && result.type !== "error" && (
+					{result?.executionTime != null && (
 						<div>
 							<Clock style={{ width: "0.875rem", height: "0.875rem" }}/>
-							<span>{result?.executionTime ?? 5}ms</span>
+							<span>{result?.executionTime}ms</span>
 						</div>
 					) }
 				</div>

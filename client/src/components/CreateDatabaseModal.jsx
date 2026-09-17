@@ -52,7 +52,7 @@ function CreateDatabaseModal({ onCreate, onCancel }) {
 		setConnecting(true);
 		
 		try {
-			await onConnect({
+			await onCreate({
 				databaseName: form.databaseName.trim(),
 				username: form.username.trim(),
 				password: form.password.trim()
