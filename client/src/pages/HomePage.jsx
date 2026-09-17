@@ -205,6 +205,16 @@ const HISTORY = [
         }}
 ];
 
+
+// Status text options for the Footer section 
+const STATUS_TEXT = {
+    idle: "Ready",
+    executing: "Executing...",
+    success: "Query completed",
+    error: "Query failed"
+};
+
+
 function HomePage() {
     // Header-related state
     const [isRefreshing, setIsRefreshing] = useState(false);
@@ -259,14 +269,14 @@ function HomePage() {
     const [activeConnId, setActiveConnId] = useState(1);
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [connModal, setConnModal] = useState(undefined);
-    const [isRunning, setIsRunning] = useState(false);
+    const [executionStatus, setExecutionStatus] = useState("idle");
+
+    let isRunning = executionStatus === "executing";
+    let statusText = STATUS_TEXT[executionStatus];
 
     let activeConn = connections.find((conn) => conn.id === activeConnId);
-    let statusText = isRunning
-        ? "Executing..."
-        : "Ready";
-
     
+
     // Connect to an existing database or create a new connection
     async function handleConnectDatabase(data) {
         // TODO: API call
@@ -397,6 +407,7 @@ function HomePage() {
     const [isSQLCopied, setIsSQLCopied] = useState(false);
     const [result, setResult] = useState(null);
     const [activeTable, setActiveTable] = useState(TABLES[1]?.name);
+    const [resultPanel, setResultPanel] = useState("results");
     const [history, setHistory] = useState(HISTORY);
 
     // Copy SQL text to clipboard
@@ -418,16 +429,22 @@ function HomePage() {
     // Select table in the sidebar
     function selectTable(tableName) {
         setActiveTable(tableName);
+        setResultPanel("schema");
+
         updateSQL(`SELECT *\nFROM ${tableName}\nLIMIT ${settings.defaultLimit}`);
+
     }
 
     // Execute SQL query
     async function handleQueryRun() {
-        if (isRunning) {
+        if (executionStatus === "executing") {
             return;
         }
-
-        setIsRunning(true);
+        
+        // Start new execution
+        setResultPanel("results");
+        setExecutionStatus("executing");
+        setResult(null);
 
         try {
             // API call
@@ -442,10 +459,17 @@ function HomePage() {
                 columns: MOCK_ROWS.users.columns,
                 executionTime: 50
             });
-        } finally {
-            setIsRunning(false);
-        }
 
+            setExecutionStatus("success");
+        
+        } catch(error) {
+            setResult({
+                type: "error",
+                error: error.message
+            });
+
+            setExecutionStatus("error");
+        }
     }
 
 
@@ -579,6 +603,8 @@ function HomePage() {
                                 tables={TABLES}
                                 indexes={INDEXES}
                                 activeTable={activeTable}
+                                resultPanel={resultPanel}
+                                setResultPanel={setResultPanel}
                                 updateSQL={updateSQL}
                                 history={history}
                                 setHistory={setHistory}
@@ -597,7 +623,7 @@ function HomePage() {
 
                 <div style={{ width: "1px", height: "0.75rem", backgroundColor: "rgba(0,0,0,0.1)" }} />
                 
-                <span style={{ color: result?.type === "error" ? "#dc2626" : "#9ca3af" }}>{statusText}</span>
+                <span className={`footer-execution-status ${executionStatus}`}>{statusText}</span>
                 
                 <div className="status-info">
                     <span>UTF-8</span>

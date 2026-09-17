@@ -53,8 +53,9 @@ function ResultsTable({ result, isRunning }) {
 								? "Statement executed successfully"
 								: `${result?.rowsAffected} row${result?.rowsAffected !== 1 ? "s" : ""} affected`
 							}
-							{" - "}
-							{result?.executionTime}ms
+							{result?.executionTime != null && (
+								<>{" - "}{result.executionTime}ms</>
+							)}
 						</p>
 					</div>
 				</div>

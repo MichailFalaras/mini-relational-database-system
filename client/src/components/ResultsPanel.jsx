@@ -1,4 +1,3 @@
-import { useState } from "react";
 import ResultsTable from "./ResultsTable.jsx";
 import SchemaView from "./SchemaView.jsx";
 import IndexView from "./IndexView.jsx";
@@ -8,8 +7,9 @@ import "./../styles/results-panel.css"
 
 const RESULTS_TABS = ["results", "schema", "indexes", "history"];
 
-function ResultsPanel({ result, isRunning, tables, indexes, activeTable, updateSQL, history, setHistory }) {
-	const [resultPanel, setResultPanel] = useState(RESULTS_TABS[0]);
+function ResultsPanel({ result, isRunning, tables, indexes, activeTable, resultPanel, setResultPanel,
+	updateSQL, history, setHistory }) {
+	
 
 	return (
 		<div id="results-panel">
