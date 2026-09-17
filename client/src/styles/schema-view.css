@@ -137,6 +137,47 @@
     background-color: rgba(37, 99, 235, 0.07);
 }
 
+.column-constraints { padding: 0.5rem 1rem; }
+
+.column-constraints-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    align-items: flex-start;
+}
+
+.column-constraint {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    width: fit-content;
+    padding: 0.125rem 0.375rem;
+    border: 1px solid;
+    border-radius: 0.25rem;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px;
+    white-space: normal;
+    overflow-wrap: break-word;
+    max-width: 400px;
+}
+
+.column-constraint.unique {
+    color: #7C3AED;
+    background-color: rgba(124, 58, 237, 0.06);
+    border-color: rgba(124, 58, 237, 0.2);
+}
+
+.column-constraint.check {
+    color: #B45309;
+    background-color: rgba(180, 83, 9, 0.06);
+    border-color: rgba(180, 83, 9, 0.2);
+}
+
+.column-no-constraints {
+    color: #D1D5DB;
+    font-size: 11px;
+}
+
 .column-default-value {
     padding: 0.5rem 1rem;
     font-family: 'JetBrains Mono', monospace;

@@ -2,7 +2,7 @@ import { Key, Table2 } from "lucide-react";
 import "./../styles/schema-view.css";
 
 
-const COLUMN_FEATURES = ["Column", "Type", "Nullable", "Key", "Default"];
+const COLUMN_FEATURES = ["Column", "Type", "Nullable", "Key", "Constraints", "Default"];
 
 
 function SchemaView({ tableName, tables }) {
@@ -73,6 +73,40 @@ function SchemaView({ tableName, tables }) {
 								{col?.fk && (
 									<span className="column-fk-status">→ {col?.fk}</span>
 								)}
+
+								{!col.pk && !col.fk && (
+									<span style={{ opacity: 0.4 }}>-</span>
+								)}
+							</td>
+
+							{/* Constraints */}
+							<td className="column-constraints">
+								{col?.constraints?.length > 0 
+									? (
+										<div className="column-constraints-list">
+											{col.constraints.map((constraint, index) => {
+												const isUnique = /^UNIQUE/i.test(constraint);
+												const isCheck = /^CHECK/i.test(constraint);
+
+												return (
+													<span
+														key={`${constraint}-${index}`}
+														className={`column-constraint ${
+															isUnique
+																? "unique"
+																: isCheck
+																	? "check"
+																	: ""
+														}`}
+													>
+														{constraint}
+													</span>
+												);
+											})}
+										</div>
+									)
+									: <span className="column-no-constraints">—</span>
+								}
 							</td>
 
 							{/* Default Value */}
