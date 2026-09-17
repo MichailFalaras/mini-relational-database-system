@@ -99,25 +99,35 @@ function ResultsTable({ result, isRunning }) {
 
 				{/* Table Body */}
 				<tbody>
-					{result?.rows?.map((row, rowIndex) => (
-						<tr key={rowIndex} className="table-row">
+					{result?.rows?.length === 0 
+						? (
+							<tr>
+								<td id="results-table-no-rows" colSpan={(result?.columns?.length ?? 0) + 1}>
+									No rows returned
+								</td>
+							</tr>
+						)
+					 	: (
+							result?.rows?.map((row, rowIndex) => (
+								<tr key={rowIndex} className="table-row">
 
-							<td className="table-row-index">{rowIndex + 1}</td>
-							{result?.columns?.map((col) => {
-								const val = row[col];
-								const isNull = val === null || val === undefined;
+									<td className="table-row-index">{rowIndex + 1}</td>
+									{result?.columns?.map((col) => {
+										const val = row[col];
+										const isNull = val === null || val === undefined;
 
-								return (
-									<td 
-										key={col} 
-										className={`table-row-data ${isNull ? "null" : ""}`}
-										style={{ color: cellColor(val) }}
-									>
-										{formatValue(val)}
-									</td>
-								);
-							})}
-						</tr>
+										return (
+											<td 
+												key={col} 
+												className={`table-row-data ${isNull ? "null" : ""}`}
+												style={{ color: cellColor(val) }}
+											>
+												{formatValue(val)}
+											</td>
+										);
+									})}
+								</tr>
+							)
 					))}
 				</tbody>
 			</table>

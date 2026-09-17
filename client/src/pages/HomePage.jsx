@@ -395,7 +395,7 @@ function HomePage() {
 
     // Editor-related state
     const [isSQLCopied, setIsSQLCopied] = useState(false);
-    const [result, setResult] = useState({ type: "select", rows: MOCK_ROWS.users.rows, columns: MOCK_ROWS.users.columns, executionTime: 50});
+    const [result, setResult] = useState(null);
     const [activeTable, setActiveTable] = useState(TABLES[1]?.name);
     const [history, setHistory] = useState(HISTORY);
 
@@ -422,7 +422,7 @@ function HomePage() {
     }
 
     // Execute SQL query
-    function handleQueryRun() {
+    async function handleQueryRun() {
         if (isRunning) {
             return;
         }
@@ -432,6 +432,16 @@ function HomePage() {
         try {
             // API call
             // Set results state
+            
+            // Mock API Query
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+
+            setResult({
+                type: "select",
+                rows: [], //MOCK_ROWS.users.rows,
+                columns: MOCK_ROWS.users.columns,
+                executionTime: 50
+            });
         } finally {
             setIsRunning(false);
         }
