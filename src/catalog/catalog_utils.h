@@ -1,6 +1,13 @@
 #ifndef CATALOG_UTILS_H_
 #define CATALOG_UTILS_H_
 
+typedef struct catalog Catalog;
+typedef struct catalog_lookup_result CatalogLookupResult;
+typedef struct catalog_record_info CatalogRecordInfo;
+typedef struct catalog_metadata_pages CatalogMetadataPages;
+typedef enum catalog_lookup_status CatalogLookupStatus;
+typedef enum catalog_status CatalogStatus;
+
 /* Create Catalog Key from CatalogRecordInfo. */
 bool create_catalog_key(CatalogRecordInfo *record_info, Value ***key);
 

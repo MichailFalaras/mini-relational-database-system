@@ -8,10 +8,11 @@
 #include "../../include/table.h"
 #include "../../include/index.h"
 #include "../src/btree/btree_utils.h"
+#include "../../include/serialize.h"
 
 /* Superblock Page Validation. */
 bool validate_superblock_page(Pager *pager, PageZeroMetadata *page_zero_metadata) {
-    if (!pager || !pager->num_pages || !pager->pages
+    if (!pager || !pager->num_pages
         || !pager->file_length || !pager->fd) {
         return false;
     }
@@ -43,7 +44,7 @@ bool validate_superblock_page(Pager *pager, PageZeroMetadata *page_zero_metadata
 
 /* Reconstruct Database from System Catalog B+Tree & metadata pages.*/
 bool reconstruct_system_catalog(Database *db, CatalogLookupResult *lookup_result) {
-    if (!db || !db->pager || !db->pathname || !db->tables) {
+    if (!db || !db->pager || !db->tables) {
         return false;
     }
 
@@ -77,7 +78,7 @@ bool reconstruct_system_catalog(Database *db, CatalogLookupResult *lookup_result
         }
 
         if (lookup_result->records[i].cell->BTreePayload.catalog->type == CATALOG_INDEX) {
-            index_records[num_index_records] = lookup_result->records[i].cell;
+            index_records[num_index_records]->cell = lookup_result->records[i].cell;
             num_index_records++;
             continue;
         }
@@ -153,8 +154,7 @@ cleanup:
 
 /* Update metadata pages. Used in database_close(). */
 bool update_metadata_pages(Database *db) {
-    if (!db || !db->pager 
-        || !db->catalog || !db->pathname 
+    if (!db || !db->pager || !db->catalog
         || !db->table_count || !db->tables) {
         return false;
     }
@@ -316,12 +316,12 @@ bool update_metadata_pages(Database *db) {
 
     // Free copies of all metadata pages
     for (uint32_t j = 0; j < table_metadata.num_pages; j++) {
-        CatalogStatus status = catalog_release_metadata_pages(db->catalog, table_metadata.pages[j]);
+        catalog_release_metadata_pages(db->catalog, table_metadata.pages[j]->page_num);
         // Free as many as possible, don't check status
     }
 
     for (uint32_t j = 0; j < index_metadata.num_pages; j++) {
-        CatalogStatus status = catalog_release_metadata_pages(db->catalog, index_metadata.pages[j]);
+        catalog_release_metadata_pages(db->catalog, index_metadata.pages[j]->page_num);
         // Free as many as possible, don't check status
     }
 
@@ -364,7 +364,7 @@ restore_old_metadata:
         // to restore old data
         memcpy(
             &lookup_result.records[0].cell->BTreePayload.catalog->metadata_page_num,
-            table_metadata.pages[table_metadata_idx]->page_num,
+            &table_metadata.pages[table_metadata_idx]->page_num,
             sizeof(uint32_t)
         );
         table_metadata_idx++;
@@ -399,7 +399,7 @@ restore_old_metadata:
 
         memcpy(
             &lookup_result.records[0].cell->BTreePayload.catalog->metadata_page_num,
-            index_metadata.pages[index_metadata_idx]->page_num,
+            &index_metadata.pages[index_metadata_idx]->page_num,
             sizeof(uint32_t)
         );
         index_metadata_idx++;
@@ -438,7 +438,7 @@ restore_old_metadata:
 
             memcpy(
                 &lookup_result.records[0].cell->BTreePayload.catalog->metadata_page_num,
-                index_metadata.pages[index_metadata_idx]->page_num,
+                &index_metadata.pages[index_metadata_idx]->page_num,
                 sizeof(uint32_t)
             );
             index_metadata_idx++;

@@ -7,8 +7,12 @@
 
 #define METADATA_PAGE_PAYLOAD_SIZE (PAGE_SIZE - sizeof(uint32_t))
 #define CATALOG_KEY_COUNT 3
-#define CATALOG_KEY_SIZE (64*sizeof(uint8_t) + sizeof(uint32_t) + 64*sizeof(uint8_t)) // 132 bytes
-#define CATALOG_CELL_SIZE (CATALOG_KEY_SIZE + sizeof(uint8_t) + sizeof(uint32_t) + sizeof(uint32_t)) // 141 bytes
+#define CATALOG_KEY_BITMAP_SIZE ((CATALOG_KEY_COUNT + 7) / 8)
+
+// 133 bytes
+#define CATALOG_KEY_SIZE (CATALOG_KEY_BITMAP_SIZE + 64 * sizeof(uint8_t) + sizeof(uint32_t) + 64 * sizeof(uint8_t))
+// 142 bytes
+#define CATALOG_CELL_SIZE (CATALOG_KEY_SIZE + sizeof(uint8_t) + sizeof(uint32_t) + sizeof(uint32_t))
 
 typedef struct btree Btree;
 typedef struct table Table;
@@ -47,8 +51,8 @@ typedef struct catalog_record_info {
 
     uint32_t root_page_num;
     union {
-        const Table *table;
-        const Index *index;
+        Table *table;
+        Index *index;
     } object;
 } CatalogRecordInfo;
 
@@ -105,6 +109,9 @@ extern CatalogStatus catalog_release_metadata_pages(const Catalog *catalog, uint
 
 /* Catalog scan and return all Leaf Node Catalog Cells in CatalogLookupResult. */
 extern CatalogLookupStatus catalog_scan(const Catalog *catalog, CatalogLookupResult *lookup_result);
+
+/* Catalog Free. */
+extern void catalog_free(Catalog *catalog);
 
 /* ---------- CATALOG ORCHESTRATION ---------- */
 
