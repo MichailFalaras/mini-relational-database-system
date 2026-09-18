@@ -20,7 +20,13 @@ Page *page_create(Pager *pager, uint32_t page_num) {
 }
 
 Page *page_copy(Pager *pager, uint32_t page_num) {
-    Page *copy = (Page *) calloc(1, sizeof(Page));
+
+    uint32_t copy_page_num = 0;
+    if (!pager_allocate_page(pager, &copy_page_num)) {
+        return NULL;
+    }
+
+    Page *copy = pager_get_page(pager, copy_page_num);
     if (!copy) {
         return NULL;
     }

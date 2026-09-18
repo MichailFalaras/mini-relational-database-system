@@ -1234,7 +1234,8 @@ bool deserialize_table_metadata(Pager *pager, BTreeCellContents *catalog_cell, T
         return false;
     }
 
-    memcpy((*table)->name, catalog_cell->keys[0]->value.char_val.string, 64); // Table name
+    strncpy((*table)->name, catalog_cell->keys[0]->value.char_val.string, 64); // Table name
+    (*table)->name[63] = '\0';
     (*table)->is_deleted = false; // Since we deserialize this from disk means it wasn't deleted
 
     Page *metadata_page = pager_get_page(pager, catalog_cell->BTreePayload.catalog->metadata_page_num);
@@ -1692,7 +1693,7 @@ Value *deserialize_literal_value(uint8_t **read_offset) {
         }
         // case JSONB:
         default:
-            printf("deserialize_literal_value: Unsupported data type.\n");
+            fprintf(stderr, "deserialize_literal_value: Unsupported data type.\n");
             value_free(literal);
             return NULL;
     }

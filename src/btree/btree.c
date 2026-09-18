@@ -280,7 +280,6 @@ BTreeStatus btree_node_insert(Pager *pager, BTreePage *btree_page, BTreeCellCont
     /* Find correct position to insert cell by searching with cell's keys.*/
     BTreeStatus status = btree_binary_search(btree_page, &search_key, &search_result, BTREE_LOWER_BOUND);
     if (status != BTREE_SUCCESS) {
-        fprintf(stderr, "btree_leaf_node_insert: Something went wrong.\n");
         free(search_key.target_key);
         return status;
     }
@@ -1177,22 +1176,19 @@ BTreeStatus btree_leaf_borrow(Pager *pager, uint32_t parent_cell_pointer_index, 
     BTreeCellContents target_cell_contents = {0};
     BTreeStatus status = get_cell_contents(lender, target_cell_pointer_index, &target_cell_contents, index);
     if (status != BTREE_SUCCESS) {
-        value_free_array(target_cell_contents.keys, target_cell_contents.num_keys);
-        row_free(target_cell_contents.BTreePayload.row);
+        btree_cell_contents_free(&target_cell_contents, index);
         return status;
     }
 
     /* Remove it from lender. */
     status = btree_remove_cell(lender, target_cell_pointer_index);
     if (status != BTREE_SUCCESS) {
-        value_free_array(target_cell_contents.keys, target_cell_contents.num_keys);
-        row_free(target_cell_contents.BTreePayload.row);
+        btree_cell_contents_free(&target_cell_contents, index);
         return status;
     }
 
     if (!btree_page_sync(pager, lender)) {
-        value_free_array(target_cell_contents.keys, target_cell_contents.num_keys);
-        row_free(target_cell_contents.BTreePayload.row);
+        btree_cell_contents_free(&target_cell_contents, index);
         return BTREE_ERROR;
     }
 
@@ -1200,8 +1196,7 @@ BTreeStatus btree_leaf_borrow(Pager *pager, uint32_t parent_cell_pointer_index, 
     BTreeSplitResult split_result = {0}; // Will not be used, just initialized for parameter
     status = btree_node_insert(pager, underflowing_page, &target_cell_contents, &split_result, index);
     if (status != BTREE_SUCCESS) {
-        value_free_array(target_cell_contents.keys, target_cell_contents.num_keys);
-        row_free(target_cell_contents.BTreePayload.row);
+        btree_cell_contents_free(&target_cell_contents, index);
         return status;
     }
 
@@ -1212,8 +1207,7 @@ BTreeStatus btree_leaf_borrow(Pager *pager, uint32_t parent_cell_pointer_index, 
         BTreeCellContents new_parent_cell = {0};
         status = get_cell_contents(parent, parent_cell_pointer_index, &new_parent_cell, index);
         if (status != BTREE_SUCCESS) {
-            value_free_array(target_cell_contents.keys, target_cell_contents.num_keys);
-            row_free(target_cell_contents.BTreePayload.row);
+            btree_cell_contents_free(&target_cell_contents, index);
             value_free_array(new_parent_cell.keys, new_parent_cell.num_keys);
             return status;
         }
@@ -1222,8 +1216,7 @@ BTreeStatus btree_leaf_borrow(Pager *pager, uint32_t parent_cell_pointer_index, 
         uint32_t num_keys = new_parent_cell.num_keys;
         new_parent_cell.keys = value_array_copy(target_cell_contents.keys, target_cell_contents.num_keys);
         if (!new_parent_cell.keys) {
-            value_free_array(target_cell_contents.keys, target_cell_contents.num_keys);
-            row_free(target_cell_contents.BTreePayload.row);
+            btree_cell_contents_free(&target_cell_contents, index);
             value_free_array(old_parent_cell_keys, num_keys);
             return BTREE_ERROR;
         }
@@ -1232,8 +1225,7 @@ BTreeStatus btree_leaf_borrow(Pager *pager, uint32_t parent_cell_pointer_index, 
         new_parent_cell.key_size = target_cell_contents.key_size;
         new_parent_cell.cell_size = new_parent_cell.key_size + sizeof(uint32_t);
 
-        value_free_array(target_cell_contents.keys, target_cell_contents.num_keys);
-        row_free(target_cell_contents.BTreePayload.row);
+        btree_cell_contents_free(&target_cell_contents, index);
 
         status = btree_replace_cell(pager, parent, parent_cell_pointer_index, &new_parent_cell, index);
         if (status != BTREE_SUCCESS) {
@@ -1243,15 +1235,13 @@ BTreeStatus btree_leaf_borrow(Pager *pager, uint32_t parent_cell_pointer_index, 
 
         value_free_array(new_parent_cell.keys, new_parent_cell.num_keys);
     } else {
-        value_free_array(target_cell_contents.keys, target_cell_contents.num_keys);
-        row_free(target_cell_contents.BTreePayload.row);
+        btree_cell_contents_free(&target_cell_contents, index);
 
         /* Get lender's cell. */
         BTreeCellContents new_lender_first_cell = {0};
         status = get_cell_contents(lender, 0, &new_lender_first_cell, index);
         if (status != BTREE_SUCCESS) {
-            value_free_array(new_lender_first_cell.keys, new_lender_first_cell.num_keys);
-            row_free(new_lender_first_cell.BTreePayload.row);
+            btree_cell_contents_free(&new_lender_first_cell, index);
             return status;
         }
 
@@ -1280,8 +1270,7 @@ BTreeStatus btree_leaf_borrow(Pager *pager, uint32_t parent_cell_pointer_index, 
         }
         
         if (!found) {
-            value_free_array(new_lender_first_cell.keys, new_lender_first_cell.num_keys);
-            row_free(new_lender_first_cell.BTreePayload.row);
+            btree_cell_contents_free(&new_lender_first_cell, index);
             return BTREE_CORRUPT_PAGE;
         }
 
@@ -1290,8 +1279,7 @@ BTreeStatus btree_leaf_borrow(Pager *pager, uint32_t parent_cell_pointer_index, 
         BTreeCellContents parent_lender_cell = {0};
         status = get_cell_contents(parent, parent_lender_cell_index, &parent_lender_cell, index);
         if (status != BTREE_SUCCESS) {
-            value_free_array(new_lender_first_cell.keys, new_lender_first_cell.num_keys);
-            row_free(new_lender_first_cell.BTreePayload.row);
+            btree_cell_contents_free(&new_lender_first_cell, index);
             return status;
         }
 
@@ -1299,8 +1287,7 @@ BTreeStatus btree_leaf_borrow(Pager *pager, uint32_t parent_cell_pointer_index, 
         uint32_t num_keys = parent_lender_cell.num_keys;
         parent_lender_cell.keys = value_array_copy(new_lender_first_cell.keys, new_lender_first_cell.num_keys);
         if (!parent_lender_cell.keys) {
-            value_free_array(new_lender_first_cell.keys, new_lender_first_cell.num_keys);
-            row_free(new_lender_first_cell.BTreePayload.row);
+            btree_cell_contents_free(&new_lender_first_cell, index);
             value_free_array(old_parent_cell_keys, num_keys);
             return BTREE_ERROR;
         }
@@ -1309,8 +1296,7 @@ BTreeStatus btree_leaf_borrow(Pager *pager, uint32_t parent_cell_pointer_index, 
         parent_lender_cell.key_size = new_lender_first_cell.key_size;
         parent_lender_cell.cell_size = parent_lender_cell.key_size + sizeof(uint32_t);
 
-        value_free_array(new_lender_first_cell.keys, new_lender_first_cell.num_keys);
-        row_free(new_lender_first_cell.BTreePayload.row);
+        btree_cell_contents_free(&new_lender_first_cell, index);
         status = btree_replace_cell(pager, parent, parent_lender_cell_index, &parent_lender_cell, index);
         if (status != BTREE_SUCCESS) {
             value_free_array(parent_lender_cell.keys, parent_lender_cell.num_keys);
@@ -1493,15 +1479,12 @@ BTreeStatus btree_leaf_merge(Pager *pager, BTreePage *left, BTreePage *right, BT
         BTreeCellContents cell_contents = {0};
         status = get_cell_contents(right, i, &cell_contents, index);
         if (status != BTREE_SUCCESS) {
-            value_free_array(cell_contents.keys, cell_contents.num_keys);
-            row_free(cell_contents.BTreePayload.row);
+            btree_cell_contents_free(&cell_contents, index);
             return status;
         }
 
         cell_size += cell_contents.cell_size;
-        
-        value_free_array(cell_contents.keys, cell_contents.num_keys);
-        row_free(cell_contents.BTreePayload.row);
+        btree_cell_contents_free(&cell_contents, index);
     }
 
 

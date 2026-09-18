@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+typedef struct pager Pager;
 typedef struct table Table;
 typedef struct schema Schema;
 typedef struct column Column;

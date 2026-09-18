@@ -53,13 +53,13 @@ extern BTreeStatus btree_search_entries_init(BTreeSearchEntries *result);
 extern BTreeStatus btree_search_entries_append(BTreeSearchEntries *result, BTreeEntry *new_entry);
 
 // Free individual cell content structure
-extern void btree_cell_contents_free(BTreeCellContents *cell, BTreeIndexSpec *spec);
+extern void btree_cell_contents_free(BTreeCellContents *cell, const BTreeIndexSpec *spec);
 
 // Free individual cell entries
-extern void btree_entry_free(BTreeEntry *entry, BTreeIndexSpec *spec);
+extern void btree_entry_free(BTreeEntry *entry, const BTreeIndexSpec *spec);
 
 // Free BTreeSearchEntries
-extern void btree_search_entries_free(BTreeSearchEntries *entries, BTreeIndexSpec *spec);
+extern void btree_search_entries_free(BTreeSearchEntries *entries, const BTreeIndexSpec *spec);
 
 
 /* ---------- BTreeIndexSpec Helpers ---------- */
