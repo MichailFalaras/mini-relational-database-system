@@ -8,7 +8,12 @@
 #include "../../include/pager.h"
 #include "../../include/table.h"
 #include "../../include/catalog.h"
-
+#include "../../include/page.h"
+#include "../../include/serialize.h"
+#include "../../include/index.h"
+#include "../../include/btree.h"
+#include "../src/btree/btree_utils.h"
+#include "database_utils.h"
 
 /*
  * Open a database file or initialize a new one.
@@ -58,7 +63,73 @@ Database *database_open(const char *pathname) {
         database_free(db);
         return NULL;
     }
-    
+
+    // Validate database superblock format
+    PageZeroMetadata page_zero_metadata = {0};
+    if (!validate_superblock_page(db->pager, &page_zero_metadata)) {
+        database_free(db);
+        return NULL;
+    }
+
+    // There's no way file length bigger than PAGE_SIZE and
+    // there's no catalog root.
+    if (db->pager->file_length > PAGE_SIZE
+        && page_zero_metadata.catalog_root == UINT32_MAX) {
+        database_free(db);
+        return NULL;
+    }
+
+    /* If page_zero_metadata.catalog_root == UINT32_MAX, meaning its a new database:
+     * Pass UINT32_MAX and there's an if statement in catalog_initialize which allocates
+     * a new page for system catalog and returns that.
+     *
+     * If page_zero_metadata.catalog_root != UINT32_MAX, meaning its a pre-existing database:
+     * Get system catalog root page in memory.*/
+    uint32_t old_catalog_root = page_zero_metadata.catalog_root;
+    db->catalog = catalog_create(db->pager, &page_zero_metadata.catalog_root);
+    if (!db->catalog) {
+        database_free(db);
+        return NULL;
+    }
+
+    // If catalog root changed, persist changes onto Superblock page
+    if (old_catalog_root != db->catalog->btree->root_page_num) {
+        uint8_t *write_offset = db->pager->pages[SUPERBLOCK_PAGE_NUM]->page_data;
+
+        if (!serialize_page_zero_metadata(&write_offset, &page_zero_metadata)
+            || !page_mark_dirty(db->pager->pages[SUPERBLOCK_PAGE_NUM])) {
+            database_free(db);
+            return NULL;
+        }
+    }
+
+    CatalogLookupResult lookup_result = {0};
+    CatalogLookupStatus status = catalog_scan(db->catalog, &lookup_result);
+    if (status != CATALOG_LOOKUP_SUCCESS) {
+        database_free(db);
+        return NULL;
+    }
+
+    // Reconstruct all Database metadata from System Catalog B+Tree.
+    if (!reconstruct_system_catalog(db, &lookup_result)) {
+        for (uint32_t i = 0; i < lookup_result.num_records; i++) {
+            if (lookup_result.records[i].cell) {
+                btree_cell_contents_free(lookup_result.records[i].cell, &db->catalog->spec);
+            }
+        }
+        free(lookup_result.records);
+        database_free(db);
+        return NULL;
+    }
+
+
+    for (uint32_t i = 0; i < lookup_result.num_records; i++) {
+        if (lookup_result.records[i].cell) {
+            btree_cell_contents_free(lookup_result.records[i].cell, &db->catalog->spec);
+        }
+    }
+    free(lookup_result.records);
+
     return db;
 }
 
@@ -69,11 +140,9 @@ bool database_close(Database *db) {
         return false;
     }
 
-    bool pager_close_succeeded = db->pager != NULL;
-
-    if (!db->pager) {
-        printf("database_close: Database has no Pager.\n");
-    }
+    // Update all metadata pages with new data
+    bool database_close_succeeded = update_metadata_pages(db);
+    database_close_succeeded &= db->pager != NULL;
 
     // Free Table metadata structures and pointer array
     if (db->tables) {
@@ -97,11 +166,11 @@ bool database_close(Database *db) {
         Pager *pager = db->pager;
         db->pager = NULL;
 
-        pager_close_succeeded = pager_close(pager);
+        database_close_succeeded &= pager_close(pager);
     }
 
     free(db);
-    return pager_close_succeeded;
+    return database_close_succeeded;
 }
 
 

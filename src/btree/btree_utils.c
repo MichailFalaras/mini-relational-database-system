@@ -10,6 +10,7 @@
 #include "../../include/index.h"
 #include "../../include/row.h"
 #include "../../include/schema.h"
+#include "../../include/catalog.h"
 #include "../src/catalog/catalog_utils.h"
 
 /* Pass address of BTreePage in Stack and then logically connect it with a page. */
@@ -26,118 +27,203 @@ void btree_page_attach(BTreePage *btree_page, Page *page) {
  * Also checks if page is free in the beginning just in case its
  * about to read garbage. */
 BTreeStatus btree_page_validate(Pager *pager, BTreePage *btree_page, BTreeIndexSpec *index) {
-    if (!btree_page || !btree_page->page || !btree_page->data 
-        || !btree_page->page->page_num|| !pager) {
+
+    if (!pager ||
+        !btree_page ||
+        !btree_page->page ||
+        !btree_page->data ||
+        !btree_page->page->page_num ||
+        !index) {
         return BTREE_INVALID_ARGUMENTS;
     }
+    
 
-    /* Extra check if page is free. */
-    if (is_page_free(pager, btree_page->page->page_num) != PAGE_NOT_FREE) {    
+    // Extra check in case a released page is about to be interpreted
+    if (is_page_free(pager, btree_page->page->page_num) != PAGE_NOT_FREE) {
         return BTREE_FREE_PAGE;
     }
 
-    /* Node Type checks. */
-    if (btree_page->type != BTREE_LEAF_NODE
-        && btree_page->type != BTREE_INTERNAL_NODE) {
+    // Node type checks
+    if (btree_page->type != BTREE_LEAF_NODE &&
+        btree_page->type != BTREE_INTERNAL_NODE) {
         return BTREE_CORRUPT_PAGE;
     }
 
-    /* Root status checks. */
-    if (btree_page->is_root != 0
-        && btree_page->is_root != 1) {
+    // Root status checks
+    if (btree_page->is_root != 0 &&
+        btree_page->is_root != 1) {
         return BTREE_CORRUPT_PAGE;
     }
 
-    /* Parent pointer checks. */
-    if (btree_page->is_root == 1
-        && btree_page->parent_pointer != UINT32_MAX) {
-        return BTREE_CORRUPT_PAGE;
-    } 
-
-    if (btree_page->is_root == 0
-        && btree_page->parent_pointer == UINT32_MAX) {
+    // Parent pointer checks
+    if (btree_page->is_root == 1 &&
+        btree_page->parent_pointer != UINT32_MAX) {
         return BTREE_CORRUPT_PAGE;
     }
 
-    if (btree_page->parent_pointer != UINT32_MAX
-        && btree_page->parent_pointer >= pager->num_pages) {
+    if (btree_page->is_root == 0 &&
+        btree_page->parent_pointer == UINT32_MAX) {
         return BTREE_CORRUPT_PAGE;
     }
 
-    /* Cell Count checks. */
+
+    if (btree_page->parent_pointer != UINT32_MAX &&
+        btree_page->parent_pointer >= pager->num_pages) {
+        return BTREE_CORRUPT_PAGE;
+    }
+
+    if (btree_page->parent_pointer == SUPERBLOCK_PAGE_NUM) {
+        return BTREE_CORRUPT_PAGE;
+    }
+
+    
+    // Cell count checks
     uint16_t header_size = get_header_size(btree_page->type);
+
     uint16_t max_cells = (PAGE_SIZE - header_size) / MIN_INTERNAL_CELL_SIZE;
+
     if (btree_page->cell_count > max_cells) {
         return BTREE_CORRUPT_PAGE;
     }
 
-    /* Free Space Offset checks */
+    // Free-space offset checks
     if (btree_page->free_space_offset > PAGE_SIZE) {
         return BTREE_CORRUPT_PAGE;
     }
 
-    if  (btree_page->free_space_offset < header_size) {
+    if (btree_page->free_space_offset < header_size) {
         return BTREE_CORRUPT_PAGE;
     }
 
-    /* Rightmost child pointer checks. */
-    if (btree_page->type == BTREE_INTERNAL_NODE
-        && btree_page->type_specific_data.rightmost_child_pointer != UINT32_MAX
-        && btree_page->type_specific_data.rightmost_child_pointer >= pager->num_pages) {
-        return BTREE_CORRUPT_PAGE;
+    // Type-specific page metadata
+
+    if (btree_page->type == BTREE_INTERNAL_NODE) {
+        uint32_t rightmost = btree_page->type_specific_data.rightmost_child_pointer;
+
+        if (rightmost != UINT32_MAX && rightmost >= pager->num_pages) {
+            return BTREE_CORRUPT_PAGE;
+        }
+
+        if (rightmost == SUPERBLOCK_PAGE_NUM) {
+            return BTREE_CORRUPT_PAGE;
+        }
     }
 
-    if (btree_page->type == BTREE_INTERNAL_NODE
-        && btree_page->type_specific_data.rightmost_child_pointer == SUPERBLOCK_PAGE_NUM) {
-        return BTREE_CORRUPT_PAGE;
-    }
+    if (btree_page->type == BTREE_LEAF_NODE) {
+        uint32_t previous = btree_page->type_specific_data.siblings.previous_leaf_pointer;
+        uint32_t next = btree_page->type_specific_data.siblings.next_leaf_pointer;
 
-    /* Previous and next pointer checks. */
-    if (btree_page->type == BTREE_LEAF_NODE
-        && ((btree_page->type_specific_data.siblings.previous_leaf_pointer != UINT32_MAX
-            && btree_page->type_specific_data.siblings.previous_leaf_pointer >= pager->num_pages)
-        || (btree_page->type_specific_data.siblings.next_leaf_pointer != UINT32_MAX
-            && btree_page->type_specific_data.siblings.next_leaf_pointer >= pager->num_pages)
-            )) {
-        return BTREE_CORRUPT_PAGE;
-    }
+        if ((previous != UINT32_MAX && previous >= pager->num_pages) ||
+            (next != UINT32_MAX && next >= pager->num_pages)) {
+            return BTREE_CORRUPT_PAGE;
+        }
 
-    if (btree_page->type == BTREE_LEAF_NODE
-        && (btree_page->type_specific_data.siblings.previous_leaf_pointer == SUPERBLOCK_PAGE_NUM
-        || btree_page->type_specific_data.siblings.next_leaf_pointer == SUPERBLOCK_PAGE_NUM)) {
-        return BTREE_CORRUPT_PAGE;
+        if (previous == SUPERBLOCK_PAGE_NUM || next == SUPERBLOCK_PAGE_NUM) {
+            return BTREE_CORRUPT_PAGE;
+        }
     }
-
-    /* Cell Contents checks */
-    BTreeCellView cell = {0};
-    BTreeStatus status = 0;
+    
+    // Cell validation
     for (uint16_t i = 0; i < btree_page->cell_count; i++) {
-        status = get_cell(btree_page, i, &cell, index);
+        BTreeCellView cell = {0};
+
+        BTreeStatus status = get_cell(btree_page, i, &cell, index);
+
         if (status != BTREE_SUCCESS) {
             return status;
         }
 
-        if (cell.offset == 0 || cell.payload_size == 0) {
+        // Every cell must have a valid offset, key and payload
+        if (cell.offset == 0 || cell.key.key_size == 0 || cell.payload_size == 0) {
             return BTREE_CORRUPT_PAGE;
         }
 
-        if (cell.offset < btree_page->free_space_offset 
-            || cell.offset >= PAGE_SIZE
-            || cell.offset > PAGE_SIZE - cell.payload_size - cell.key.key_size) {
+        // Cell must live inside the occupied cell-content region and
+        // must not extend past the end of the page.
+        if (cell.offset < btree_page->free_space_offset ||
+            cell.offset >= PAGE_SIZE ||
+            cell.offset > PAGE_SIZE - cell.payload_size - cell.key.key_size) {
             return BTREE_CORRUPT_PAGE;
         }
 
+        // INTERNAL NODE
+        // Internal cells always contain: [child_page_num][serialized key]
+        // The leaf payload type is irrelevant here, including for the System Catalog B+ Tree
         if (btree_page->type == BTREE_INTERNAL_NODE) {
-            uint32_t child_pointer = get_cell_child_pointer(btree_page->data, cell.offset);
-
-            if (child_pointer >= pager->num_pages 
-                || child_pointer == SUPERBLOCK_PAGE_NUM) {
+            if (cell.payload_size != sizeof(uint32_t)) {
                 return BTREE_CORRUPT_PAGE;
             }
+
+            uint32_t child_pointer = get_cell_child_pointer(btree_page->data, cell.offset);
+
+            if (child_pointer == SUPERBLOCK_PAGE_NUM ||
+                child_pointer >= pager->num_pages) {
+                return BTREE_CORRUPT_PAGE;
+            }
+
+            continue;
+        }
+
+        // LEAF NODE Only leaf nodes depend on BTreePayloadType.
+        switch (index->payload_type) {
+            case BTREE_ROW_PAYLOAD:
+                // A row leaf must at least contain the fixed serialized
+                // Row header: [is_deleted][n_columns][NULL bitmap][values...]
+                // More detailed Row validation is performed during deserialization.
+                if (cell.payload_size < sizeof(uint8_t) + sizeof(uint32_t)) {
+                    return BTREE_CORRUPT_PAGE;
+                }
+                break;
+
+            case BTREE_CATALOG_PAYLOAD:
+                // Catalog leaf: [key] [type] [root_page_num] [metadata_page_num]
+                // Do NOT use sizeof(CatalogPayload), since the 
+                // serialized representation must not depend on compiler struct padding.
+                if (cell.payload_size != sizeof(uint8_t) + sizeof(uint32_t) + sizeof(uint32_t)) {
+                    return BTREE_CORRUPT_PAGE;
+                }
+
+                // Validate the serialized CatalogPayload itself
+                uint8_t *payload = (uint8_t *) cell.payload;
+
+                uint8_t catalog_type = 0;
+                uint32_t root_page_num = 0;
+                uint32_t metadata_page_num = 0;
+
+                memcpy(&catalog_type, payload, sizeof(uint8_t));
+
+                payload += sizeof(uint8_t);
+
+                memcpy(&root_page_num, payload, sizeof(uint32_t));
+
+                payload += sizeof(uint32_t);
+
+                memcpy(&metadata_page_num, payload, sizeof(uint32_t));
+
+                // Catalog record type must represent either a Table or an Index.
+                if (catalog_type > CATALOG_INDEX) {
+                    return BTREE_CORRUPT_PAGE;
+                }
+
+                // The catalog record must point to an existing physical B+ Tree root.
+                // Page 0 is always the Superblock
+                if (root_page_num == SUPERBLOCK_PAGE_NUM ||
+                    root_page_num >= pager->num_pages) {
+                    return BTREE_CORRUPT_PAGE;
+                }
+
+                // metadata_page_num must point to an allocated metadata page
+                if (metadata_page_num == SUPERBLOCK_PAGE_NUM ||
+                    metadata_page_num >= pager->num_pages) {
+                    return BTREE_CORRUPT_PAGE;
+                }
+
+                break;
+
+            default:
+                return BTREE_CORRUPT_PAGE;
         }
     }
-    
-    // No actual payload checks here, just metadata. 
 
     return BTREE_SUCCESS;
 }
@@ -1430,7 +1516,7 @@ bool key_contains_null_val(Value **key, uint32_t num_keys) {
 } 
 
 /* BTreeCellContents deep-copy. */
-BTreeCellContents *btree_cell_contents_copy(Pager *pager, const BTreeCellContents *original, BTreeIndexSpec *spec) {
+BTreeCellContents *btree_cell_contents_copy(const BTreeCellContents *original, BTreeIndexSpec *spec) {
     if (original->type > BTREE_INTERNAL_NODE || !original->num_keys
         || !original->keys || !original->key_size || !original->cell_size) {
         return NULL;
@@ -1453,6 +1539,7 @@ BTreeCellContents *btree_cell_contents_copy(Pager *pager, const BTreeCellContent
 
     copy->keys = value_array_copy(original->keys, original->num_keys);
     if (!copy->keys) {
+        free(copy);
         return NULL;
     }
 
@@ -1462,7 +1549,7 @@ BTreeCellContents *btree_cell_contents_copy(Pager *pager, const BTreeCellContent
             break;
         case BTREE_LEAF_NODE:
             if (spec->payload_type == BTREE_CATALOG_PAYLOAD) {
-                copy->BTreePayload.catalog = catalog_payload_copy(pager, original->BTreePayload.catalog);
+                copy->BTreePayload.catalog = catalog_payload_copy(original->BTreePayload.catalog);
                 if (!copy->BTreePayload.catalog) {
                     btree_cell_contents_free(copy, spec);
                     return NULL;
@@ -1544,7 +1631,7 @@ BTreeStatus btree_search_entries_append(BTreeSearchEntries *result, BTreeEntry *
     return BTREE_SUCCESS;
 }
 
-void btree_cell_contents_free(BTreeCellContents *cell, BTreeIndexSpec *spec) {
+void btree_cell_contents_free(BTreeCellContents *cell, const BTreeIndexSpec *spec) {
     if (!cell || !spec) {
         return;
     }
@@ -1577,7 +1664,7 @@ void btree_cell_contents_free(BTreeCellContents *cell, BTreeIndexSpec *spec) {
     }
 }
 
-void btree_entry_free(BTreeEntry *entry, BTreeIndexSpec *spec) {
+void btree_entry_free(BTreeEntry *entry, const BTreeIndexSpec *spec) {
     if (!entry || !spec) {
         return;
     }
@@ -1588,7 +1675,7 @@ void btree_entry_free(BTreeEntry *entry, BTreeIndexSpec *spec) {
     entry->cell_index = UINT16_MAX;
 }
 
-void btree_search_entries_free(BTreeSearchEntries *entries, BTreeIndexSpec *spec) {
+void btree_search_entries_free(BTreeSearchEntries *entries, const BTreeIndexSpec *spec) {
     if (!entries || !spec) {
         return;
     }

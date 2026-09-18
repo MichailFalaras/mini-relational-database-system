@@ -597,6 +597,53 @@ bool table_create_index(Table *table, const char *index_name, IndexType type, co
     return true;
 }
 
+/* Append already initialized Index to Table's Index ptrs. */
+bool table_append_index(Table *table, Index *index) {
+    if (!table || 
+        !table->table_schema ||
+        !table->secondary_indexes || 
+        table->is_deleted || 
+        !table->is_materialized) {
+        return false;
+    }
+
+    if (!index || !index->key ||
+        !index->key->column_index_array ||
+        !index->key->num_columns) {
+        return false;
+    }
+
+    // Check if Index already exists
+    if (table_find_index(table, index->name)) {
+        return false;
+    }
+
+    switch (index->type) {
+        case PRIMARY_INDEX:
+            // If primary Index already exists or
+            // Index is primary and it isn't unque
+            if (table->primary_index || !index->is_unique) {
+                return false;
+            }
+
+            table->primary_index = index;
+            break;
+        case SECONDARY_INDEX:
+            // Check if there's space to store another secondary Index
+            if (table->total_secondary_indexes >= MAX_INDEXES) {
+                return false;
+            }
+
+            table->secondary_indexes[table->total_secondary_indexes] = index;
+            table->total_secondary_indexes++;
+            break;
+        default:
+            fprintf(stderr, "reconstruct_system_catalog: Index Type does not match.\n");
+            return false;
+    }
+
+    return true;
+}
 
 /*
  * Drop one physical index from a table.

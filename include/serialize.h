@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+typedef struct pager Pager;
 typedef struct table Table;
 typedef struct schema Schema;
 typedef struct column Column;
@@ -83,9 +84,9 @@ extern bool serialize_literal_value(uint8_t **write_offset, const Value *literal
 
 extern bool serialize_expression_node(uint8_t **write_offset, const ExpressionNode *expr_node);
 
-extern bool deserialize_index_metadata(uint8_t **read_offset, Index **index);
+extern bool deserialize_index_metadata(Pager *pager, BTreeCellContents *catalog_cell, Index **index);
 
-extern bool deserialize_table_metadata(uint8_t **read_offset, Table **table);
+extern bool deserialize_table_metadata(Pager *pager, BTreeCellContents *catalog_cell, Table **table);
 
 extern Schema *deserialize_schema_metadata(uint8_t **read_offset);
 

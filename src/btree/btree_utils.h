@@ -53,13 +53,13 @@ extern BTreeStatus btree_search_entries_init(BTreeSearchEntries *result);
 extern BTreeStatus btree_search_entries_append(BTreeSearchEntries *result, BTreeEntry *new_entry);
 
 // Free individual cell content structure
-extern void btree_cell_contents_free(BTreeCellContents *cell, BTreeIndexSpec *spec);
+extern void btree_cell_contents_free(BTreeCellContents *cell, const BTreeIndexSpec *spec);
 
 // Free individual cell entries
-extern void btree_entry_free(BTreeEntry *entry, BTreeIndexSpec *spec);
+extern void btree_entry_free(BTreeEntry *entry, const BTreeIndexSpec *spec);
 
 // Free BTreeSearchEntries
-extern void btree_search_entries_free(BTreeSearchEntries *entries, BTreeIndexSpec *spec);
+extern void btree_search_entries_free(BTreeSearchEntries *entries, const BTreeIndexSpec *spec);
 
 
 /* ---------- BTreeIndexSpec Helpers ---------- */
@@ -190,7 +190,7 @@ BTreeStatus btree_replace_cell(Pager *pager, BTreePage *btree_page, uint32_t cel
     BTreeCellContents *replacement, BTreeIndexSpec *index);
     
 /* BTreeCellContents deep-copy. */
-BTreeCellContents *btree_cell_contents_copy(Pager *pager, const BTreeCellContents *original, BTreeIndexSpec *spec);
+BTreeCellContents *btree_cell_contents_copy(const BTreeCellContents *original, BTreeIndexSpec *spec);
 
 /* ---------- Shift Cell Pointers & Cell Contents ---------- */
 
