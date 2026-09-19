@@ -48,4 +48,7 @@ bool btree_cell_contents_to_catalog_record_info(BTreeIndexSpec *spec, BTreeCellC
 /* Replace specific catalog cell/record with a new one. */
 CatalogStatus catalog_replace_record(const Catalog *catalog, CatalogRecordInfo *record_info, BTreeCellContents *cell);
 
+/* Conversion from catalog lookup status to catalog status */
+CatalogStatus catalog_lookup_to_catalog_status(CatalogLookupStatus status);
+
 #endif

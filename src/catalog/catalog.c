@@ -829,7 +829,7 @@ CatalogStatus catalog_update_record(const Catalog *catalog, CatalogRecordInfo *r
             free(lookup_result.records);
         }
         
-        return CATALOG_ERROR;
+        return catalog_lookup_to_catalog_status(lookup_status);
     }
 
     // Copy cell since its going to be deleted with catalog_delete_record()
