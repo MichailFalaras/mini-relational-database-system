@@ -16,6 +16,9 @@
 #include "../include/btree.h"
 #include "../src/btree/btree_utils.h"
 #include "../include/row.h"
+#include "../include/catalog.h"
+#include "../src/catalog/catalog_utils.h"
+
 
 #define ASSERT(condition) do { \
     if (!(condition)) { \
@@ -447,6 +450,127 @@ static Schema *create_test_orders_schema_primary_only() {
     constraint_free(primary_key);
 
     return schema;
+}
+
+/* ---------- catalog-related helpers ---------- */
+
+static bool insert_catalog_record(Catalog *catalog, CatalogRecordInfo *record_info) {
+    if (!catalog || !record_info) {
+        return false;
+    }
+
+    BTreeCellContents cell = {0};
+
+    CatalogStatus status = catalog_create_record(catalog, record_info, &cell);
+
+    if (status != CATALOG_SUCCESS) {
+        return false;
+    }
+
+    status = catalog_insert_record(catalog, &cell);
+
+    btree_cell_contents_free(&cell, &catalog->spec);
+
+    return status == CATALOG_SUCCESS;
+}
+
+static bool get_catalog_record_payload(const Catalog *catalog, const char *table_name,
+    CatalogEntryType type, const char *object_name, uint32_t root_page_num, CatalogPayload *payload) {
+
+    if (!catalog || !table_name || !object_name || !payload) {
+        return false;
+    }
+
+    CatalogRecordInfo record_info = {0};
+
+    strncpy(record_info.table_name, table_name, sizeof(record_info.table_name) - 1);
+    record_info.table_name[sizeof(record_info.table_name) - 1] = '\0';
+
+    strncpy(record_info.object_name, object_name, sizeof(record_info.object_name) - 1);
+    record_info.object_name[sizeof(record_info.object_name) - 1] = '\0';
+
+    record_info.type = type;
+    record_info.root_page_num = root_page_num;
+
+    CatalogLookupResult lookup_result = {0};
+
+    CatalogLookupStatus status = catalog_lookup_record(catalog, &record_info, &lookup_result);
+
+    if (status != CATALOG_LOOKUP_SUCCESS || !lookup_result.records || lookup_result.num_records == 0) {
+
+        return false;
+    }
+
+    BTreeCellContents *cell = lookup_result.records[0].cell;
+
+    if (!cell || !cell->BTreePayload.catalog) {
+        return false;
+    }
+
+    *payload = *(cell->BTreePayload.catalog);
+
+    return true;
+}
+
+static bool insert_table_catalog_records(Catalog *catalog, Table *table) {
+    if (!catalog || !table || !table->primary_index) {
+        return false;
+    }
+
+    // Primary index catalog record
+    CatalogRecordInfo primary_record = {0};
+
+    strncpy(primary_record.table_name, table->name, sizeof(primary_record.table_name) - 1);
+    primary_record.table_name[sizeof(primary_record.table_name) - 1] = '\0';
+
+    strncpy(primary_record.object_name, table->primary_index->name, sizeof(primary_record.object_name) - 1);
+    primary_record.object_name[sizeof(primary_record.object_name) - 1] = '\0';
+    
+    primary_record.type = CATALOG_INDEX;
+    primary_record.root_page_num = table->primary_index->root_page_num;
+    primary_record.object.index = table->primary_index;
+
+    if (!insert_catalog_record(catalog, &primary_record)) {
+        return false;
+    }
+
+    // Secondary index catalog records
+    for (uint32_t i = 0; i < table->total_secondary_indexes; i++) {
+        if (!table->secondary_indexes[i]) {
+            return false;
+        }
+
+        CatalogRecordInfo secondary_record = {0};
+
+        strncpy(secondary_record.table_name, table->name, sizeof(secondary_record.table_name) - 1);
+        secondary_record.table_name[sizeof(secondary_record.table_name) - 1] = '\0';
+
+        strncpy(secondary_record.object_name, table->secondary_indexes[i]->name, sizeof(secondary_record.object_name) - 1);
+        secondary_record.object_name[sizeof(secondary_record.object_name) - 1] = '\0';
+
+        secondary_record.type = CATALOG_INDEX;
+        secondary_record.root_page_num = table->secondary_indexes[i]->root_page_num;
+        secondary_record.object.index = table->secondary_indexes[i];
+
+        if (!insert_catalog_record(catalog, &secondary_record)) {
+            return false;
+        }
+    }
+
+    // Table catalog record
+    CatalogRecordInfo table_record = {0};
+
+    strncpy(table_record.table_name, table->name, sizeof(table_record.table_name) - 1);
+    table_record.table_name[sizeof(table_record.table_name) - 1] = '\0';
+
+    strncpy(table_record.object_name, table->name, sizeof(table_record.object_name) - 1);
+    table_record.object_name[sizeof(table_record.object_name) - 1] = '\0';
+
+    table_record.type = CATALOG_TABLE;
+    table_record.root_page_num = table->primary_index->root_page_num;
+    table_record.object.table = table;
+
+    return insert_catalog_record(catalog, &table_record);
 }
 
 /* ---------- table_create unit tests ---------- */
@@ -3727,6 +3851,498 @@ cleanup:
 }
 
 
+/* ---------- table mutation catalog persistence tests ---------- */
+
+static int test_table_insert_entry_does_not_change_catalog_root() {
+    int result = 1;
+
+    TestPager test_pager = {0};
+    Schema *schema = NULL;
+    Table *table = NULL;
+    Row *row = NULL;
+    Catalog *catalog = NULL;
+
+    Database db = {0};
+    EvaluationContext context = {0};
+
+    uint32_t catalog_root_page_num = INVALID_ROOT_PAGE;
+
+    CatalogPayload primary_payload = {0};
+    CatalogPayload secondary_payload = {0};
+    CatalogPayload table_payload = {0};
+
+    // Initialize data
+    ASSERT(create_test_pager(&test_pager));
+
+    schema = create_test_schema_with_constraints();
+    ASSERT(schema != NULL);
+
+    table = table_create("users", schema, test_pager.pager);
+    ASSERT(table != NULL);
+    ASSERT(table->primary_index != NULL);
+    ASSERT(table->total_secondary_indexes == 1);
+    ASSERT(table->secondary_indexes != NULL);
+    ASSERT(table->secondary_indexes[0] != NULL);
+
+    init_test_database(&db, test_pager.pager, &table, 1);
+
+    catalog = catalog_create(test_pager.pager, &catalog_root_page_num);
+    ASSERT(catalog != NULL);
+
+    db.catalog = catalog;
+    context.db = &db;
+
+    uint32_t original_primary_root = table->primary_index->root_page_num;
+    uint32_t original_secondary_root = table->secondary_indexes[0]->root_page_num;
+
+    ASSERT(insert_table_catalog_records(catalog, table));
+
+    // Create and Insert new Row
+    row = create_test_user_row(1, "user1@example.com", 25);
+    ASSERT(row != NULL);
+    
+    ASSERT(table_insert_entry(table, test_pager.pager, row, &context) == TABLE_MUTATION_SUCCESS);
+
+    // Verify that one insertion should not split the either index
+    ASSERT(table->primary_index->root_page_num == original_primary_root);
+    ASSERT(table->secondary_indexes[0]->root_page_num == original_secondary_root);
+
+    // And verify all 3 catalog records have the original root page number 
+    // of their corresponding index
+    ASSERT(get_catalog_record_payload(
+        catalog,
+        table->name,
+        CATALOG_INDEX,
+        table->primary_index->name,
+        original_primary_root,
+        &primary_payload
+    ));
+
+    ASSERT(primary_payload.root_page_num == original_primary_root);
+
+    ASSERT(get_catalog_record_payload(
+        catalog,
+        table->name,
+        CATALOG_INDEX,
+        table->secondary_indexes[0]->name,
+        original_secondary_root,
+        &secondary_payload
+    ));
+
+    ASSERT(secondary_payload.root_page_num == original_secondary_root);
+
+    ASSERT(get_catalog_record_payload(
+        catalog,
+        table->name,
+        CATALOG_TABLE,
+        table->name,
+        original_primary_root,
+        &table_payload
+    ));
+
+    ASSERT(table_payload.root_page_num == original_primary_root);
+
+    result = 0;
+
+cleanup:
+    row_free(row);
+
+    destroy_test_database_metadata(&db);
+
+    table_free(table);
+    schema_free(schema);
+
+    destroy_test_pager(&test_pager);
+
+    return result;
+}  
+
+static int test_table_insert_entry_syncs_primary_catalog_root() {
+    int result = 1;
+
+    TestPager test_pager = {0};
+    Schema *schema = NULL;
+    Table *table = NULL;
+    Catalog *catalog = NULL;
+
+    Database db = {0};
+    EvaluationContext context = {0};
+
+    uint32_t catalog_root_page_num = INVALID_ROOT_PAGE;
+    uint32_t original_primary_root = INVALID_ROOT_PAGE;
+
+    CatalogPayload primary_payload = {0};
+    CatalogPayload table_payload = {0};
+
+    // Initialize data
+    ASSERT(create_test_pager(&test_pager));
+
+    schema = create_test_schema_with_constraints();
+    ASSERT(schema != NULL);
+
+    table = table_create("users", schema, test_pager.pager);
+    ASSERT(table != NULL);
+    ASSERT(table->primary_index != NULL);
+    ASSERT(table->total_secondary_indexes == 1);
+    ASSERT(table->secondary_indexes != NULL);
+    ASSERT(table->secondary_indexes[0] != NULL);
+
+    init_test_database(&db, test_pager.pager, &table, 1);
+
+    catalog = catalog_create(test_pager.pager, &catalog_root_page_num);
+    ASSERT(catalog != NULL);
+
+    db.catalog = catalog;
+
+    context.db = &db;
+
+    original_primary_root = table->primary_index->root_page_num;
+
+    ASSERT(insert_table_catalog_records(catalog, table));
+
+    // Keep inserting rows until the primary B+ tree root changes
+    for (uint32_t i = 1; i <= 1000 && table->primary_index->root_page_num == original_primary_root; i++) {
+        char email[64] = {0};
+        snprintf(email, sizeof(email), "user%u@example.com", i);
+
+        Row *row = create_test_user_row(i, email, 20 + (i % 50));
+        ASSERT(row != NULL);
+
+        TableMutationStatus status = table_insert_entry(table, test_pager.pager, row, &context);
+
+        row_free(row);
+
+        ASSERT(status == TABLE_MUTATION_SUCCESS);
+    }
+
+    // Validate that the root page number changed
+    ASSERT(table->primary_index->root_page_num != original_primary_root);
+
+    // Validate that the primary catalog record is synchronized with the new root page number
+    ASSERT(get_catalog_record_payload(
+            catalog,
+            table->name,
+            CATALOG_INDEX,
+            table->primary_index->name,
+            table->primary_index->root_page_num,
+            &primary_payload
+        )
+    );
+
+    ASSERT(primary_payload.root_page_num == table->primary_index->root_page_num);
+
+    // The table catalog record stores the canonical primary 
+    // B+ tree root, so it must be synchronized as well.
+    ASSERT(get_catalog_record_payload(
+            catalog,
+            table->name,
+            CATALOG_TABLE,
+            table->name,
+            table->primary_index->root_page_num,
+            &table_payload
+        )
+    );
+
+    ASSERT(table_payload.root_page_num == table->primary_index->root_page_num);
+
+
+    result = 0;
+
+cleanup:
+    destroy_test_database_metadata(&db);
+
+    table_free(table);
+    schema_free(schema);
+
+    destroy_test_pager(&test_pager);
+    return result;
+} 
+
+static int test_table_insert_entry_syncs_secondary_catalog_root() {
+    int result = 1;
+
+    TestPager test_pager = {0};
+    Schema *schema = NULL;
+    Table *table = NULL;
+    Catalog *catalog = NULL;
+
+    Database db = {0};
+    EvaluationContext context = {0};
+
+    uint32_t catalog_root_page_num = INVALID_ROOT_PAGE;
+    uint32_t original_secondary_root = INVALID_ROOT_PAGE;
+
+    CatalogPayload secondary_payload = {0};
+
+    // Initialize data
+    ASSERT(create_test_pager(&test_pager));
+
+    schema = create_test_schema_with_constraints();
+    ASSERT(schema != NULL);
+
+    table = table_create("users", schema, test_pager.pager);
+    ASSERT(table != NULL);
+    ASSERT(table->primary_index != NULL);
+    ASSERT(table->total_secondary_indexes == 1);
+
+    init_test_database(&db, test_pager.pager, &table, 1);
+
+    catalog = catalog_create(test_pager.pager, &catalog_root_page_num);
+    ASSERT(catalog != NULL);
+
+    db.catalog = catalog;
+    context.db = &db;
+
+    original_secondary_root = table->secondary_indexes[0]->root_page_num;
+
+    ASSERT(insert_table_catalog_records(catalog, table));
+
+    for (uint32_t i = 1; i <= 1000 && table->secondary_indexes[0]->root_page_num == original_secondary_root; i++) {
+        char email[64] = {0};
+        snprintf(email, sizeof(email), "user%u@example.com", i);
+
+        Row *row = create_test_user_row(i, email, 20 + (i % 50));
+        ASSERT(row != NULL);
+
+        TableMutationStatus status = table_insert_entry(table, test_pager.pager, row, &context);
+
+        row_free(row);
+
+        ASSERT(status == TABLE_MUTATION_SUCCESS);
+    }
+
+    // Validate that the secondary index changed
+    ASSERT(table->secondary_indexes[0]->root_page_num != original_secondary_root);
+
+    // Validate that the secondary index catalog record is synchronized with the new root page number
+    ASSERT(get_catalog_record_payload(
+            catalog,
+            table->name,
+            CATALOG_INDEX,
+            table->secondary_indexes[0]->name,
+            table->secondary_indexes[0]->root_page_num,
+            &secondary_payload
+        )
+    );
+
+    ASSERT(secondary_payload.root_page_num == table->secondary_indexes[0]->root_page_num);
+
+    result = 0;
+
+cleanup:
+    destroy_test_database_metadata(&db);
+
+    table_free(table);
+    schema_free(schema);
+
+    destroy_test_pager(&test_pager);
+    return result;
+}
+
+static int test_table_delete_entry_syncs_primary_catalog_root() {
+    int result = 1;
+
+    TestPager test_pager = {0};
+    Schema *schema = NULL;
+    Table *table = NULL;
+    Catalog *catalog = NULL;
+
+    Database db = {0};
+    EvaluationContext context = {0};
+
+    uint32_t catalog_root_page_num = INVALID_ROOT_PAGE;
+    uint32_t root_before_delete = INVALID_ROOT_PAGE;
+
+    CatalogPayload primary_payload = {0};
+    CatalogPayload table_payload = {0};
+
+    Row *rows[1000] = {0};
+    uint32_t inserted_rows = 0;
+
+    // Initialize data
+    ASSERT(create_test_pager(&test_pager));
+
+    schema = create_test_schema_with_constraints();
+    ASSERT(schema != NULL);
+
+    table = table_create("users", schema, test_pager.pager);
+    ASSERT(table != NULL);
+    ASSERT(table->primary_index != NULL);
+
+    ASSERT(init_test_database(&db, test_pager.pager, &table, 1));
+
+    catalog = catalog_create(test_pager.pager, &catalog_root_page_num);
+    ASSERT(catalog != NULL);
+
+    db.catalog = catalog;
+    context.db = &db;
+
+    ASSERT(insert_table_catalog_records(catalog, table));
+
+    uint32_t initial_primary_root = table->primary_index->root_page_num;
+
+    // Grow the primary B+ tree until its root changes.
+    for (uint32_t i = 1; i <= 1000 && table->primary_index->root_page_num == initial_primary_root; i++) {
+
+        char email[64] = {0};
+        snprintf(email, sizeof(email), "user%u@example.com", i);
+
+        rows[inserted_rows] = create_test_user_row(i, email, 20 + (i % 50));
+        ASSERT(rows[inserted_rows] != NULL);
+
+        ASSERT(table_insert_entry(table, test_pager.pager, rows[inserted_rows], &context) 
+                == TABLE_MUTATION_SUCCESS);
+
+        inserted_rows++;
+    }
+
+    ASSERT(table->primary_index->root_page_num != initial_primary_root);
+
+    root_before_delete = table->primary_index->root_page_num;
+
+    /*
+     * Delete rows until the primary tree contracts and its root changes.
+     */
+    for (uint32_t i = inserted_rows; i > 0 && table->primary_index->root_page_num == root_before_delete; i--) {
+
+        ASSERT(table_delete_entry(table, test_pager.pager, rows[i - 1], &context) 
+                == TABLE_MUTATION_SUCCESS);
+    }
+
+    ASSERT(table->primary_index->root_page_num != root_before_delete);
+
+    /*
+     * Primary INDEX catalog record must contain the new root.
+     */
+    ASSERT(get_catalog_record_payload(
+        catalog,
+        table->name,
+        CATALOG_INDEX,
+        table->primary_index->name,
+        table->primary_index->root_page_num,
+        &primary_payload
+    ));
+
+    ASSERT(primary_payload.root_page_num == table->primary_index->root_page_num);
+
+    // TABLE catalog record stores the canonical primary root, so it must be synchronized as well.
+    ASSERT(get_catalog_record_payload(
+        catalog,
+        table->name,
+        CATALOG_TABLE,
+        table->name,
+        table->primary_index->root_page_num,
+        &table_payload
+    ));
+
+    ASSERT(
+        table_payload.root_page_num ==
+        table->primary_index->root_page_num
+    );
+
+    result = 0;
+
+cleanup:
+    for (uint32_t i = 0; i < inserted_rows; i++) {
+        row_free(rows[i]);
+    }
+
+    destroy_test_database_metadata(&db);
+
+    table_free(table);
+    schema_free(schema);
+
+    destroy_test_pager(&test_pager);
+    return result;
+}
+
+
+static int test_table_insert_entry_propagates_catalog_sync_failure() {
+    int result = 1;
+
+    TestPager test_pager = {0};
+    Schema *schema = NULL;
+    Table *table = NULL;
+    Catalog *catalog = NULL;
+
+    Database db = {0};
+    EvaluationContext context = {0};
+
+    uint32_t catalog_root_page_num = INVALID_ROOT_PAGE;
+    uint32_t original_primary_root = INVALID_ROOT_PAGE;
+
+    bool root_changed = false;
+    bool sync_failed = false;
+
+    ASSERT(create_test_pager(&test_pager));
+
+    schema = create_test_schema_with_primary_key();
+    ASSERT(schema != NULL);
+
+    table = table_create("users", schema, test_pager.pager);
+    ASSERT(table != NULL);
+    ASSERT(table->primary_index != NULL);
+    ASSERT(table->total_secondary_indexes == 0);
+
+    ASSERT(init_test_database(&db, test_pager.pager, &table, 1));
+
+    catalog = catalog_create(test_pager.pager, &catalog_root_page_num);
+    ASSERT(catalog != NULL);
+
+    db.catalog = catalog;
+    context.db = &db;
+
+    original_primary_root = table->primary_index->root_page_num;
+
+    /*
+     * Deliberately DO NOT call:
+     *
+     *     insert_table_catalog_records(catalog, table);
+     *
+     * As long as the root remains unchanged, no catalog update is
+     * required. Once the root changes, synchronization should fail
+     * because the corresponding catalog record does not exist.
+     */
+    for (uint32_t i = 1; i <= 1000 && !root_changed; i++) {
+        char email[64] = {0};
+        snprintf(email, sizeof(email), "user%u@example.com", i);
+
+        Row *row = create_test_user_row(i, email, 20 + (i % 50));
+
+        ASSERT(row != NULL);
+
+        TableMutationStatus status = table_insert_entry(table, test_pager.pager, row, &context);
+
+        row_free(row);
+
+        if (table->primary_index->root_page_num != original_primary_root) {
+            root_changed = true;
+
+            // Physical mutation succeeded, but persistence of the
+            //changed root could not find its catalog record.
+            ASSERT(status == TABLE_MUTATION_NOT_FOUND);
+            sync_failed = true;
+        }
+        else {
+            ASSERT(status == TABLE_MUTATION_SUCCESS);
+        }
+    }
+
+    ASSERT(root_changed);
+    ASSERT(sync_failed);
+
+    result = 0;
+
+cleanup:
+    destroy_test_database_metadata(&db);
+
+    table_free(table);
+    schema_free(schema);
+
+    destroy_test_pager(&test_pager);
+    return result;
+}
+
 /* ---------- Logging Helper ---------- */
 
 void generate_output(int result, int test_num, char *test_desc) {
@@ -3850,5 +4466,16 @@ int main(int argc, char *argv[]) {
     result = test_table_remove_constraint_invalid_arguments();
     generate_output(result, 43, "test_table_remove_constraint_invalid_arguments");
 
+    /* ---------- table mutation catalog persistence tests ---------- */
+    result = test_table_insert_entry_does_not_change_catalog_root();
+    generate_output(result, 44, "test_table_insert_entry_does_not_change_catalog_root");
+    result = test_table_insert_entry_syncs_primary_catalog_root();
+    generate_output(result, 45, "test_table_insert_entry_syncs_primary_catalog_root");
+    result = test_table_insert_entry_syncs_secondary_catalog_root();
+    generate_output(result, 46, "test_table_insert_entry_syncs_secondary_catalog_root");
+    result = test_table_delete_entry_syncs_primary_catalog_root();
+    generate_output(result, 47, "test_table_delete_entry_syncs_primary_catalog_root");
+    result = test_table_insert_entry_propagates_catalog_sync_failure();
+    generate_output(result, 48, "test_table_insert_entry_propagates_catalog_sync_failure");
     return 0;
 }
