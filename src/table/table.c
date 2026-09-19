@@ -14,6 +14,8 @@
 #include "../../include/row.h"
 #include "../../include/expressions.h"
 #include "../../include/page.h"
+#include "../../include/catalog.h"
+#include "../../include/database.h"
 
 
 /* Creation of logical Table struct */
@@ -1752,15 +1754,18 @@ TableLookupStatus table_scan(const Table *table, Pager *pager, TableRowResult *r
 }
 
 
-/* Table entry insert
+/*
+ * Table entry insert
  *
- * If insertion into a secondary index fails after earlier indexes
- * have already accepted the row, remove the entry from those indexes
- * in reverse order.
+ * Table-level insertion is not currently atomic across indexes.
  *
- * Full atomicity cannot currently be guaranteed because B+ tree
- * mutations themselves are not transactional. Transaction/WAL
- * recovery will be implemented separately.
+ * If the primary index or an earlier secondary index accepts the row
+ * and a later index mutation or catalog synchronization fails, the
+ * already-applied changes cannot currently be rolled back.
+ *
+ * TODO(transaction):
+ * A future transaction/WAL layer must restore previously modified
+ * indexes and catalog records to a consistent state.
  */
 TableMutationStatus table_insert_entry(Table *table, Pager *pager, Row *row, const EvaluationContext *context) {
     // Validate inputs
@@ -1830,46 +1835,76 @@ TableMutationStatus table_insert_entry(Table *table, Pager *pager, Row *row, con
         }
     }
 
+    if (!context || !context->db || !context->db->catalog) {
+        return TABLE_MUTATION_INVALID_ARGUMENTS;
+    }
+
+    const Catalog *catalog = context->db->catalog;
+
     if (!schema_validate_row(table->table_schema, row, context)) {
         return TABLE_MUTATION_CONSTRAINT_ERROR;
     }
 
+
+    uint32_t old_primary_root = table->primary_index->root_page_num;
+  
     // Firstly, (attempt to) insert new Row in the primary index
-    IndexMutationStatus status = index_insert_entry(
+    IndexMutationStatus index_status = index_insert_entry(
         table->primary_index, 
         pager, 
         table->table_schema, 
         row
     );
 
-    switch (status) {
-        case INDEX_MUTATION_SUCCESS:
-            break;
-        case INDEX_MUTATION_DUPLICATE_KEY:
-            return TABLE_MUTATION_DUPLICATE_KEY;
-        case INDEX_MUTATION_INVALID_ARGUMENTS:
-            return TABLE_MUTATION_INVALID_ARGUMENTS;
-        case INDEX_MUTATION_ERROR:
-        default:
-            return TABLE_MUTATION_ERROR;
+    TableMutationStatus table_status = index_mutation_to_table_mutation_status(index_status);
+    
+    if (table_status != TABLE_MUTATION_SUCCESS) {
+        return table_status;
+    }
+
+    // Update both the primary index's and table's catalog metadata 
+    // if the primary index's root page number changed
+    if (table->primary_index->root_page_num != old_primary_root) {
+        
+        table_status = table_sync_index_catalog_root(
+            table, 
+            table->primary_index,
+            (Catalog *) catalog,  
+            old_primary_root
+        );
+
+        if (table_status != TABLE_MUTATION_SUCCESS) {
+            return table_status;
+        }
+
+        table_status = table_sync_table_catalog_root(table, (Catalog *) catalog, old_primary_root);
+
+        if (table_status != TABLE_MUTATION_SUCCESS) {
+            return table_status;
+        }
     }
 
     // Then, (attempt to) insert new Row in all existing secondary indexes
     for (uint32_t i = 0; i < table->total_secondary_indexes; i++) {
         Index *sec_index = table->secondary_indexes[i];
 
-        status = index_insert_entry(sec_index, pager, table->table_schema, row);
+        uint32_t old_secondary_root = sec_index->root_page_num;
 
-        switch (status) {
-            case INDEX_MUTATION_SUCCESS:
-                break;
-            case INDEX_MUTATION_DUPLICATE_KEY:
-                return TABLE_MUTATION_DUPLICATE_KEY;
-            case INDEX_MUTATION_INVALID_ARGUMENTS:
-                return TABLE_MUTATION_INVALID_ARGUMENTS;
-            case INDEX_MUTATION_ERROR:
-            default:
-                return TABLE_MUTATION_ERROR;
+        index_status = index_insert_entry(sec_index, pager, table->table_schema, row);
+
+        table_status = index_mutation_to_table_mutation_status(index_status);
+
+        if (table_status != TABLE_MUTATION_SUCCESS) {
+            return table_status;
+        }
+        
+        // A secondary root change only affects that index's catalog record
+        if (sec_index->root_page_num != old_secondary_root) {
+            table_status = table_sync_index_catalog_root(table, sec_index, (Catalog *) catalog, old_secondary_root);
+
+            if (table_status != TABLE_MUTATION_SUCCESS) {
+                return table_status;
+            }
         }
     }
 
@@ -1887,9 +1922,8 @@ TableMutationStatus table_insert_entry(Table *table, Pager *pager, Row *row, con
 
     table->row_count++;
 
-    /*
-     * TODO(catalog): Persist row_count and column statistics.
-     */
+    // row_count and column statistics remain in memory during the
+    // database session and are serialized during clean database close.
 
     return TABLE_MUTATION_SUCCESS;
 }
@@ -1980,43 +2014,73 @@ TableMutationStatus table_delete_entry(Table *table, Pager *pager, Row *row,
         }
     }
 
+    if (!context || !context->db || !context->db->catalog) {
+        return TABLE_MUTATION_INVALID_ARGUMENTS;
+    }
+
+    const Catalog *catalog = context->db->catalog;
+
+
     // Firstly, (attempt to) delete the input Row from all existing secondary indexes
     for (uint32_t i = 0; i < table->total_secondary_indexes; i++) {
         Index *sec_index = table->secondary_indexes[i];
 
-        IndexMutationStatus status = index_delete_entry(sec_index, pager, table->table_schema, row);
+        uint32_t old_secondary_root = sec_index->root_page_num;
 
-        switch (status) {
-            case INDEX_MUTATION_SUCCESS:
-                break;
-            case INDEX_MUTATION_NOT_FOUND:
-                return TABLE_MUTATION_NOT_FOUND;
-            case INDEX_MUTATION_INVALID_ARGUMENTS:
-                return TABLE_MUTATION_INVALID_ARGUMENTS;
-            case INDEX_MUTATION_ERROR:
-            default:
-                return TABLE_MUTATION_ERROR;
+        IndexMutationStatus index_status = index_delete_entry(sec_index, pager, table->table_schema, row);
+
+        TableMutationStatus table_status = index_mutation_to_table_mutation_status(index_status);
+
+        if (table_status != TABLE_MUTATION_SUCCESS) {
+            return table_status;
+        }
+
+        // A secondary root change only affects that index's catalog record
+        if (sec_index->root_page_num != old_secondary_root) {
+            table_status = table_sync_index_catalog_root(table, sec_index, (Catalog *) catalog, old_secondary_root);
+
+            if (table_status != TABLE_MUTATION_SUCCESS) {
+                return table_status;
+            }
         }
     }
 
+    uint32_t old_primary_root = table->primary_index->root_page_num;
+
     // Then, (attempt to) to delete the input Row from the primary index
-    IndexMutationStatus status = index_delete_entry(
+    IndexMutationStatus index_status = index_delete_entry(
         table->primary_index, 
         pager, 
         table->table_schema,
         row
     );
 
-    switch (status) {
-        case INDEX_MUTATION_SUCCESS:
-            break;
-        case INDEX_MUTATION_NOT_FOUND:
-            return TABLE_MUTATION_NOT_FOUND;
-        case INDEX_MUTATION_INVALID_ARGUMENTS:
-            return TABLE_MUTATION_INVALID_ARGUMENTS;
-        case INDEX_MUTATION_ERROR:
-        default:
-            return TABLE_MUTATION_ERROR;
+    TableMutationStatus table_status = index_mutation_to_table_mutation_status(index_status);
+
+    if (table_status != TABLE_MUTATION_SUCCESS) {
+        return table_status;
+    }
+
+    // Update both the primary index's and table's catalog metadata 
+    // if the primary index's root page number changed
+    if (table->primary_index->root_page_num != old_primary_root) {
+        
+        table_status = table_sync_index_catalog_root(
+            table,
+            table->primary_index,
+            (Catalog *) catalog,
+            old_primary_root
+        );
+
+        if (table_status != TABLE_MUTATION_SUCCESS) {
+            return table_status;
+        }
+
+        table_status = table_sync_table_catalog_root(table, (Catalog *) catalog, old_primary_root);
+
+        if (table_status != TABLE_MUTATION_SUCCESS) {
+            return table_status;
+        }
     }
 
     // Record table statistics after input row has been successfully deleted from all indexes
@@ -2033,9 +2097,8 @@ TableMutationStatus table_delete_entry(Table *table, Pager *pager, Row *row,
 
     table->row_count--;
 
-    /*
-     * TODO(catalog): Persist row_count and column statistics.
-     */
+    // row_count and column statistics remain in memory during the
+    // database session and are serialized during clean database close.
 
     return TABLE_MUTATION_SUCCESS;
 }
@@ -2130,13 +2193,21 @@ TableMutationStatus table_update_entry(Table *table, Pager *pager, Row *old_row,
         }
     }
 
+    if (!context || !context->db || !context->db->catalog) {
+        return TABLE_MUTATION_INVALID_ARGUMENTS;
+    }
+
+    const Catalog *catalog = context->db->catalog;
+
     if (!schema_validate_row(table->table_schema, new_row, context)) {
         return TABLE_MUTATION_CONSTRAINT_ERROR;
     }
 
 
+    uint32_t old_primary_root = table->primary_index->root_page_num;
+
     // Firstly, (attempt to) update Row in the primary index
-    IndexMutationStatus status = index_update_entry(
+    IndexMutationStatus index_status = index_update_entry(
         table->primary_index, 
         pager, 
         table->table_schema, 
@@ -2144,38 +2215,54 @@ TableMutationStatus table_update_entry(Table *table, Pager *pager, Row *old_row,
         new_row
     );
 
-    switch (status) {
-        case INDEX_MUTATION_SUCCESS:
-            break;
-        case INDEX_MUTATION_NOT_FOUND:
-            return TABLE_MUTATION_NOT_FOUND;
-        case INDEX_MUTATION_DUPLICATE_KEY:
-            return TABLE_MUTATION_DUPLICATE_KEY;
-        case INDEX_MUTATION_INVALID_ARGUMENTS:
-            return TABLE_MUTATION_INVALID_ARGUMENTS;
-        case INDEX_MUTATION_ERROR:
-        default:
-            return TABLE_MUTATION_ERROR;
+    TableMutationStatus table_status = index_mutation_to_table_mutation_status(index_status);
+    
+    if (table_status != TABLE_MUTATION_SUCCESS) {
+        return table_status;
+    }
+    
+    // Update both the primary index's and table's catalog metadata 
+    // if the primary index's root page number changed
+    if (table->primary_index->root_page_num != old_primary_root) {
+        table_status = table_sync_index_catalog_root(
+            table,
+            table->primary_index,
+            (Catalog *) catalog,
+            old_primary_root
+        );
+
+        if (table_status != TABLE_MUTATION_SUCCESS) {
+            return table_status;
+        }
+
+        table_status = table_sync_table_catalog_root(table, (Catalog *) catalog, old_primary_root);
+
+        if (table_status != TABLE_MUTATION_SUCCESS) {
+            return table_status;
+        }
     }
 
     // Then, (attempt to) update the Row in all existing secondary indexes
     for (uint32_t i = 0; i < table->total_secondary_indexes; i++) {
         Index *sec_index = table->secondary_indexes[i];
 
-        status = index_update_entry(sec_index, pager, table->table_schema, old_row, new_row);
+        uint32_t old_secondary_root = sec_index->root_page_num;
 
-        switch (status) {
-            case INDEX_MUTATION_SUCCESS:
-                break;
-            case INDEX_MUTATION_NOT_FOUND:
-                return TABLE_MUTATION_NOT_FOUND;
-            case INDEX_MUTATION_DUPLICATE_KEY:
-                return TABLE_MUTATION_DUPLICATE_KEY;
-            case INDEX_MUTATION_INVALID_ARGUMENTS:
-                return TABLE_MUTATION_INVALID_ARGUMENTS;
-            case INDEX_MUTATION_ERROR:
-            default:
-                return TABLE_MUTATION_ERROR;
+        index_status = index_update_entry(sec_index, pager, table->table_schema, old_row, new_row);
+
+        table_status = index_mutation_to_table_mutation_status(index_status);
+
+        if (table_status != TABLE_MUTATION_SUCCESS) {
+            return table_status;
+        }
+        
+        // A secondary root change only affects that index's catalog record
+        if (sec_index->root_page_num != old_secondary_root) {
+            table_status = table_sync_index_catalog_root(table, sec_index, (Catalog *) catalog, old_secondary_root);
+
+            if (table_status != TABLE_MUTATION_SUCCESS) {
+                return table_status;
+            }
         }
     }
 
@@ -2193,13 +2280,12 @@ TableMutationStatus table_update_entry(Table *table, Pager *pager, Row *old_row,
         }
     }
 
-    /*
-     * TODO(catalog): Persist updated column statistics when
-     * system-catalog metadata persistence is implemented.
-     */
+    // row_count and column statistics remain in memory during the
+    // database session and are serialized during clean database close.
 
     return TABLE_MUTATION_SUCCESS;
 }
+
 
 
 /*
