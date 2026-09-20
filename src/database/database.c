@@ -103,33 +103,36 @@ Database *database_open(const char *pathname) {
         }
     }
 
-    CatalogLookupResult lookup_result = {0};
-    CatalogLookupStatus status = catalog_scan(db->catalog, &lookup_result);
-    if (status != CATALOG_LOOKUP_SUCCESS) {
-        database_free(db);
-        return NULL;
-    }
+    /* Reconstruct System Catalog if database file length bigger than PAGE_SIZE. */
+    if (db->pager->file_length > PAGE_SIZE) {
+        CatalogLookupResult lookup_result = {0};
+        CatalogLookupStatus status = catalog_scan(db->catalog, &lookup_result);
+        if (status != CATALOG_LOOKUP_SUCCESS) {
+            database_free(db);
+            return NULL;
+        }
 
-    // Reconstruct all Database metadata from System Catalog B+Tree.
-    if (!reconstruct_system_catalog(db, &lookup_result)) {
+        // Reconstruct all Database metadata from System Catalog B+Tree.
+        if (!reconstruct_system_catalog(db, &lookup_result)) {
+            for (uint32_t i = 0; i < lookup_result.num_records; i++) {
+                if (lookup_result.records[i].cell) {
+                    btree_cell_contents_free(lookup_result.records[i].cell, &db->catalog->spec);
+                }
+            }
+            free(lookup_result.records);
+            database_free(db);
+            return NULL;
+        }
+
+
         for (uint32_t i = 0; i < lookup_result.num_records; i++) {
             if (lookup_result.records[i].cell) {
                 btree_cell_contents_free(lookup_result.records[i].cell, &db->catalog->spec);
             }
         }
         free(lookup_result.records);
-        database_free(db);
-        return NULL;
     }
-
-
-    for (uint32_t i = 0; i < lookup_result.num_records; i++) {
-        if (lookup_result.records[i].cell) {
-            btree_cell_contents_free(lookup_result.records[i].cell, &db->catalog->spec);
-        }
-    }
-    free(lookup_result.records);
-
+    
     return db;
 }
 
@@ -144,6 +147,14 @@ bool database_close(Database *db) {
     bool database_close_succeeded = update_metadata_pages(db);
     database_close_succeeded &= db->pager != NULL;
 
+    // Free Catalog metadata
+    if (db->catalog) {
+        Catalog *catalog = db->catalog;
+        db->catalog = NULL;
+
+        catalog_free(catalog);
+    }
+    
     // Free Table metadata structures and pointer array
     if (db->tables) {
         for (uint32_t i = 0; i < MAX_TABLES; i++) {
@@ -196,6 +207,13 @@ void database_free(Database *db) {
     }
 
     db->table_count = 0;
+
+    if (db->catalog) {
+        Catalog *catalog = db->catalog;
+        db->catalog = NULL;
+
+        catalog_free(catalog);
+    }
 
     // Attempt to close the page and, by extension, free all Index pages in memory
     if (db->pager) {
