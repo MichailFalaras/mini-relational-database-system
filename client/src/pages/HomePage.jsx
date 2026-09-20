@@ -8,6 +8,7 @@ import ConnectDatabaseModal from "../components/ConnectDatabaseModal.jsx";
 import SQLEditor from "../components/SQLEditor.jsx";
 import ResultsPanel from "../components/ResultsPanel.jsx";
 import { X, Plus, Loader2, PlayIcon, Check, Copy, Download } from "lucide-react";
+import { loadQueryHistory, saveQueryHistory, MAX_HISTORY_ENTRIES } from "./../utils/queryHistory.js";
 import "./../styles/home.css";
 
 
@@ -409,7 +410,26 @@ function HomePage() {
     const [result, setResult] = useState(null);
     const [activeTable, setActiveTable] = useState(null);
     const [resultPanel, setResultPanel] = useState("results");
-    const [history, setHistory] = useState([]);
+    
+    // Restore Query history from the Local storage
+    const [history, setHistory] = useState(loadQueryHistory);
+
+    // Add the latest query to the query search history
+    function addHistoryEntry(sql, result) {
+        const newHistoryEntry = {
+            id: crypto.randomUUID(),
+            sql,
+            database: activeConn?.name ?? "no database",
+            executedAt: new Date(),
+            result
+        };
+
+        setHistory((prev) => [newHistoryEntry, ...prev].slice(0, MAX_HISTORY_ENTRIES));
+    }
+
+    useEffect(() => {
+        saveQueryHistory(history);
+    }, [history]);
 
     // Copy SQL text to clipboard
     function handleCopySQL() {
@@ -472,16 +492,7 @@ function HomePage() {
 
             setExecutionStatus("success");
 
-            setHistory((prev) => [
-                {
-                    id: crypto.randomUUID(),
-                    sql: executedSQL,
-                    database: activeConn?.name ?? "no database",
-                    executedAt: new Date(),
-                    result: queryResult
-                },
-                ...prev
-            ]);
+            addHistoryEntry(executedSQL, queryResult);
         
         } catch(error) {
             const errorResult = {
@@ -492,16 +503,7 @@ function HomePage() {
             setResult(errorResult);
             setExecutionStatus("error");
 
-            setHistory((prev) => [
-                {
-                    id: crypto.randomUUID(),
-                    sql: executedSQL,
-                    database: activeConn?.name ?? "no database",
-                    executedAt: new Date(),
-                    result: errorResult
-                },
-                ...prev
-            ]);
+            addHistoryEntry(executedSQL, errorResult);
         }
     }
 
