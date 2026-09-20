@@ -331,6 +331,7 @@ static int test_catalog_create() {
         ASSERT(catalog->spec.schema->columns[2]->non_null_rows == 0);
 
         catalog_free(catalog);
+        pager_close(pager);
     }
     
 
@@ -394,6 +395,7 @@ static int test_catalog_create() {
         ASSERT(catalog->spec.schema->columns[2]->non_null_rows == 0);
 
         catalog_free(catalog);
+        pager_close(pager);
     }
 
     return 0;
@@ -571,6 +573,7 @@ static int test_catalog_create_record() {
     }
 
     catalog_free(catalog);
+    pager_close(pager);
     return 0;
 }
 
@@ -644,6 +647,7 @@ static int test_invalid_catalog_record_creation() {
     }
 
     catalog_free(catalog);
+    pager_close(pager);
     return 0;
 }
 
@@ -709,6 +713,7 @@ static int test_catalog_metadata_pages() {
     table_free(table);
 
     catalog_free(catalog);
+    pager_close(pager);
     return 0;
 }
 
@@ -896,6 +901,7 @@ static int test_invalid_catalog_metadata_pages() {
     }
 
     catalog_free(catalog);
+    pager_close(pager);
     return 0;
 }
 
@@ -993,6 +999,7 @@ static int test_catalog_insert_record() {
     }
 
     catalog_free(catalog);
+    pager_close(pager);
     return 0;
 }
 
@@ -1076,6 +1083,7 @@ static int test_invalid_catalog_record_insertion() {
     }
 
     catalog_free(catalog);
+    pager_close(pager);
     return 0;
 }
 
@@ -1271,6 +1279,7 @@ static int test_catalog_lookup_record() {
     }
 
     catalog_free(catalog);
+    pager_close(pager);
     return 0;
 }
 
@@ -1333,6 +1342,7 @@ static int test_invalid_catalog_record_lookup() {
     }
 
     catalog_free(catalog);
+    pager_close(pager);
     return 0;
 }
 
@@ -1475,6 +1485,7 @@ static int test_catalog_delete_record() {
     }
 
     catalog_free(catalog);
+    pager_close(pager);
     return 0;
 }
 
@@ -1638,6 +1649,7 @@ static int test_catalog_update_record() {
     }
 
     catalog_free(catalog);
+    pager_close(pager);
     return 0;
 }
 
@@ -1715,6 +1727,7 @@ static int test_invalid_catalog_record_update() {
     }
 
     catalog_free(catalog);
+    pager_close(pager);
     return 0;
 }
 
@@ -1830,6 +1843,7 @@ static int test_catalog_scan() {
     }
 
     catalog_free(catalog);
+    pager_close(pager);
     return 0;
 }
 
@@ -1862,6 +1876,7 @@ static int test_invalid_catalog_scan() {
     }
 
     catalog_free(catalog);
+    pager_close(pager);
     return 0;
 }
 
@@ -2212,6 +2227,7 @@ static int test_catalog_mixed_record_operations() {
     }
 
     catalog_free(catalog);
+    pager_close(pager);
     return 0;
 }
 
