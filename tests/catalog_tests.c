@@ -1664,7 +1664,7 @@ static int test_invalid_catalog_record_update() {
         if (!allocate_mock_root_page(pager, &new_mock_root)) { return -1; }
 
         CatalogStatus status = catalog_update_record(catalog, &record_info, new_mock_root);
-        ASSERT(status == CATALOG_ERROR);
+        ASSERT(status == CATALOG_NOT_FOUND);
 
         btree_cell_contents_free(&mock_cell, &catalog->spec);
     }
@@ -1709,7 +1709,7 @@ static int test_invalid_catalog_record_update() {
         if (!allocate_mock_root_page(pager, &new_mock_root)) { return -1; }
 
         CatalogStatus status = catalog_update_record(catalog, &record_info, new_mock_root);
-        ASSERT(status == CATALOG_ERROR);
+        ASSERT(status == CATALOG_NOT_FOUND);
 
         btree_cell_contents_free(&mock_cell, &catalog->spec);
     }
