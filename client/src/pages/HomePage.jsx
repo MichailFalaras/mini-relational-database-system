@@ -407,10 +407,9 @@ function HomePage() {
     // Editor-related state
     const [isSQLCopied, setIsSQLCopied] = useState(false);
     const [result, setResult] = useState(null);
-    //const [activeTable, setActiveTable] = useState(TABLES[1]?.name);
     const [activeTable, setActiveTable] = useState(null);
     const [resultPanel, setResultPanel] = useState("results");
-    const [history, setHistory] = useState(HISTORY);
+    const [history, setHistory] = useState([]);
 
     // Copy SQL text to clipboard
     function handleCopySQL() {
@@ -443,6 +442,13 @@ function HomePage() {
             return;
         }
         
+        const executedSQL = activeTab.sql;
+
+        // Prevent an empty SQL query from running
+        if (!executedSQL.trim()) {
+            return;
+        }
+
         // Start new execution
         setResultPanel("results");
         setExecutionStatus("executing");
@@ -455,22 +461,47 @@ function HomePage() {
             // Mock API Query
             await new Promise((resolve) => setTimeout(resolve, 1000));
 
-            setResult({
+            const queryResult = {
                 type: "select",
                 rows: [], //MOCK_ROWS.users.rows,
                 columns: MOCK_ROWS.users.columns,
                 executionTime: 50
-            });
+            };
+
+            setResult(queryResult);
 
             setExecutionStatus("success");
+
+            setHistory((prev) => [
+                {
+                    id: crypto.randomUUID(),
+                    sql: executedSQL,
+                    database: activeConn?.name ?? "no database",
+                    executedAt: new Date(),
+                    result: queryResult
+                },
+                ...prev
+            ]);
         
         } catch(error) {
-            setResult({
+            const errorResult = {
                 type: "error",
                 error: error.message
-            });
+            };
 
+            setResult(errorResult);
             setExecutionStatus("error");
+
+            setHistory((prev) => [
+                {
+                    id: crypto.randomUUID(),
+                    sql: executedSQL,
+                    database: activeConn?.name ?? "no database",
+                    executedAt: new Date(),
+                    result: errorResult
+                },
+                ...prev
+            ]);
         }
     }
 

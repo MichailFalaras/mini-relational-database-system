@@ -122,7 +122,12 @@ function HistoryView({ history, onRestore, onClear }) {
 								</span>
 							)}
 
-							<span className="history-entry-exec-time">{entry.result.executionTime}ms</span>
+							{entry?.result?.executionTime != null && (
+								<span className="history-entry-exec-time">
+									{entry.result.executionTime}ms
+								</span>	
+							)}	
+							
 
 							{/* Action buttons that appear while hovering */}
 							<div className="history-entry-actions">
