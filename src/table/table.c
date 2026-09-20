@@ -602,7 +602,7 @@ bool table_append_index(Table *table, Index *index) {
     if (!table || 
         !table->table_schema ||
         !table->secondary_indexes || 
-        table->is_deleted || 
+        table->is_deleted ||
         !table->is_materialized) {
         return false;
     }
