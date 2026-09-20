@@ -12,8 +12,7 @@
 
 /* Superblock Page Validation. */
 bool validate_superblock_page(Pager *pager, PageZeroMetadata *page_zero_metadata) {
-    if (!pager || !pager->num_pages
-        || !pager->file_length || !pager->fd) {
+    if (!pager || !pager->num_pages || !page_zero_metadata) {
         return false;
     }
 
@@ -78,18 +77,30 @@ bool reconstruct_system_catalog(Database *db, CatalogLookupResult *lookup_result
         }
 
         if (lookup_result->records[i].cell->BTreePayload.catalog->type == CATALOG_INDEX) {
+            index_records[num_index_records] = (CatalogRecord *) calloc(1, sizeof(CatalogRecord));
+            if (!index_records[num_index_records]) {
+                goto cleanup;
+            }
+
             index_records[num_index_records]->cell = lookup_result->records[i].cell;
             num_index_records++;
             continue;
         }
 
         CatalogRecordInfo record_info = {0};
+        strncpy(record_info.table_name, lookup_result->records[i].cell->keys[0]->value.char_val.string, 64);
+        record_info.table_name[63] = '\0';
+        record_info.type = CATALOG_TABLE;
+        strncpy(record_info.object_name, lookup_result->records[i].cell->keys[2]->value.char_val.string, 64);
+        record_info.object_name[63] = '\0';
+        record_info.root_page_num = lookup_result->records[i].cell->BTreePayload.catalog->root_page_num;
+
         uint32_t metadata_page_num = lookup_result->records[i].cell->BTreePayload.catalog->metadata_page_num;
         CatalogStatus status = catalog_read_metadata_pages(db->catalog, lookup_result->records[i].cell, &record_info, metadata_page_num);
         if (status != CATALOG_SUCCESS) {
             goto cleanup;
         }
-
+        
         if (!database_add_table(db, record_info.object.table)) {
             goto cleanup;
         }
@@ -97,6 +108,13 @@ bool reconstruct_system_catalog(Database *db, CatalogLookupResult *lookup_result
 
     for (uint32_t i = 0; i < num_index_records; i++) {
         CatalogRecordInfo record_info = {0};
+        strncpy(record_info.table_name, index_records[i]->cell->keys[0]->value.char_val.string, 64);
+        record_info.table_name[63] = '\0';
+        record_info.type = CATALOG_INDEX;
+        strncpy(record_info.object_name, index_records[i]->cell->keys[2]->value.char_val.string, 64);
+        record_info.object_name[63] = '\0';
+        record_info.root_page_num = index_records[i]->cell->BTreePayload.catalog->root_page_num;
+
         uint32_t metadata_page_num = index_records[i]->cell->BTreePayload.catalog->metadata_page_num;
         CatalogStatus status = catalog_read_metadata_pages(db->catalog, index_records[i]->cell, &record_info, metadata_page_num);
         if (status != CATALOG_SUCCESS) {
@@ -154,18 +172,16 @@ cleanup:
 
 /* Update metadata pages. Used in database_close(). */
 bool update_metadata_pages(Database *db) {
-    if (!db || !db->pager || !db->catalog
-        || !db->table_count || !db->tables) {
+    if (!db || !db->pager || !db->catalog || !db->tables) {
         return false;
     }
 
     CatalogMetadataPages visited = {0};
-    CatalogMetadataPages visited_copies = {0};
-
     CatalogMetadataPages table_metadata = {0};
     CatalogMetadataPages index_metadata = {0};
     CatalogLookupResult lookup_result = {0};
 
+    // No tables at all => return true
     uint32_t table_idx = 0;
     for (; table_idx < db->table_count; table_idx++) {
         if (!db->tables[table_idx]) {
@@ -187,6 +203,7 @@ bool update_metadata_pages(Database *db) {
             goto restore_old_metadata;
         }
         
+        record_info.root_page_num = lookup_result.records[0].cell->BTreePayload.catalog->root_page_num;
         uint32_t metadata_page_num = lookup_result.records[0].cell->BTreePayload.catalog->metadata_page_num;
         
         // Visit all metadata pages
@@ -197,15 +214,13 @@ bool update_metadata_pages(Database *db) {
 
         // Copy all of them and connect them together
         uint32_t new_metadata_page_num = 0;
-        memset(&visited_copies, 0, sizeof(visited_copies));
-        if (!copy_metadata_pages(db->pager, &visited_copies, &new_metadata_page_num)) {
+        if (!copy_metadata_pages(db->pager, &visited, &new_metadata_page_num)) {
             goto restore_old_metadata;
         }
 
         // Keep only the first in table_metadata to restore later
         table_metadata.pages[table_metadata.num_pages] = db->pager->pages[new_metadata_page_num];
         table_metadata.num_pages++;
-
 
         CatalogStatus status = catalog_persist_metadata_pages(db->catalog, &record_info, metadata_page_num);
         if (status != CATALOG_SUCCESS) {
@@ -215,55 +230,61 @@ bool update_metadata_pages(Database *db) {
         if (!page_mark_dirty(db->pager->pages[metadata_page_num])) {
             goto restore_old_metadata;
         }
+        
+        if (db->tables[table_idx]->primary_index != NULL) {
 
-        record_info.type = CATALOG_INDEX;
-        memcpy(record_info.object_name, db->tables[table_idx]->primary_index->name, 64);
-        record_info.object.index = db->tables[table_idx]->primary_index;
+            record_info.type = CATALOG_INDEX;
+            strncpy(record_info.object_name, db->tables[table_idx]->primary_index->name, 64);
+            record_info.object.index = db->tables[table_idx]->primary_index;
 
-        btree_cell_contents_free(lookup_result.records[0].cell, &db->catalog->spec);
-        lookup_status = catalog_lookup_record(db->catalog, &record_info, &lookup_result);
-        if (lookup_status != CATALOG_LOOKUP_SUCCESS) {
-            goto restore_old_metadata;
-        }
+            btree_cell_contents_free(lookup_result.records[0].cell, &db->catalog->spec);
+            lookup_status = catalog_lookup_record(db->catalog, &record_info, &lookup_result);
+            if (lookup_status != CATALOG_LOOKUP_SUCCESS) {
+                goto restore_old_metadata;
+            }
 
-        if (lookup_result.num_records != 1) {
-            goto restore_old_metadata;
-        }
+            if (lookup_result.num_records != 1) {
+                goto restore_old_metadata;
+            }
 
-        metadata_page_num = lookup_result.records[0].cell->BTreePayload.catalog->metadata_page_num;
+            record_info.root_page_num = lookup_result.records[0].cell->BTreePayload.catalog->root_page_num;
+            metadata_page_num = lookup_result.records[0].cell->BTreePayload.catalog->metadata_page_num;
 
-        // Visit all metadata pages
-        memset(&visited, 0, sizeof(visited));
-        if (!visit_metadata_pages(db->pager, metadata_page_num, &visited)) {
-            goto restore_old_metadata;
-        }
+            // Visit all metadata pages
+            memset(&visited, 0, sizeof(visited));
+            if (!visit_metadata_pages(db->pager, metadata_page_num, &visited)) {
+                goto restore_old_metadata;
+            }
 
-        // Copy all of them and connect them together
-        new_metadata_page_num = 0;
-        memset(&visited_copies, 0, sizeof(visited_copies));
-        if (!copy_metadata_pages(db->pager, &visited_copies, &new_metadata_page_num)) {
-            goto restore_old_metadata;
-        }
+            // Copy all of them and connect them together
+            new_metadata_page_num = 0;
+            if (!copy_metadata_pages(db->pager, &visited, &new_metadata_page_num)) {
+                goto restore_old_metadata;
+            }
 
-        // Keep only the first in index_metadata to restore later
-        index_metadata.pages[index_metadata.num_pages] = db->pager->pages[new_metadata_page_num];
-        index_metadata.num_pages++;
+            // Keep only the first in index_metadata to restore later
+            index_metadata.pages[index_metadata.num_pages] = db->pager->pages[new_metadata_page_num];
+            index_metadata.num_pages++;
 
-        status = catalog_persist_metadata_pages(db->catalog, &record_info, metadata_page_num);
-        if (status != CATALOG_SUCCESS) {
-            goto restore_old_metadata;
-        }
+            status = catalog_persist_metadata_pages(db->catalog, &record_info, metadata_page_num);
+            if (status != CATALOG_SUCCESS) {
+                goto restore_old_metadata;
+            }
 
-        if (!page_mark_dirty(db->pager->pages[metadata_page_num])) {
-            goto restore_old_metadata;
+            if (!page_mark_dirty(db->pager->pages[metadata_page_num])) {
+                goto restore_old_metadata;
+            }
+
         }
 
         for (uint32_t j = 0; j < db->tables[table_idx]->total_secondary_indexes; j++) {
+
             if (!db->tables[table_idx]->secondary_indexes[j]) {
                 continue;
             }
 
             memcpy(record_info.object_name, db->tables[table_idx]->secondary_indexes[j]->name, 64);
+            record_info.type = CATALOG_INDEX;
             record_info.object.index = db->tables[table_idx]->secondary_indexes[j];
 
             btree_cell_contents_free(lookup_result.records[0].cell, &db->catalog->spec);
@@ -276,6 +297,7 @@ bool update_metadata_pages(Database *db) {
                 goto restore_old_metadata;
             }
 
+            record_info.root_page_num = lookup_result.records[0].cell->BTreePayload.catalog->root_page_num;
             metadata_page_num = lookup_result.records[0].cell->BTreePayload.catalog->metadata_page_num;
 
             // Visit all metadata pages
@@ -286,8 +308,7 @@ bool update_metadata_pages(Database *db) {
 
             // Copy all of them and connect them together
             new_metadata_page_num = 0;
-            memset(&visited_copies, 0, sizeof(visited_copies));
-            if (!copy_metadata_pages(db->pager, &visited_copies, &new_metadata_page_num)) {
+            if (!copy_metadata_pages(db->pager, &visited, &new_metadata_page_num)) {
                 goto restore_old_metadata;
             }
 

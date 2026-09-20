@@ -17,7 +17,7 @@
  * object_name: CHAR(64). */
 bool create_catalog_key(CatalogRecordInfo *record_info, Value ***key) {
     if (!record_info || record_info->type > CATALOG_INDEX
-        || record_info->table_name[0] == '\0' || !record_info->root_page_num 
+        || record_info->table_name[0] == '\0'
         || (record_info->type == CATALOG_INDEX && record_info->object_name[0] == '\0') || !key) {
         return false;
     }
@@ -265,7 +265,6 @@ bool visit_metadata_pages(Pager *pager, uint32_t metadata_page_num, CatalogMetad
         }
 
         memcpy(&next_page_num, curr->page_data, sizeof(uint32_t));
-
         metadata_pages->pages[metadata_pages->num_pages] = curr;
         metadata_pages->num_pages++;
     }

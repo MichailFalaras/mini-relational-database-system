@@ -1150,7 +1150,7 @@ bool deserialize_index_metadata(Pager *pager, BTreeCellContents *catalog_cell, I
     }
 
     // Copy over metadata already stored in CatalogPayload
-    memcpy((*index)->name, catalog_cell->keys[2]->value.char_val.string, 64); // Index name
+    strncpy((*index)->name, catalog_cell->keys[2]->value.char_val.string, 64); // Index name
     (*index)->root_page_num = catalog_cell->BTreePayload.catalog->root_page_num; // Index Root Page Num
 
     Page *metadata_page = pager_get_page(pager, catalog_cell->BTreePayload.catalog->metadata_page_num);
@@ -1259,6 +1259,13 @@ bool deserialize_table_metadata(Pager *pager, BTreeCellContents *catalog_cell, T
 
     // Should be increased when reconstructing indexes
     (*table)->total_secondary_indexes = 0;
+    
+    (*table)->secondary_indexes = (Index **) calloc(MAX_INDEXES, sizeof(Index *));
+    if (!(*table)->secondary_indexes) {
+        table_free(*table);
+        *table = NULL;
+        return false;
+    }
 
     memcpy(&((*table)->row_count), read_offset, sizeof(uint32_t));
     read_offset += sizeof(uint32_t);

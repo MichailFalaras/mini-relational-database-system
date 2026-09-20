@@ -18,7 +18,7 @@
  * Initialize Catalog-specific BTreeIndexSpec with pseudo-contents.
  * (Pseudo-index key, pseudo-column_types and pseudo-schema) */
 Catalog *catalog_create(Pager *pager, uint32_t *root_page_num) {
-    if (!pager || !root_page_num) {
+    if (!pager || !root_page_num || *root_page_num == SUPERBLOCK_PAGE_NUM) {
         return NULL;
     }
 
@@ -72,9 +72,16 @@ Catalog *catalog_create(Pager *pager, uint32_t *root_page_num) {
     catalog->spec.column_types[1] = UNSIGNED_INTEGER;
     catalog->spec.column_types[2] = CHAR;
 
-    CatalogStatus status = catalog_initialize(catalog, root_page_num);
-    if (status != CATALOG_SUCCESS) {
-        goto cleanup;
+    if (*root_page_num == UINT32_MAX) {
+        CatalogStatus status = catalog_initialize(catalog, root_page_num);
+        if (status != CATALOG_SUCCESS) {
+            goto cleanup;
+        }
+    } else {
+        Page *system_catalog_root_page = pager_get_page(pager, *root_page_num);
+        if (!system_catalog_root_page) {
+            goto cleanup;
+        }
     }
 
     catalog->btree->root_page_num = *root_page_num;
@@ -93,9 +100,9 @@ cleanup:
 
 
     if (*root_page_num < MAX_PAGES
-        || *root_page_num < pager->num_pages
-        || *root_page_num != SUPERBLOCK_PAGE_NUM 
-        || pager->pages[*root_page_num]) {
+        && *root_page_num < pager->num_pages
+        && *root_page_num != SUPERBLOCK_PAGE_NUM 
+        && pager->pages[*root_page_num]) {
         pager_release_page(pager, *root_page_num);
     }
     return NULL;
@@ -109,12 +116,10 @@ CatalogStatus catalog_initialize(const Catalog *catalog, uint32_t *root_page_num
         return CATALOG_INVALID_ARGUMENTS;
     }
 
-    if (*root_page_num == UINT32_MAX) {
-        if (!pager_allocate_page(catalog->btree->pager, root_page_num)) {
-            return CATALOG_ERROR;
-        }
+    if (!pager_allocate_page(catalog->btree->pager, root_page_num)) {
+        return CATALOG_ERROR;
     }
-    
+
     Page *catalog_root_page = pager_get_page(catalog->btree->pager, *root_page_num);
     if (!catalog_root_page) {
         return CATALOG_ERROR;
@@ -608,14 +613,14 @@ CatalogLookupStatus catalog_scan(const Catalog *catalog, CatalogLookupResult *lo
 
 /* Catalog Free. 
  *
- * (NOTE: I don't know if pager should be closed here or just from database.
- *  Probably needs to be removed from here and also update the tests with pager_close())*/
+ * (NOTE: Pager closed and freed out in database_close())*/
 void catalog_free(Catalog *catalog) {
     if (catalog) {
         if (catalog->btree) {
-            if (catalog->btree->pager) {
-                pager_close(catalog->btree->pager);
-            }
+            BTree *btree = catalog->btree;
+            free(btree);
+
+            catalog->btree = NULL;
         }
 
         if (catalog->spec.column_types) {
@@ -729,7 +734,7 @@ CatalogLookupStatus catalog_lookup_record(const Catalog *catalog, CatalogRecordI
     }
 
     if (!record_info || record_info->type > CATALOG_INDEX
-        || record_info->table_name[0] == '\0' || !record_info->root_page_num
+        || record_info->table_name[0] == '\0'
         || (record_info->type == CATALOG_INDEX && record_info->object_name[0] == '\0')) {
         return CATALOG_LOOKUP_INVALID_ARGUMENTS;
     }
