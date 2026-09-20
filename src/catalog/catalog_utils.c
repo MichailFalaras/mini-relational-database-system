@@ -478,3 +478,21 @@ CatalogStatus catalog_replace_record(const Catalog *catalog, CatalogRecordInfo *
     free(lookup_result.records);
     return CATALOG_SUCCESS;
 }
+
+// Conversion from catalog lookup status to catalog status
+CatalogStatus catalog_lookup_to_catalog_status(CatalogLookupStatus status) {
+    switch (status) {
+        case CATALOG_LOOKUP_SUCCESS:
+            return CATALOG_SUCCESS;
+
+        case CATALOG_LOOKUP_NOT_FOUND:
+            return CATALOG_NOT_FOUND;
+
+        case CATALOG_LOOKUP_INVALID_ARGUMENTS:
+            return CATALOG_INVALID_ARGUMENTS;
+
+        case CATALOG_LOOKUP_ERROR:
+        default:
+            return CATALOG_ERROR;
+    }
+}
