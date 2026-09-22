@@ -99,10 +99,6 @@ const INDEXES = [
     { name: "idx_reviews_product_rating", table: "reviews", columns: ["product_id", "rating"], unique: false },
 ];
 
-const TABS = [
-    {id: 1, title: "Query 1"},
-    {id: 2, title: "Query 2"}
-];
 
 const MOCK_ROWS = {
   users: {
@@ -169,43 +165,6 @@ const MOCK_ROWS = {
     { id: 8, product_id: 6, user_id: 8, rating: 3, body: "Nice material quality but runs slightly small.", created_at: "2024-01-24 10:20:00" },
   ],
 };
-
-const HISTORY = [
-    {id: "1",
-        sql: `
-            SELECT
-                u.id,
-                u.username,
-                u.email,
-                COUNT(o.id) AS order_count,
-                SUM(o.total_amount) AS total_spent
-            FROM users u
-            LEFT JOIN orders o ON u.id = o.user_id
-            WHERE u.is_active = TRUE
-            GROUP BY u.id, u.username, u.email
-            ORDER BY total_spent DESC
-            LIMIT 10;
-        `.trim(),
-
-        database: "e_commerce_db", executedAt: new Date(Date.now() - 12_000),
-        result: {
-            type: "select",
-            rows: [
-                { id: 1, username: "schen", email: "sarah.chen@example.com", order_count: 12, total_spent: 1250.40 },
-                { id: 3, username: "psharma", email: "priya.sharma@example.com", order_count: 9, total_spent: 987.25 },
-                { id: 7, username: "adiallo", email: "amara.diallo@example.com", order_count: 8, total_spent: 864.10 },
-                { id: 5, username: "lpetrov", email: "luna.petrov@example.com", order_count: 6, total_spent: 731.90 }
-            ],
-            columns: [
-                "id",
-                "username",
-                "email",
-                "order_count",
-                "total_spent"
-            ],
-            executionTime: 14
-        }}
-];
 
 
 // Status text options for the Footer section 
@@ -413,6 +372,7 @@ function HomePage() {
     
     // Restore Query history from the Local storage
     const [history, setHistory] = useState(loadQueryHistory);
+	const [selectedHistoryId, setSelectedHistoryId] = useState(null);
 
     // Add the latest query to the query search history
     function addHistoryEntry(sql, result) {
@@ -430,6 +390,7 @@ function HomePage() {
     useEffect(() => {
         saveQueryHistory(history);
     }, [history]);
+
 
     // Copy SQL text to clipboard
     function handleCopySQL() {
@@ -457,15 +418,13 @@ function HomePage() {
     }
 
     // Execute SQL query
-    async function handleQueryRun() {
+    async function executeSQL(sql) {
         if (executionStatus === "executing") {
             return;
         }
         
-        const executedSQL = activeTab.sql;
-
         // Prevent an empty SQL query from running
-        if (!executedSQL.trim()) {
+        if (!sql.trim()) {
             return;
         }
 
@@ -492,7 +451,7 @@ function HomePage() {
 
             setExecutionStatus("success");
 
-            addHistoryEntry(executedSQL, queryResult);
+            addHistoryEntry(sql, queryResult);
         
         } catch(error) {
             const errorResult = {
@@ -503,10 +462,21 @@ function HomePage() {
             setResult(errorResult);
             setExecutionStatus("error");
 
-            addHistoryEntry(executedSQL, errorResult);
+            addHistoryEntry(sql, errorResult);
         }
     }
 
+    // Execute the active editor tab's query
+    async function handleQueryRun() {
+        setSelectedHistoryId(null);
+        await executeSQL(activeTab.sql);
+    }
+
+    // Execute a history entry query
+    async function handleHistoryRerun(entry) {
+        updateSQL(entry.sql);
+        await executeSQL(entry.sql);
+    }
 
 	return (
 		<div id="home-page">
@@ -643,6 +613,9 @@ function HomePage() {
                                 updateSQL={updateSQL}
                                 history={history}
                                 setHistory={setHistory}
+                                selectedHistoryId={selectedHistoryId}
+                                setSelectedHistoryId={setSelectedHistoryId}
+                                onHistoryRerun={handleHistoryRerun}
                             />
                     </main>
                     )

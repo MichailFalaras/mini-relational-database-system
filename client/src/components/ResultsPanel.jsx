@@ -8,7 +8,7 @@ import "./../styles/results-panel.css"
 const RESULTS_TABS = ["results", "schema", "indexes", "history"];
 
 function ResultsPanel({ result, isRunning, tables, indexes, activeTable, resultPanel, setResultPanel,
-	updateSQL, history, setHistory }) {
+	updateSQL, history, setHistory, selectedHistoryId, setSelectedHistoryId, onHistoryRerun }) {
 	
 
 	return (
@@ -60,12 +60,20 @@ function ResultsPanel({ result, isRunning, tables, indexes, activeTable, resultP
 				{resultPanel === "history" &&
 					<HistoryView 
 						history={history} 
-						onRestore={(sql) => { 
-							updateSQL(sql); 
+    					selectedId={selectedHistoryId}
+    					setSelectedId={setSelectedHistoryId}
+
+						onLoad={(entry) => {
+							updateSQL(entry.sql); 
 							setResultPanel("results"); 
-							}
-						} 
-						onClear={() => setHistory([])}
+						}}
+
+						onRerun={onHistoryRerun} 
+
+						onClear={() => {
+							setSelectedHistoryId(null);
+							setHistory([]);
+						}}
 					/>
 				}
 			</div>

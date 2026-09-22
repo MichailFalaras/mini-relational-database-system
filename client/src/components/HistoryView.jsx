@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Check, Copy, Clock, Trash2 } from "lucide-react";
+import { Check, Copy, Clock, Trash2, Play } from "lucide-react";
 import "./../styles/history-view.css";
 
 
@@ -33,8 +33,8 @@ function sqlPreview(query) {
 }
 
 
-function HistoryView({ history, onRestore, onClear }) {
-	const [copiedId, setCopiedId] = useState(false);
+function HistoryView({ history, selectedId, setSelectedId, onLoad, onRerun, onClear }) {
+	const [copiedId, setCopiedId] = useState(null);
 	const [ , setTimeTicker] = useState(0);
 
 
@@ -58,6 +58,22 @@ function HistoryView({ history, onRestore, onClear }) {
 	};
 
 
+	// Toggle or select history entry
+	function selectEntry(entry) {
+		setSelectedId((prev) => prev === entry.id ? null : entry.id);
+	}
+
+	// Load history entry
+	function loadEntry(entry) {
+		setSelectedId(entry.id);
+		onLoad(entry);
+	}
+
+	// Execute history entry
+	function rerunEntry(entry) {
+		setSelectedId(entry.id);
+		onRerun(entry);
+	}
 
 	// No history entries
 	if (history?.length === 0) {
@@ -86,7 +102,11 @@ function HistoryView({ history, onRestore, onClear }) {
 			<div id="history-view-entries">
 				{history?.map((entry) => (
 
-					<div key={entry.id} className="history-entry">
+					<div 
+						key={entry.id} 
+						className={`history-entry ${selectedId === entry.id ? "selected" : ""}`}
+						onClick={() => selectEntry(entry)}
+					>
 						{/* Top row: time, database, badge, actions */}
 						<div className="history-entry-top-row">
 							<span className="history-entry-time" title={entry.executedAt.toLocaleString()}>
@@ -134,19 +154,36 @@ function HistoryView({ history, onRestore, onClear }) {
 								<button 
 									className={`history-entry-copy ${copiedId === entry.id ? "copied" : ""}`}
 									title="Copy SQL"
-									onClick={() => copyEntry(entry)}
+									onClick={(event) => {
+										event.stopPropagation();
+										copyEntry(entry);
+									}}
 								>
 									{copiedId === entry.id
 										? <Check style={{ width: "0.75rem", height: "0.75rem" }} />
 										: <Copy style={{ width: "0.75rem", height: "0.75rem" }} />
 									}
 								</button>
-								<button 
-									className="history-entry-restore"
+								<button
+									className="history-entry-load"
 									title="Restore to editor"
-									onClick={() => onRestore(entry.sql)}
+									onClick={(event) => {
+										event.stopPropagation();
+										loadEntry(entry);
+									}}
 								>
-									Restore ↩
+									↩ Load 
+								</button>
+								<button 
+									className="history-entry-rerun"
+									title="Re-run query"
+									onClick={(event) => {
+										event.stopPropagation();
+										rerunEntry(entry);
+									}}
+								>
+									<Play style={{ width: " 0.625rem", height: "0.625rem", fill: "currentColor" }} />
+									Re-run
 								</button>
 							</div>
 						</div>
