@@ -1,4 +1,6 @@
 import { apiRequest } from "./apiClient.js";
+import { isGuestMode } from "./apiMode.js";
+import { mockGetSchema } from "../mocks/mockSchemaService.js";
 
 /*
  User fetches the schema (table schema and indexes) of a database. The response format is:
@@ -8,7 +10,7 @@ import { apiRequest } from "./apiClient.js";
 			name: "users",
 			rowCount: 14823,
 			columns: [
-				{ name: "id", type: "INT", nullable: "false", pk: true },
+				{ name: "id", type: "INT", nullable: false, pk: true },
 				{ name: "username", type: "VARCHAR(100)", nullable: false, pk: false, constraints: ["UNIQUE", "CHECK (LENGTH(username) >= 3)"] },
 				{ name: "user_id", type: "INT", nullable: false, pk: false, fk: "users.id" }
 			]
@@ -25,6 +27,10 @@ import { apiRequest } from "./apiClient.js";
  }
 */
 export function getSchema(databaseId) {
+	if (isGuestMode()) {
+		return mockGetSchema(databaseId);
+	}
+
 	return apiRequest(`/databases/${databaseId}/schema`, {
 		method: "GET"
 	});

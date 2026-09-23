@@ -1,4 +1,6 @@
 import { apiRequest } from "./apiClient.js";
+import { mockExecuteQuery } from "../mocks/mockQueryService.js";
+import { isGuestMode } from "./apiMode.js";
 
 
 /* 
@@ -30,6 +32,10 @@ import { apiRequest } from "./apiClient.js";
   }
  */
 export function executeQuery(databaseId, sql) {
+    if (isGuestMode()) {
+        return mockExecuteQuery(databaseId, sql);
+    } 
+
 	return apiRequest("/query", {
 		method: "POST",
 		body: JSON.stringify({
