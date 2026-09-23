@@ -2,6 +2,9 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { AlertCircle, ArrowRight, Check, Database, Eye, EyeOff, Loader2, Terminal } from "lucide-react";
 import "./../styles/auth.css";
+import { resetGuestState } from "../mocks/guestState.js";
+import { setApiMode, API_MODES } from "../api/apiMode.js";
+import { login, register } from "../api/authService.js";
 
 
 const BRAND_DETAILS = [
@@ -41,9 +44,20 @@ function AuthPage() {
 		setLoginError("");
 		setLoginLoading(true);
 
-		// TODO: API Request
+		try {
+			await login({
+				email: loginEmail,
+				password: loginPassword
+			});
 
-		setLoginLoading(false);
+			setApiMode(API_MODES.USER);
+			navigate("/home");
+
+		} catch(error) {
+			setLoginError(error.message);
+		} finally {
+			setLoginLoading(false);
+		}
 	}
 
 	// Performs API request to register
@@ -55,7 +69,7 @@ function AuthPage() {
 		// Validate input data
 		// i) Full name existence
 		// ii) Email existence and correct format
-		/// iii) Password length and matching confirm password 
+		// iii) Password length and matching confirm password 
 		if (!fullName.trim()) { setRegisterError("Full name is required."); return; }
 
 		if (!email.trim()) { setRegisterError("Email is required."); return; }
@@ -72,13 +86,27 @@ function AuthPage() {
 
 		setRegisterLoading(true);
 
-		// TODO: API Request
+		try {
+			await register({
+				fullName,
+				email,
+				password
+			});
 
-		setRegisterLoading(false);
+			setApiMode(API_MODES.USER);
+			navigate("/home");
+
+		} catch (error) {
+			setRegisterError(error.message);
+		} finally {
+			setRegisterLoading(false);
+		}
 	}
 
 	// Guest login lets users access a demo database
 	function handleGuestLogin() {
+		resetGuestState();
+		setApiMode(API_MODES.GUEST);
 		navigate("/home");
 	}
 
@@ -286,7 +314,7 @@ function AuthPage() {
 							{/* Registration error */}
 							{registerError && (
 								<div className="error-msg">
-									<AlertCircle style={{ width: "1rem", height: "1rem", flexShrink: 0, color: "#DC02626"}} />
+									<AlertCircle style={{ width: "1rem", height: "1rem", flexShrink: 0, color: "#DC2626"}} />
 									<span>{registerError}</span>
 								</div>
 							)}
