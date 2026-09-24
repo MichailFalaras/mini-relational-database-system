@@ -113,7 +113,7 @@ function AuthPage() {
 	return (
 		<div id="auth-page">
 			{/* Authentication Container */}
-			<main>
+			<div id="auth-container">
 
 				{/* Left Brand Panel */}
 				<div id="brand-panel">
@@ -144,7 +144,7 @@ function AuthPage() {
 						))}
 					</div>
 
-					{/* Demo Login Credentials */}
+					{/* Brand Footer */}
 					<div id="brand-demo-login">
 						<p>BaseQL — powered by the MiniDB relational engine</p>
 					</div>
@@ -343,7 +343,7 @@ function AuthPage() {
 						</form>
 					)}
 				</div>
-			</main>
+			</div>
 
 
 		</div>
