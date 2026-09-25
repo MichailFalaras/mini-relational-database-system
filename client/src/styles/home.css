@@ -264,3 +264,45 @@ main {
     gap: 1rem; 
     color: #C4CAD4;
 }
+
+/* ---------- Home Page > Databases Loading State ---------- */
+
+#body {
+    position: relative;
+    display: flex;
+    flex: 1 1 0%;
+    overflow: hidden;
+}
+
+#workspace-loading, .schema-loading {
+    position: absolute;
+    inset: 0;
+    z-index: 20;
+
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+
+    background-color: rgba(255, 255, 255, 0.82);
+    backdrop-filter: blur(2px);
+
+    color: #9CA3AF;
+    font-size: 0.875rem;
+    font-weight: 500;
+}
+
+#workspace-loading .loader, .schema-loading .loader {
+    width: 1.5rem;
+    height: 1.5rem;
+    flex-shrink: 0;
+    color: #4F46E5;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}

@@ -5,7 +5,7 @@ import "./../styles/sidebar.css";
 
 
 
-function Sidebar({ activeDatabase, tables, indexes, isRefreshing, activeTable, onSelectTable }) {
+function Sidebar({ activeDatabase, tables, indexes, isLoadingSchema, isRefreshing, activeTable, onSelectTable }) {
 	// Table-related state
 	const [expandTables, setExpandTables] = useState(true);
 
@@ -41,88 +41,97 @@ function Sidebar({ activeDatabase, tables, indexes, isRefreshing, activeTable, o
 
 			<div id="sidebar-contents">
 				{/* Empty sidebar when no database is open */}
-				{ activeDatabase == null
+				{ isLoadingSchema
 					? (
-						<div id="sidebar-no-database">
-							<Database style={{ width: "1.5rem", height: "1.5rem", color: "#D1D5DB"}}/>
-							<p>No database open</p>
+						<div className="schema-loading">
+							<Loader2 className="loader" />
+							<span>Loading schema...</span>
 						</div>
 					)
 					: (
-						<>
-							{/* Tables of selected Database  */}
-							<button 
-								id="sidebar-tables-btn"
-								onClick={() => setExpandTables((prev) => !prev)}
-							>
-								{expandTables 
-									? <ChevronDown style={{ width: "0.75rem", height: "0.75rem" }} />
-									: <ChevronRight style={{ width: "0.75rem", height: "0.75rem" }} />
-								}
-								Tables
-								<span>{tables?.length ?? 0}</span>
-							</button>
+						activeDatabase == null
+							? (
+								<div id="sidebar-no-database">
+									<Database style={{ width: "1.5rem", height: "1.5rem", color: "#D1D5DB"}}/>
+									<p>No database open</p>
+								</div>
+							)
+							: (
+								<>
+									{/* Tables of selected Database  */}
+									<button 
+										id="sidebar-tables-btn"
+										onClick={() => setExpandTables((prev) => !prev)}
+									>
+										{expandTables 
+											? <ChevronDown style={{ width: "0.75rem", height: "0.75rem" }} />
+											: <ChevronRight style={{ width: "0.75rem", height: "0.75rem" }} />
+										}
+										Tables
+										<span>{tables?.length ?? 0}</span>
+									</button>
 
-							{expandTables && (
-								isRefreshing
-									? (
-										<div id="refreshing-schema">
-											<Loader2 className="loader" />
-											<span>Refreshing schema...</span>
-										</div>
-									)
-									: !tables || tables?.length === 0 
-										? (
-											<div id="no-tables-available">
-												No schema available for<br />
-												<span>{activeDatabase?.name}</span>
-											</div>
-										)
-										: (
-										filteredTables?.map((table) => {
-											const isActive = table.name === activeTable;
+									{expandTables && (
+										isRefreshing
+											? (
+												<div className="refreshing-schema">
+													<Loader2 className="loader" />
+													<span>Refreshing schema...</span>
+												</div>
+											)
+											: !tables || tables?.length === 0 
+												? (
+													<div id="no-tables-available">
+														No schema available for<br />
+														<span>{activeDatabase?.name}</span>
+													</div>
+												)
+												: (
+												filteredTables?.map((table) => {
+													const isActive = table.name === activeTable;
 
-											return (
-												<button 
-													key={table?.name} 
-													onClick={() => onSelectTable(table.name)}
-													className={`table-option-btn ${isActive ? "active" : ""}`}
-												>
-													<Table2 className={`table-icon ${isActive ? "active" : ""}`} />
-													<span className="table-option-name">{table?.name}</span>
-													<span className="table-option-rowcount">{table?.rowCount}</span>
-												</button>
-											);
-										})
-									)
-							)}
-
-							{/* Indexes of selected Database */}
-							<button
-								id="sidebar-indexes-btn"
-								onClick={() => setExpandIndexes((prev) => !prev)}
-							>
-								{expandIndexes 
-									? <ChevronDown style={{ width: "0.75rem", height: "0.75rem" }} />
-									: <ChevronRight style={{ width: "0.75rem", height: "0.75rem" }} />
-								}
-								Indexes
-								<span>{indexes?.length ?? 0}</span>
-							</button>
-
-							{expandIndexes && filteredIndexes?.map((index) => (
-								<div 
-									key={index?.name}
-									className="index-option"
-								>
-									<Hash style={{ width: "0.875rem", height: "0.875rem", flexShrink: "0", color: "#C4CAD4" }} />
-									<span className="index-option-name">{index?.name}</span>
-									{index?.unique && (
-										<span className="index-option-unique">U</span>
+													return (
+														<button 
+															key={table?.name} 
+															onClick={() => onSelectTable(table.name)}
+															className={`table-option-btn ${isActive ? "active" : ""}`}
+														>
+															<Table2 className={`table-icon ${isActive ? "active" : ""}`} />
+															<span className="table-option-name">{table?.name}</span>
+															<span className="table-option-rowcount">{table?.rowCount}</span>
+														</button>
+													);
+												})
+											)
 									)}
-								</div>	
-							))}
-						</>
+
+									{/* Indexes of selected Database */}
+									<button
+										id="sidebar-indexes-btn"
+										onClick={() => setExpandIndexes((prev) => !prev)}
+									>
+										{expandIndexes 
+											? <ChevronDown style={{ width: "0.75rem", height: "0.75rem" }} />
+											: <ChevronRight style={{ width: "0.75rem", height: "0.75rem" }} />
+										}
+										Indexes
+										<span>{indexes?.length ?? 0}</span>
+									</button>
+
+									{expandIndexes && filteredIndexes?.map((index) => (
+										<div 
+											key={index?.name}
+											className="index-option"
+										>
+											<Hash style={{ width: "0.875rem", height: "0.875rem", flexShrink: "0", color: "#C4CAD4" }} />
+											<span className="index-option-name">{index?.name}</span>
+											{index?.unique && (
+												<span className="index-option-unique">U</span>
+											)}
+										</div>	
+									))}
+								</>
+							)
 					)
 				}			
 			</div>

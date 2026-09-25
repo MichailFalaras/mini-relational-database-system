@@ -51,7 +51,7 @@ function HomePage() {
 
 		try {
             await loadDatabases();
-            await loadSchema();
+            await loadSchema(false);
         } catch(error) {
             console.error("Unable to refresh database data");
         } finally {
@@ -94,6 +94,7 @@ function HomePage() {
     // Database-related state
     const [databases, setDatabases] = useState([]);
     const [activeDatabaseId, setActiveDatabaseId] = useState(null);
+    const [isInitialLoading, setIsInitialLoading] = useState(true);
 
     // Load all databases displayed in the database dropdown
     async function loadDatabases() {
@@ -114,9 +115,14 @@ function HomePage() {
                 return loadedDatabases[0]?.id ?? null;
             });
 
+            if (loadedDatabases.length === 0) {
+                setIsInitialLoading(false);
+            }
+
         } catch(error) {
             console.error("Unable to load databases", error);
-        } 
+            setIsInitialLoading(false);
+        }
     }
 
     useEffect(() => {
@@ -127,13 +133,18 @@ function HomePage() {
     // Database schema state
     const [tables, setTables] = useState([]);
     const [indexes, setIndexes] = useState([]);
+    const [isLoadingSchema, setIsLoadingSchema] = useState(false);
 
     // Load database schema for the currently open database
-    async function loadSchema() {
+    async function loadSchema(showLoading = true) {
         if (activeDatabaseId === null) {
             setTables([]);
             setIndexes([]);
             return;
+        }
+        
+        if (showLoading && !isInitialLoading) {
+            setIsLoadingSchema(true);
         }
 
         try {
@@ -146,6 +157,12 @@ function HomePage() {
             console.error("Unable to load database schema");
             setTables([]);
             setIndexes([]);
+        } finally {
+            if (showLoading) {
+                setIsLoadingSchema(false);
+            }
+            
+            setIsInitialLoading(false);
         }
     }
 
@@ -217,25 +234,33 @@ function HomePage() {
     }
 
     // Try mock database
-    function handleTryDemo() {
+    async function handleTryDemo() {
         const demo = databases.find((db) => db.id === 1);
 
         if (!demo) {
             return;
         }
 
-        setDatabases((prev) => 
-            prev.map((db) =>
-                db.id === demo.id
-                    ? {
-                        ...db,
-                        status: "open",
-                    }
-                    : db
-            )
-        );
+        try {
+            setIsInitialLoading(true);
 
-        setActiveDatabaseId(demo.id);
+            // Load demo database
+            const openedDatabase = await openDatabase(demo.id);
+
+            setDatabases((prev) => 
+                prev.map((db) =>
+                    db.id === openedDatabase.id
+                        ? { ...db, ...openedDatabase, status: "open" }
+                        : db
+                )
+            );
+
+            setActiveDatabaseId(openedDatabase.id);
+
+        } catch(error) {
+            console.error("Unable to open demo database");
+            setIsInitialLoading(false);
+        }
     }
 
     async function handleSignOut() {
@@ -405,120 +430,131 @@ function HomePage() {
                     activeDatabase={activeDatabase}
                     tables={tables}
                     indexes={indexes}
+                    isLoadingSchema={isLoadingSchema}
                     isRefreshing={isRefreshing}
                     activeTable={activeTable}
                     onSelectTable={selectTable}
                 />
 
-                {activeDatabase == null
-                    ? <EmptyWorkspace 
-                          onOpenDatabase={() => setOpenDatabaseModal(null)}
-                          onTryDemo={handleTryDemo}
-                      />
-                    : (
-                    <main>
-                            {/* Tabs Bar */}
-                            <div id="top-bar">
-                                {tabs?.map((tab) => {
-                                    const isActive = tab?.id === activeTabId;
-
-                                    return (
-                                        <button 
-                                            key={tab?.id}
-                                            className={`tab ${isActive ? "active" : ""}`}
-                                            onClick={() => setActiveTabId(tab?.id)}
-                                        >   
-                                            {isActive && <div className="tab-active-underline"/> }
-                                            {tab?.title}
-                                            {tabs?.length > 1 && (
-                                                <span className="tab-close-btn" onClick={(event) => closeTab(tab?.id, event)}>
-                                                    <X style={{ width: "0.625rem", height: "0.625rem" }}/>
-                                                </span>
-                                            )}
-                                        </button>
-                                    );
-                                })}
-
-                                <button id="add-tabs-btn" onClick={addTab}>
-                                    <Plus style={{width: "0.875rem", height: "0.875rem"}} />
-                                </button>
-                            </div>
-
-                            {/* Toolbar */}
-                            <div id="toolbar">
-                                <button 
-                                    id="run-btn" 
-                                    onClick={handleQueryRun} 
-                                    disabled={isRunning}
-                                >
-                                    {isRunning
-                                        ? <Loader2 className="loader-icon"/>
-                                        : <PlayIcon style={{ width: "0.75rem", height: "0.75rem", fill: "#FFFFFF" }}/>
-                                    }
-                                    Run
-                                    <span className="enter-icon">⌃↵</span>
-                                </button>
-                                
-                                <div id="toolbar-sep"/>
-                                <button 
-                                    id="copy-sql-btn"
-                                    onClick={handleCopySQL}
-                                >
-                                    {isSQLCopied
-                                        ? <Check style={{ width: "0.75rem", height: "0.75rem", color: "#16A34A" }}/>
-                                        : <Copy style={{ width: "0.75rem", height: "0.75rem" }} />
-                                    }
-                                    {isSQLCopied ? <span style={{ color: "#16A34A" }}>Copied</span> : "Copy"}
-                                </button>
-                                
-                                <button 
-                                    id="clear-sql-btn"
-                                    onClick={() => updateSQL("")}
-                                >
-                                    <X style={{ width: "0.75rem", height: "0.75rem" }} /> Clear
-                                </button>
-                                
-                                <div id="export-container">
-                                    {result?.type === "select" && (
-                                        <button id="export-csv-btn">
-                                            <Download style={{ width: "0.75rem", height: "0.75rem" }} />
-                                            Export CSV
-                                        </button>
-                                    )}
-                                </div>
-                            </div>
-
-                            {/* SQL Editor */}
-                            <div id="sql-editor-container" style={{height: editorHeight }}>
-                                <SQLEditor 
-                                    value={activeTab.sql}
-                                    onChange={updateSQL}
-                                    onRun={handleQueryRun}
-                                    editorFontSize={settings?.editorFontSize ?? "13px"}
-                                    tabWidth={settings?.tabWidth ?? "2"}
-                                />
-                            </div>
-
-                            {/* Resize Handle */}
-                            <div id="resize-handle" onMouseDown={handleResize}/>
-                            
-                            <ResultsPanel 
-                                result={result}
-                                isRunning={isRunning}
-                                tables={tables}
-                                indexes={indexes}
-                                activeTable={activeTable}
-                                resultPanel={resultPanel}
-                                setResultPanel={setResultPanel}
-                                updateSQL={updateSQL}
-                                history={history}
-                                setHistory={setHistory}
-                                selectedHistoryId={selectedHistoryId}
-                                setSelectedHistoryId={setSelectedHistoryId}
-                                onHistoryRerun={handleHistoryRerun}
-                            />
-                    </main>
+                {isInitialLoading
+                    ? (
+                        <div id="workspace-loading">
+                            <Loader2 className="loader" />
+                            <span>Loading database...</span>
+                        </div>
                     )
+                    : (
+                        activeDatabase == null
+                            ? <EmptyWorkspace 
+                                onOpenDatabase={() => setOpenDatabaseModal(null)}
+                                onTryDemo={handleTryDemo}
+                            />
+                            : (
+                            <main>
+                                    {/* Tabs Bar */}
+                                    <div id="top-bar">
+                                        {tabs?.map((tab) => {
+                                            const isActive = tab?.id === activeTabId;
+
+                                            return (
+                                                <button 
+                                                    key={tab?.id}
+                                                    className={`tab ${isActive ? "active" : ""}`}
+                                                    onClick={() => setActiveTabId(tab?.id)}
+                                                >   
+                                                    {isActive && <div className="tab-active-underline"/> }
+                                                    {tab?.title}
+                                                    {tabs?.length > 1 && (
+                                                        <span className="tab-close-btn" onClick={(event) => closeTab(tab?.id, event)}>
+                                                            <X style={{ width: "0.625rem", height: "0.625rem" }}/>
+                                                        </span>
+                                                    )}
+                                                </button>
+                                            );
+                                        })}
+
+                                        <button id="add-tabs-btn" onClick={addTab}>
+                                            <Plus style={{width: "0.875rem", height: "0.875rem"}} />
+                                        </button>
+                                    </div>
+
+                                    {/* Toolbar */}
+                                    <div id="toolbar">
+                                        <button 
+                                            id="run-btn" 
+                                            onClick={handleQueryRun} 
+                                            disabled={isRunning}
+                                        >
+                                            {isRunning
+                                                ? <Loader2 className="loader-icon"/>
+                                                : <PlayIcon style={{ width: "0.75rem", height: "0.75rem", fill: "#FFFFFF" }}/>
+                                            }
+                                            Run
+                                            <span className="enter-icon">⌃↵</span>
+                                        </button>
+                                        
+                                        <div id="toolbar-sep"/>
+                                        <button 
+                                            id="copy-sql-btn"
+                                            onClick={handleCopySQL}
+                                        >
+                                            {isSQLCopied
+                                                ? <Check style={{ width: "0.75rem", height: "0.75rem", color: "#16A34A" }}/>
+                                                : <Copy style={{ width: "0.75rem", height: "0.75rem" }} />
+                                            }
+                                            {isSQLCopied ? <span style={{ color: "#16A34A" }}>Copied</span> : "Copy"}
+                                        </button>
+                                        
+                                        <button 
+                                            id="clear-sql-btn"
+                                            onClick={() => updateSQL("")}
+                                        >
+                                            <X style={{ width: "0.75rem", height: "0.75rem" }} /> Clear
+                                        </button>
+                                        
+                                        <div id="export-container">
+                                            {result?.type === "select" && (
+                                                <button id="export-csv-btn">
+                                                    <Download style={{ width: "0.75rem", height: "0.75rem" }} />
+                                                    Export CSV
+                                                </button>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    {/* SQL Editor */}
+                                    <div id="sql-editor-container" style={{height: editorHeight }}>
+                                        <SQLEditor 
+                                            value={activeTab.sql}
+                                            onChange={updateSQL}
+                                            onRun={handleQueryRun}
+                                            editorFontSize={settings?.editorFontSize ?? "13px"}
+                                            tabWidth={settings?.tabWidth ?? "2"}
+                                        />
+                                    </div>
+
+                                    {/* Resize Handle */}
+                                    <div id="resize-handle" onMouseDown={handleResize}/>
+                                    
+                                    <ResultsPanel 
+                                        result={result}
+                                        isRunning={isRunning}
+                                        tables={tables}
+                                        indexes={indexes}
+                                        activeTable={activeTable}
+                                        resultPanel={resultPanel}
+                                        setResultPanel={setResultPanel}
+                                        updateSQL={updateSQL}
+                                        history={history}
+                                        setHistory={setHistory}
+                                        selectedHistoryId={selectedHistoryId}
+                                        setSelectedHistoryId={setSelectedHistoryId}
+                                        onHistoryRerun={handleHistoryRerun}
+                                    />
+                            </main>
+                            )
+                    )
+                
                 }
             </div>
 
