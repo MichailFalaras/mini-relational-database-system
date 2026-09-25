@@ -2,14 +2,24 @@ import { useState } from "react";
 import "./../styles/user-menu.css";
 import { LogOut } from "lucide-react";
 
-function UserMenu({ onSignOut }) {
+function UserMenu({ currentUser, onSignOut }) {
 	const [open, setOpen] = useState(false);
+
+	const userName = currentUser?.name ?? "Guest";
+
+	const initials = currentUser?.isGuest
+		? "G"
+		: userName.split(" ").map((part) => part[0]).join("").slice(0,2).toUpperCase();
+
+	const userSubtitle = currentUser?.isGuest
+		? "Guest session"
+		: currentUser?.email;
 
 	return (
 		<div style={{ position: "relative" }}>
 
 			<button id="user-menu-toggle" onClick={() => setOpen(true)}>
-				AF
+				{initials}
 			</button>
 
 			{open && (
@@ -19,11 +29,11 @@ function UserMenu({ onSignOut }) {
 					<div id="user-menu">
 						{/* User info */}
 						<div id="user-menu-info">
-							<div id="user-initials">AF</div>
+							<div id="user-initials">{initials}</div>
 							
 							<div style={{ minWidth: "0"}}>
-								<p id="user-name">Guest</p>
-								<p id="guest-email">Guest session</p>
+								<p id="user-name">{userName}</p>
+								<p id="user-email">{userSubtitle}</p>
 							</div>
 						</div>
 
