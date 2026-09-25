@@ -1,7 +1,7 @@
 import { apiRequest } from "./apiClient.js";
 import { 
 	mockGetDatabases, 
-	mockConnectDatabase, 
+	mockOpenDatabase, 
 	mockCreateDatabase, 
 	mockDeleteDatabase } from "../mocks/mockDatabaseService.js";
 import { isGuestMode } from "./apiMode.js";
@@ -30,12 +30,12 @@ export function getDatabases() {
 }
 
 // User connects to a database
-export function connectDatabase(databaseId, credentials) {
+export function openDatabase(databaseId, credentials) {
 	if (isGuestMode()) {
-		return mockConnectDatabase(databaseId);
+		return mockOpenDatabase(databaseId);
 	}
 
-	return apiRequest(`/databases/${databaseId}/connect`, {
+	return apiRequest(`/databases/${databaseId}/open`, {
 		method: "POST",
 		body: JSON.stringify(credentials)
 	});
