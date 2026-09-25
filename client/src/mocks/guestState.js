@@ -1,11 +1,14 @@
 import { MOCK_DATABASES } from "./data/mockDatabases.js";
 import { MOCK_TABLES, MOCK_INDEXES } from "./data/mockSchema.js";
 import { MOCK_ROWS } from "./data/mockRows.js";
+import { MOCK_GUEST_USER } from "./data/mockUser.js";
 
 
 // Aggregate all separate database components into a unified Guest state object
 function createGuestState() {
 	return {
+		user: structuredClone(MOCK_GUEST_USER),
+		
 		databases: structuredClone(MOCK_DATABASES),
 
 		schemas: {

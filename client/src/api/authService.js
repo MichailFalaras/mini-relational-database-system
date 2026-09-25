@@ -1,4 +1,6 @@
 import { apiRequest } from "./apiClient.js";
+import { isGuestMode } from "./apiMode.js";
+import { mockGetCurrentUser } from "./../mocks/mockAuthService.js";
 
 // User logs in
 export function login(credentials) {
@@ -20,5 +22,16 @@ export function register(userData) {
 export function logout() {
 	return apiRequest("/auth/logout", {
 		method: "POST"
+	});
+}
+
+// Retrieves user state
+export function getCurrentUser() {
+	if (isGuestMode()) {
+		return mockGetCurrentUser();
+	}
+
+	return apiRequest("/users/me", {
+		method: "GET"
 	});
 }
