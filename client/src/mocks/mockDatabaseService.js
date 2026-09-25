@@ -9,7 +9,7 @@ export async function mockGetDatabases() {
 }
 
 // Connect to a mock database
-export async function mockConnectDatabase(databaseId) {
+export async function mockOpenDatabase(databaseId) {
 	await mockDelay();
 
 	const database = guestState.databases.find((db) => db.id === databaseId);
