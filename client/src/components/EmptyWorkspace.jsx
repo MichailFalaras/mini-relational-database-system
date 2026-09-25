@@ -8,7 +8,7 @@ const SUPPORTED_OPS = [
   ["CREATE INDEX", "DROP INDEX"],
 ];
 
-function EmptyWorkspace({ onAddConnection, onTryDemo }) {
+function EmptyWorkspace({ onOpenDatabase, onTryDemo }) {
 	
 	return (
 		<div id="empty-workspace">
@@ -18,17 +18,17 @@ function EmptyWorkspace({ onAddConnection, onTryDemo }) {
 					<Database style={{ width: "1.75rem", height: "1.75rem", color: "#FFFFFF"}}/>
 				</div>
 
-				<h2>No database connected</h2>
-				<p>Connect to a database to start writing queries, browsing schemas, and exploring your data.</p>
+				<h2>No database open</h2>
+				<p>Open a database to start writing queries, browsing schemas, and exploring your data.</p>
 
 				{/* Action Buttons */}
 				<div id="empty-workspace-btns">
 					<button 
-						id="add-connection-btn"
-						onClick={onAddConnection}
+						id="open-database-btn"
+						onClick={onOpenDatabase}
 					>
 						<Plus style={{ width: "1rem", height: "1rem" }}/> 
-						Add connection
+						Open database
 					</button>
 					<button 
 						id="try-sample-data"

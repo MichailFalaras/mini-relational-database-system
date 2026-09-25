@@ -4,168 +4,16 @@ import Sidebar from "./../components/Sidebar.jsx";
 import EmptyWorkspace from "./../components/EmptyWorkspace.jsx";
 import SettingsModal from "./../components/SettingsModal.jsx";
 import CreateDatabaseModal from "../components/CreateDatabaseModal.jsx";
-import ConnectDatabaseModal from "../components/ConnectDatabaseModal.jsx";
+import OpenDatabaseModal from "../components/OpenDatabaseModal.jsx";
 import SQLEditor from "../components/SQLEditor.jsx";
 import ResultsPanel from "../components/ResultsPanel.jsx";
 import { X, Plus, Loader2, PlayIcon, Check, Copy, Download } from "lucide-react";
 import { loadQueryHistory, saveQueryHistory, MAX_HISTORY_ENTRIES } from "./../utils/queryHistory.js";
 import "./../styles/home.css";
-
-
-
-const TEST_CONNECTIONS = [
-    {id: 1, name: "e_commercedb", status: "connected", user:"apostolis", numTables: "8", size: "7.2 MB"}, 
-    {id: 2, name: "analytics_db", status: "disconnected", user:"apostolis", numTables: "6", size: "9.8 MB"}, 
-	{id: 3, name: "hr_system", status: "disconnected", user:"apostolis", numTables: "7", size: "14.6 MB"}, 
-	{id: 4, name: "users_db", status: "disconnected", user:"apostolis", numTables: "5", size: "15.2 MB"}
-];
-
-const TABLES = [
-    {
-        name: "users", rowCount: 14823,
-        columns: [
-            { name: "id", type: "INT", nullable: false, pk: true },
-            { name: "email", type: "VARCHAR(255)", nullable: false, pk: false, constraints: ["UNIQUE", "CHECK (email LIKE '%@%')"] },
-            { name: "username", type: "VARCHAR(100)", nullable: false, pk: false, constraints: ["UNIQUE", "CHECK (LENGTH(username) >= 3)"] },
-            { name: "full_name", type: "VARCHAR(200)", nullable: true, pk: false },
-            { name: "created_at", type: "TIMESTAMP", nullable: false, pk: false, default: "CURRENT_TIMESTAMP" },
-            { name: "is_active", type: "BOOLEAN", nullable: false, pk: false, default: "TRUE" },
-        ],
-    },
-    {
-        name: "orders", rowCount: 89341,
-        columns: [
-            { name: "id", type: "INT", nullable: false, pk: true },
-            { name: "user_id", type: "INT", nullable: false, pk: false, fk: "users.id" },
-            { name: "status", type: "VARCHAR(20)", nullable: false, pk: false, 
-                constraints: ["CHECK (status IN ('pending', 'processing', 'shipped', 'delivered', 'cancelled'))"] },
-            { name: "total_amount", type: "DECIMAL(10,2)", nullable: false, pk: false, constraints: ["CHECK (total_amount >= 0)"] },
-            { name: "created_at", type: "TIMESTAMP", nullable: false, pk: false, default: "CURRENT_TIMESTAMP" },
-            { name: "shipped_at", type: "TIMESTAMP", nullable: true, pk: false },
-        ],
-    },
-    {
-        name: "products", rowCount: 3204,
-        columns: [
-            { name: "id", type: "INT", nullable: false, pk: true },
-            { name: "sku", type: "VARCHAR(50)", nullable: false, pk: false, constraints: ["UNIQUE"] },
-            { name: "name", type: "VARCHAR(300)", nullable: false, pk: false },
-            { name: "category_id", type: "INT", nullable: true, pk: false, fk: "categories.id" },
-            { name: "price", type: "DECIMAL(10,2)", nullable: false, pk: false, constraints: ["CHECK (price >= 0)"] },
-            { name: "stock_qty", type: "INT", nullable: false, pk: false, default: "0", constraints: ["CHECK (stock_qty >= 0)"] },
-        ],
-    },
-    {
-        name: "order_items", rowCount: 312847,
-        columns: [
-            { name: "id", type: "INT", nullable: false, pk: true },
-            { name: "order_id", type: "INT", nullable: false, pk: false, fk: "orders.id", constraints: ["UNIQUE (order_id, product_id)"] },
-            { name: "product_id", type: "INT", nullable: false, pk: false, fk: "products.id", constraints: ["UNIQUE (order_id, product_id)"] },
-            { name: "quantity", type: "INT", nullable: false, pk: false, constraints: ["CHECK (quantity >= 0)"] },
-            { name: "unit_price", type: "DECIMAL(10,2)", nullable: false, pk: false, constraints: ["CHECK (unit_price >= 0)"] },
-        ],
-    },
-    {
-        name: "categories", rowCount: 42,
-        columns: [
-            { name: "id", type: "INT", nullable: false, pk: true },
-            { name: "name", type: "VARCHAR(100)", nullable: false, pk: false },
-            { name: "parent_id", type: "INT", nullable: true, pk: false, fk: "categories.id", constraints: ["CHECK (parent_id != id)"] },
-            { name: "slug", type: "VARCHAR(120)", nullable: false, pk: false, constraints: ["UNIQUE"] },
-        ],
-    },
-    {
-        name: "reviews", rowCount: 28561,
-        columns: [
-            { name: "id", type: "INT", nullable: false, pk: true },
-            { name: "product_id", type: "INT", nullable: false, pk: false, fk: "products.id", constraints: ["UNIQUE (product_id, user_id)"]  },
-            { name: "user_id", type: "INT", nullable: false, pk: false, fk: "users.id", constraints: ["UNIQUE (product_id, user_id)"] },
-            { name: "rating", type: "TINYINT", nullable: false, pk: false, constraints: ["CHECK (rating BETWEEN 1 AND 5)"] },
-            { name: "body", type: "TEXT", nullable: true, pk: false },
-            { name: "created_at", type: "TIMESTAMP", nullable: false, pk: false, default: "CURRENT_TIMESTAMP" },
-        ],
-    },
-];
-
-const INDEXES = [
-    { name: "idx_users_email", table: "users", columns: ["email"], unique: true },
-    { name: "idx_users_username", table: "users", columns: ["username"], unique: true },
-    { name: "idx_orders_user_id", table: "orders", columns: ["user_id"], unique: false },
-    { name: "idx_orders_status_created", table: "orders", columns: ["status", "created_at"], unique: false },
-    { name: "idx_products_sku", table: "products", columns: ["sku"], unique: true },
-    { name: "idx_products_category", table: "products", columns: ["category_id"], unique: false },
-    { name: "idx_order_items_order", table: "order_items", columns: ["order_id"], unique: false },
-    { name: "idx_order_items_product", table: "order_items", columns: ["product_id"], unique: false },
-    { name: "idx_reviews_product_rating", table: "reviews", columns: ["product_id", "rating"], unique: false },
-];
-
-
-const MOCK_ROWS = {
-  users: {
-    rows: [
-    { id: 1, email: "sarah.chen@example.com", username: "schen", full_name: "Sarah Chen", created_at: "2023-01-15 09:23:11", is_active: true },
-    { id: 2, email: "marcus.okafor@example.com", username: "mokafor", full_name: "Marcus Okafor", created_at: "2023-01-16 14:07:32", is_active: true },
-    { id: 3, email: "priya.sharma@example.com", username: "psharma", full_name: "Priya Sharma", created_at: "2023-02-03 11:45:09", is_active: true },
-    { id: 4, email: "jake.williams@example.com", username: "jwilliams", full_name: "Jake Williams", created_at: "2023-02-08 08:12:55", is_active: false },
-    { id: 5, email: "luna.petrov@example.com", username: "lpetrov", full_name: "Luna Petrov", created_at: "2023-02-14 16:33:41", is_active: true },
-    { id: 6, email: "david.nakamura@example.com", username: "dnakamura", full_name: "David Nakamura", created_at: "2023-03-01 10:19:28", is_active: true },
-    { id: 7, email: "amara.diallo@example.com", username: "adiallo", full_name: "Amara Diallo", created_at: "2023-03-12 09:54:17", is_active: true },
-    { id: 8, email: "felix.mendez@example.com", username: "fmendez", full_name: "Felix Mendez", created_at: "2023-03-19 13:28:44", is_active: false },
-  ],
-    columns: ["id", "email", "username", "full_name", "created_at"]
-  },
-  orders: [
-    { id: 1001, user_id: 3, status: "delivered", total_amount: 149.99, created_at: "2024-01-03 10:12:00", shipped_at: "2024-01-04 08:30:00" },
-    { id: 1002, user_id: 1, status: "processing", total_amount: 89.50, created_at: "2024-01-05 14:22:10", shipped_at: null },
-    { id: 1003, user_id: 7, status: "shipped", total_amount: 312.00, created_at: "2024-01-06 09:45:33", shipped_at: "2024-01-07 11:20:00" },
-    { id: 1004, user_id: 2, status: "cancelled", total_amount: 55.00, created_at: "2024-01-06 16:10:55", shipped_at: null },
-    { id: 1005, user_id: 5, status: "delivered", total_amount: 234.75, created_at: "2024-01-08 08:30:22", shipped_at: "2024-01-09 13:15:40" },
-    { id: 1006, user_id: 6, status: "processing", total_amount: 78.99, created_at: "2024-01-09 11:05:17", shipped_at: null },
-    { id: 1007, user_id: 3, status: "delivered", total_amount: 420.00, created_at: "2024-01-10 15:33:08", shipped_at: "2024-01-11 10:45:00" },
-    { id: 1008, user_id: 4, status: "shipped", total_amount: 67.25, created_at: "2024-01-11 09:22:44", shipped_at: "2024-01-12 09:00:00" },
-  ],
-  products: [
-    { id: 1, sku: "ELEC-0042", name: "Wireless Noise-Cancelling Headphones", category_id: 3, price: 89.99, stock_qty: 142 },
-    { id: 2, sku: "ELEC-0117", name: "USB-C Charging Hub 7-Port", category_id: 3, price: 34.99, stock_qty: 88 },
-    { id: 3, sku: "BOOK-0019", name: "Database Internals: A Deep Dive", category_id: 7, price: 44.99, stock_qty: 31 },
-    { id: 4, sku: "HOME-0204", name: "Bamboo Desk Organizer Set", category_id: 5, price: 22.50, stock_qty: 210 },
-    { id: 5, sku: "ELEC-0098", name: "Mechanical Keyboard TKL RGB", category_id: 3, price: 129.00, stock_qty: 55 },
-    { id: 6, sku: "CLTH-0077", name: "Merino Wool Quarter-Zip Pullover", category_id: 2, price: 68.00, stock_qty: 178 },
-    { id: 7, sku: "HOME-0312", name: "Cast Iron Skillet 10-inch", category_id: 5, price: 39.95, stock_qty: 94 },
-    { id: 8, sku: "ELEC-0223", name: "Portable SSD 1TB USB-C", category_id: 3, price: 109.99, stock_qty: 67 },
-  ],
-  order_items: [
-    { id: 1, order_id: 1001, product_id: 1, quantity: 1, unit_price: 89.99 },
-    { id: 2, order_id: 1001, product_id: 4, quantity: 2, unit_price: 22.50 },
-    { id: 3, order_id: 1002, product_id: 5, quantity: 1, unit_price: 89.50 },
-    { id: 4, order_id: 1003, product_id: 5, quantity: 1, unit_price: 129.00 },
-    { id: 5, order_id: 1003, product_id: 8, quantity: 1, unit_price: 109.99 },
-    { id: 6, order_id: 1003, product_id: 6, quantity: 1, unit_price: 68.00 },
-    { id: 7, order_id: 1005, product_id: 2, quantity: 2, unit_price: 34.99 },
-    { id: 8, order_id: 1005, product_id: 1, quantity: 1, unit_price: 89.99 },
-  ],
-  categories: [
-    { id: 1, name: "All Products", parent_id: null, slug: "all-products" },
-    { id: 2, name: "Clothing", parent_id: 1, slug: "clothing" },
-    { id: 3, name: "Electronics", parent_id: 1, slug: "electronics" },
-    { id: 4, name: "Audio", parent_id: 3, slug: "audio" },
-    { id: 5, name: "Home & Kitchen", parent_id: 1, slug: "home-kitchen" },
-    { id: 6, name: "Sports", parent_id: 1, slug: "sports" },
-    { id: 7, name: "Books", parent_id: 1, slug: "books" },
-    { id: 8, name: "Headphones", parent_id: 4, slug: "headphones" },
-  ],
-  reviews: [
-    { id: 1, product_id: 1, user_id: 2, rating: 5, body: "Incredible sound quality, very comfortable for long sessions.", created_at: "2024-01-15 10:23:00" },
-    { id: 2, product_id: 5, user_id: 3, rating: 4, body: "Great keyboard, solid build and the RGB is a nice touch.", created_at: "2024-01-16 14:55:00" },
-    { id: 3, product_id: 3, user_id: 1, rating: 5, body: "Essential reading for any developer working with databases.", created_at: "2024-01-17 09:10:00" },
-    { id: 4, product_id: 8, user_id: 7, rating: 4, body: "Fast transfer speeds and very compact. Good value.", created_at: "2024-01-18 16:30:00" },
-    { id: 5, product_id: 2, user_id: 5, rating: 3, body: "Works fine but build quality could be better.", created_at: "2024-01-20 11:45:00" },
-    { id: 6, product_id: 1, user_id: 6, rating: 5, body: null, created_at: "2024-01-22 08:15:00" },
-    { id: 7, product_id: 7, user_id: 4, rating: 4, body: "Excellent skillet, heats very evenly.", created_at: "2024-01-23 13:00:00" },
-    { id: 8, product_id: 6, user_id: 8, rating: 3, body: "Nice material quality but runs slightly small.", created_at: "2024-01-24 10:20:00" },
-  ],
-};
-
+import { openDatabase, createDatabase, getDatabases, deleteDatabase } from "../api/databaseService.js";
+import { getSchema } from "../api/schemaService.js";
+import { executeQuery } from "../api/queryService.js";
+import { getCurrentUser } from "../api/authService.js";
 
 // Status text options for the Footer section 
 const STATUS_TEXT = {
@@ -177,6 +25,19 @@ const STATUS_TEXT = {
 
 
 function HomePage() {
+    // User state
+    const [currentUser, setCurrentUser] = useState(null);
+
+    // Load current user
+    async function loadCurrentUser() {
+        try {
+            const user = await getCurrentUser();
+            setCurrentUser(user);
+        } catch (error) {
+            console.error("Unable to load current user");
+        }
+    }
+
     // Header-related state
     const [isRefreshing, setIsRefreshing] = useState(false);
 
@@ -188,9 +49,14 @@ function HomePage() {
 
 		setIsRefreshing(true);
 
-		await new Promise(resolve => setTimeout(resolve, 700));
-
-		setIsRefreshing(false);
+		try {
+            await loadDatabases();
+            await loadSchema();
+        } catch(error) {
+            console.error("Unable to refresh database data");
+        } finally {
+            setIsRefreshing(false);
+        }
 	}
 
     // Tabs-related state
@@ -225,105 +91,151 @@ function HomePage() {
     });
     const [showSettings, setShowSettings] = useState(false);
     
-    // Connection-related state
-    const [connections, setConnections] = useState(TEST_CONNECTIONS ?? []);
-    const [activeConnId, setActiveConnId] = useState(1);
+    // Database-related state
+    const [databases, setDatabases] = useState([]);
+    const [activeDatabaseId, setActiveDatabaseId] = useState(null);
+
+    // Load all databases displayed in the database dropdown
+    async function loadDatabases() {
+        try {
+            const loadedDatabases = await getDatabases();
+
+            setDatabases(loadedDatabases);
+
+            // Restore active database ID
+            // It's useful during refresh
+            setActiveDatabaseId((currentId) => {
+                const stillExists = loadedDatabases.some((db) => db.id === currentId);
+
+                if (stillExists) {
+                    return currentId;
+                }
+
+                return loadedDatabases[0]?.id ?? null;
+            });
+
+        } catch(error) {
+            console.error("Unable to load databases", error);
+        } 
+    }
+
+    useEffect(() => {
+        loadCurrentUser();
+        loadDatabases();
+    }, []);
+
+    // Database schema state
+    const [tables, setTables] = useState([]);
+    const [indexes, setIndexes] = useState([]);
+
+    // Load database schema for the currently open database
+    async function loadSchema() {
+        if (activeDatabaseId === null) {
+            setTables([]);
+            setIndexes([]);
+            return;
+        }
+
+        try {
+            const schema = await getSchema(activeDatabaseId);
+
+            setTables(schema.tables);
+            setIndexes(schema.indexes);
+
+        } catch (error) {
+            console.error("Unable to load database schema");
+            setTables([]);
+            setIndexes([]);
+        }
+    }
+
+    useEffect(() => {
+        loadSchema();   
+    }, [activeDatabaseId]);
+
     const [showCreateModal, setShowCreateModal] = useState(false);
-    const [connModal, setConnModal] = useState(undefined);
+    const [openDatabaseModal, setOpenDatabaseModal] = useState(undefined);
     const [executionStatus, setExecutionStatus] = useState("idle");
 
     let isRunning = executionStatus === "executing";
     let statusText = STATUS_TEXT[executionStatus];
 
-    let activeConn = connections.find((conn) => conn.id === activeConnId);
+    let activeDatabase = databases.find((db) => db.id === activeDatabaseId);
     
 
-    // Connect to an existing database or create a new connection
-    async function handleConnectDatabase(data) {
-        // TODO: API call
+    // Open an existing database
+    async function handleOpenDatabase() {
+        try {
+            if (openDatabaseModal) {
+                const openedDatabase = await openDatabase(openDatabaseModal.id);
 
-        if (connModal) {
-            // Change status of existing connection (from the connection dropdown)
-            setConnections((prev) => 
-                prev.map((conn) => 
-                    conn.id === connModal.id
-                        ? {
-                            ...conn,
-                            user: data.username,
-                            status: "connected"
-                        }
-                        : conn
-                )
-            );
+                // Change status of existing database
+                setDatabases((prev) => 
+                    prev.map((db) => 
+                        db.id === openedDatabase.id
+                            ? { ...db, status: "open" }
+                            : db
+                    )
+                );
 
-            setActiveConnId(connModal.id);
+                setActiveDatabaseId(openedDatabase.id);
+            }
+
+            setOpenDatabaseModal(undefined);
+
+        } catch (error) {
+            console.error("Unable to open database");
         }
-        else {
-            // New (empty database) connection
-            const id = Date.now();
-            const newConnection = { 
-                id,
-                name: data.databaseName, 
-                user: data.username,
-                status: "disconnected",
-                numTables: "0",
-                size: "0 MB"
-            };
-
-            setConnections((prev) => [...prev, newConnection]);
-            setActiveConnId(id);
-        }
-
-        setConnModal(undefined);
     }
 
-    // Delete a database connection
-    async function handleDeleteConnection(id) {
-        // TODO: API call
+    // Remove a database
+    async function handleDeleteDatabase(id) {
+        try {
+            await deleteDatabase(id);
 
-        setConnections((prev) => prev.filter((conn) => conn.id !== id));
+            setDatabases((prev) => prev.filter((db) => db.id !== id));
 
-        if (activeConnId === id) {
-            setActiveConnId(null);
+            if (activeDatabaseId === id) {
+                setActiveDatabaseId(null);
+            }
+        } catch (error) {
+            console.error("Unable to delete database");
         }
     }
 
     async function handleCreateDatabase(form) {
-        // TODO: API call
+        try {
+            const newDatabase = await createDatabase(form);
 
-        const id = Date.now();
-        const newConnection = {
-            id,
-            name: form.databaseName,
-            user: form.username,
-            status: "connected",
-            numTables: "0",
-            size: "0 MB"
-        };
+            setDatabases((prev) => [...prev, newDatabase]);
+            setActiveDatabaseId(newDatabase.id);
+            setShowCreateModal(false);
 
-        setConnections((prev) => [...prev, newConnection]);
-        setActiveConnId(id);
-        setShowCreateModal(false);
+        } catch(error) {
+            console.error("Unable to create new database");
+        }
     }
 
     // Try mock database
     function handleTryDemo() {
-        const demo = connections.find((conn) => conn.id === 1);
+        const demo = databases.find((db) => db.id === 1);
+
         if (!demo) {
             return;
         }
 
-        setConnections((prev) => 
-            prev.map((conn) =>
-                conn.id === demo.id
+        setDatabases((prev) => 
+            prev.map((db) =>
+                db.id === demo.id
                     ? {
-                        ...conn,
-                        status: "connected",
-                        user: "guest"
+                        ...db,
+                        status: "open",
                     }
-                    : conn
+                    : db
             )
         );
+
+        setActiveDatabaseId(demo.id);
     }
 
     async function handleSignOut() {
@@ -379,7 +291,7 @@ function HomePage() {
         const newHistoryEntry = {
             id: crypto.randomUUID(),
             sql,
-            database: activeConn?.name ?? "no database",
+            database: activeDatabase?.name ?? "no database",
             executedAt: new Date(),
             result
         };
@@ -424,7 +336,7 @@ function HomePage() {
         }
         
         // Prevent an empty SQL query from running
-        if (!sql.trim()) {
+        if (!activeDatabase || !sql.trim()) {
             return;
         }
 
@@ -434,23 +346,11 @@ function HomePage() {
         setResult(null);
 
         try {
-            // API call
-            // Set results state
-            
-            // Mock API Query
-            await new Promise((resolve) => setTimeout(resolve, 1000));
+            const queryResult = await executeQuery(activeDatabase.id, sql);
 
-            const queryResult = {
-                type: "select",
-                rows: [], //MOCK_ROWS.users.rows,
-                columns: MOCK_ROWS.users.columns,
-                executionTime: 50
-            };
 
             setResult(queryResult);
-
             setExecutionStatus("success");
-
             addHistoryEntry(sql, queryResult);
         
         } catch(error) {
@@ -481,13 +381,13 @@ function HomePage() {
 	return (
 		<div id="home-page">
             <Header 
-                connections={connections}
-                activeConn={activeConn}
+                currentUser={currentUser}
+                databases={databases}
+                activeDatabase={activeDatabase}
 
-                onConnect={(conn) => setConnModal(conn)}
-                onSelectConnection={setActiveConnId}
-                onDeleteConnection={handleDeleteConnection}
-                onNewConnection={() => setConnModal(null)}
+                onOpenDatabase={(db) => setOpenDatabaseModal(db)}
+                onSelectDatabase={setActiveDatabaseId}
+                onDeleteDatabase={handleDeleteDatabase}
                 onCreateDatabase={() => setShowCreateModal(true)}
 
                 isRefreshing={isRefreshing}
@@ -502,17 +402,17 @@ function HomePage() {
             {/* Central App Section */}
             <div id="body">
                 <Sidebar 
-                    activeConn={activeConn}
-                    tables={TABLES}
-                    indexes={INDEXES}
+                    activeDatabase={activeDatabase}
+                    tables={tables}
+                    indexes={indexes}
                     isRefreshing={isRefreshing}
                     activeTable={activeTable}
                     onSelectTable={selectTable}
                 />
 
-                {activeConn == null
+                {activeDatabase == null
                     ? <EmptyWorkspace 
-                          onAddConnection={() => setConnModal(null)}
+                          onOpenDatabase={() => setOpenDatabaseModal(null)}
                           onTryDemo={handleTryDemo}
                       />
                     : (
@@ -605,8 +505,8 @@ function HomePage() {
                             <ResultsPanel 
                                 result={result}
                                 isRunning={isRunning}
-                                tables={TABLES}
-                                indexes={INDEXES}
+                                tables={tables}
+                                indexes={indexes}
                                 activeTable={activeTable}
                                 resultPanel={resultPanel}
                                 setResultPanel={setResultPanel}
@@ -624,9 +524,9 @@ function HomePage() {
 
             {/* Footer Status Bar */}
             <footer id="status-bar-footer">
-                <div id="status-connection">
-                    <div className={`connection ${activeConn?.status === "connected" ? "connected": "" }`} />
-                    <span>{activeConn?.name ?? "no database"}</span>
+                <div id="status-database">
+                    <div className={`database-status ${activeDatabase?.status === "open" ? "open": "" }`} />
+                    <span>{activeDatabase?.name ?? "no database"}</span>
                 </div>
 
                 <div style={{ width: "1px", height: "0.75rem", backgroundColor: "rgba(0,0,0,0.1)" }} />
@@ -656,11 +556,11 @@ function HomePage() {
                 />
             )}
 
-            {connModal !== undefined && (
-                <ConnectDatabaseModal 
-                    target={connModal}
-                    onConnect={handleConnectDatabase}
-                    onCancel={() => setConnModal(undefined)}
+            {openDatabaseModal !== undefined && (
+                <OpenDatabaseModal 
+                    target={openDatabaseModal}
+                    onOpen={handleOpenDatabase}
+                    onCancel={() => setOpenDatabaseModal(undefined)}
                 />
             )}
         

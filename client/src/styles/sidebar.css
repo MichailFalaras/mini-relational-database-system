@@ -45,7 +45,7 @@
     scrollbar-width: none;
 }
 
-#sidebar-no-connection {
+#sidebar-no-database {
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -54,7 +54,7 @@
     gap: 0.5rem;            
 }
 
-#sidebar-no-connection > p {
+#sidebar-no-database > p {
     font-size: 0.875rem;  /* 0.75rem */  
     line-height: 1.625;    
     color: #C4CAD4;

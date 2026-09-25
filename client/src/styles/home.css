@@ -231,22 +231,22 @@ main {
     color: #9CA3AF;
 }
 
-#status-connection {
+#status-database {
     display: flex;
     align-items: center;
     gap: 0.375rem; 
 }
 
-.connection {
+.database-status {
     width: 0.375rem;  
     height: 0.375rem;
     border-radius: 50%;
     background-color: #D1D5DB;
 }
 
-.connection.connected { background-color: #16A34A; }
+.database-status.open { background-color: #16A34A; }
 
-#status-connection > span { font-family: 'JetBrains Mono', monospace; }
+#status-database > span { font-family: 'JetBrains Mono', monospace; }
 
 
 .footer-execution-status.idle, .footer-execution-status.executing { 

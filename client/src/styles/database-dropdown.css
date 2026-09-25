@@ -112,7 +112,7 @@
     transition-duration: 150ms;
 }
 
-.active-db-option.connected { background-color: #16A34A; }
+.active-db-option.open { background-color: #16A34A; }
 
 .option-info {
     flex: 1 1 0%;
@@ -146,7 +146,7 @@
     font-family: 'JetBrains Mono', monospace;
 }
 
-.disconnected-dbs {
+.closed-dbs {
     display: flex;
     align-items: center;
     gap: 0.25rem;
@@ -158,9 +158,9 @@
     transition-duration: 150ms;
 }
 
-.database-option:hover .disconnected-dbs { opacity: 1; }
+.database-option:hover .closed-dbs { opacity: 1; }
 
-.delete-disconnected-option {
+.remove-database-option {
     opacity: 0;
     width: 1.5rem;        
     height: 1.5rem;       
@@ -175,9 +175,9 @@
     color: #9CA3AF;
 }
 
-.database-option:hover .delete-disconnected-option { opacity: 1; }
+.database-option:hover .remove-database-option { opacity: 1; }
 
-.delete-disconnected-option:hover {
+.remove-database-option:hover {
     background-color: #FEE2E2;
     color: #DC2626;
 }

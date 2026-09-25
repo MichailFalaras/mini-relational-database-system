@@ -5,7 +5,7 @@ import "./../styles/sidebar.css";
 
 
 
-function Sidebar({ activeConn, tables, indexes, isRefreshing, activeTable, onSelectTable }) {
+function Sidebar({ activeDatabase, tables, indexes, isRefreshing, activeTable, onSelectTable }) {
 	// Table-related state
 	const [expandTables, setExpandTables] = useState(true);
 
@@ -40,12 +40,12 @@ function Sidebar({ activeConn, tables, indexes, isRefreshing, activeTable, onSel
 			</div>
 
 			<div id="sidebar-contents">
-				{/* Empty sidebar when user is not connected */}
-				{ activeConn == null
+				{/* Empty sidebar when no database is open */}
+				{ activeDatabase == null
 					? (
-						<div id="sidebar-no-connection">
+						<div id="sidebar-no-database">
 							<Database style={{ width: "1.5rem", height: "1.5rem", color: "#D1D5DB"}}/>
-							<p>No database connected</p>
+							<p>No database open</p>
 						</div>
 					)
 					: (
@@ -75,7 +75,7 @@ function Sidebar({ activeConn, tables, indexes, isRefreshing, activeTable, onSel
 										? (
 											<div id="no-tables-available">
 												No schema available for<br />
-												<span>{activeConn?.name}</span>
+												<span>{activeDatabase?.name}</span>
 											</div>
 										)
 										: (

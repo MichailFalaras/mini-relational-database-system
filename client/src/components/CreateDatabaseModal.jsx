@@ -1,64 +1,29 @@
 import { useState } from "react";
-import { X, Eye, EyeOff, AlertCircle, Loader2 } from "lucide-react";
+import { X, AlertCircle, Loader2 } from "lucide-react";
 import "./../styles/create-database-modal.css";
 
 
 function CreateDatabaseModal({ onCreate, onCancel }) {
-	const [form, setForm] = useState({
-		databaseName: "",
-		username: "",
-		password: "",
-		confirmPassword: ""
-	});
-	const [showPassword, setShowPassword] = useState(false);
+	const [databaseName, setDatabaseName] = useState("");
 	const [error, setError] = useState("");
-	const [connecting, setConnecting] = useState(false);
+	const [creating, setCreating] = useState(false);
 
 
 	async function handleCreateDatabase(event) {
 		event.preventDefault();
 		setError("");
 		
-		if (!form?.databaseName?.trim()) { 
+		if (!databaseName?.trim()) { 
 			setError("Database name is required."); 
 			return; 
 		}
 
-		if (!form?.username?.trim()) { 
-			setError("Username is required."); 
-			return; 
-		}
-
-		if (!form?.password?.trim()) { 
-			setError("Password is required."); 
-			return; 
-		}
-
-		if (form?.password?.length < 8) { 
-			setError("Password must be at least 8 characters."); 
-			return; 
-		}
-
-		if (!form?.confirmPassword.trim()) { 
-			setError("Confirmation password is required."); 
-			return; 
-		}
-		
-		if (form?.password !== form?.confirmPassword) { 
-			setError("Passwords don't match."); 
-			return; 
-		}
-
-		setConnecting(true);
+		setCreating(true);
 		
 		try {
-			await onCreate({
-				databaseName: form.databaseName.trim(),
-				username: form.username.trim(),
-				password: form.password.trim()
-			});
+			await onCreate({ databaseName: databaseName.trim() });
 		} finally {
-			setConnecting(false);
+			setCreating(false);
 		}
 	}
 
@@ -70,8 +35,8 @@ function CreateDatabaseModal({ onCreate, onCancel }) {
 				{/* Modal Header */}
 				<div id="create-modal-header">
 					<div>
-						<h2>New Connection</h2>
-						<p>Configure a new database connection</p>
+						<h2>Create Database</h2>
+						<p>Create a new MiniDB database</p>
 					</div>
 					<button 
 						id="close-create-modal"
@@ -88,69 +53,8 @@ function CreateDatabaseModal({ onCreate, onCancel }) {
 						<input 
 							type="text"
 							className="form-input"
-							value={form?.databaseName}
-							onChange={(event) => 
-								setForm((prev) => ({
-									...prev,
-									databaseName: event.target.value
-								}))
-							}
-						/>
-					</div>
-					<div>
-						<label className="form-label">Username</label>
-						<input 
-							type="text"
-							className="form-input"
-							value={form?.username}
-							onChange={(event) => 
-								setForm((prev) => ({
-									...prev,
-									username: event.target.value
-								}))
-							}
-						/>
-					</div>
-					<div>
-						<label className="form-label">Password</label>
-						<div style={{ position: "relative"}}>
-
-							<input 
-								type={showPassword ? "text" : "password"}
-								className="form-input"
-								style={{ paddingRight: "36px" }}
-								value={form?.password}
-								onChange={(event) => 
-									setForm((prev) => ({
-										...prev,
-										password: event.target.value
-									}))
-								}
-							/>
-							<button 
-								type="button"
-								id="show-password-btn"
-								onClick={() => setShowPassword((prev) => !prev)}
-							>
-								{showPassword 
-									? <EyeOff style={{width: "0.875rem", height: "0.875rem"}}/> 
-									: <Eye style={{width: "0.875rem", height: "0.875rem"}}/>
-								}
-							</button>
-						</div>
-					</div>
-					<div>
-						<label className="form-label">Confirm Password</label>
-						<input 
-							type="password"
-							className="form-input"
-							value={form?.confirmPassword}
-							onChange={(event) => 
-								setForm((prev) => ({
-									...prev,
-									confirmPassword: event.target.value
-								}))
-							}
+							value={databaseName}
+							onChange={(event) => setDatabaseName(event.target.value)}
 						/>
 					</div>
 
@@ -166,10 +70,14 @@ function CreateDatabaseModal({ onCreate, onCancel }) {
 						<button id="cancel-btn" type="button" onClick={onCancel}>
 							Cancel
 						</button>
-						<button id="create-btn" type="submit">
-							{connecting
-								? <><Loader2 className="connect-loader"/> Connecting...</>
-								: "Connect →"
+						<button 
+							id="create-btn" 
+							type="submit"
+							disabled={creating}
+						>
+							{creating
+								? <><Loader2 className="create-loader"/> Creating...</>
+								: "Create →"
 							}
 						</button>
 					</div>

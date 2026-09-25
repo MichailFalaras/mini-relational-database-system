@@ -4,8 +4,8 @@ import DatabaseDropdown from "./DatabaseDropdown.jsx";
 import UserMenu from "./UserMenu.jsx";
 import "./../styles/header.css";
 
-function Header({ connections, activeConn, onConnect, onSelectConnection, onDeleteConnection, 
-	onNewConnection, onCreateDatabase, isRefreshing, onRefresh, showSettings, setShowSettings, onSignOut }) {
+function Header({ currentUser, databases, activeDatabase, onOpenDatabase, onSelectDatabase, onDeleteDatabase, 
+	onCreateDatabase, isRefreshing, onRefresh, showSettings, setShowSettings, onSignOut }) {
 	
 	const [showDropdown, setShowDropdown] = useState(false);
 
@@ -28,22 +28,22 @@ function Header({ connections, activeConn, onConnect, onSelectConnection, onDele
 			<div id="db-dropdown">
 				<button 
 					id="db-dropdown-btn"
-					className={`${showDropdown ? "show-dropdown" : ""} ${activeConn ? "active-db" : ""}`}
+					className={`${showDropdown ? "show-dropdown" : ""} ${activeDatabase ? "active-db" : ""}`}
 					onClick={() => setShowDropdown((prev) => !prev)}
 				>
 
-					{activeConn
+					{activeDatabase
 						? <div 
 							id="active-db-signal"
-							className={activeConn ? "connected" : ""}
+							className={activeDatabase?.status === "open" ? "open" : ""}
 						/>
 						: <Database style={{ width: "1rem", height: "1rem", color: "#C4CAD4" }}/>
 					}
 					<span 
 						id="active-db-name"
-						className={activeConn ? "active" : ""}
+						className={activeDatabase ? "active" : ""}
 					>
-						{activeConn?.name ?? "Select database"}
+						{activeDatabase?.name ?? "Select database"}
 					</span>
 
 					<ChevronDown id="db-dropdown-chevron" className={showDropdown ? "show-dropdown" : ""}/>
@@ -51,25 +51,28 @@ function Header({ connections, activeConn, onConnect, onSelectConnection, onDele
 				
 				{showDropdown && (
 					<DatabaseDropdown
-						connections={connections} 
-						activeConnId={activeConn?.id}
-						onConnect={onConnect}
-						onSelectConnection={onSelectConnection}
-						onDeleteConnection={onDeleteConnection}
-						onNewConnection={onNewConnection}
+						databases={databases} 
+						activeDatabaseId={activeDatabase?.id}
+						onOpenDatabase={onOpenDatabase}
+						onSelectDatabase={onSelectDatabase}
+						onDeleteDatabase={onDeleteDatabase}
 						onCreateDatabase={onCreateDatabase}
 						onClose={() => setShowDropdown(false)}
 					/>
 				)}
 			</div>
 
-			{activeConn && (
+			{activeDatabase && (
 				<>
 					<span id="database-overview">
-						{activeConn?.numTables}{" Tables "}•{" "}{activeConn?.size}
+						{activeDatabase?.numTables}{" Tables "}•{" "}{activeDatabase?.size}
 					</span>
 					
-					<span id="database-user">as{" "}<span>{activeConn?.user}</span></span>
+					<span id="database-user">
+						as
+						{" "}
+						<span>{activeDatabase?.user ?? activeDatabase?.email ?? "Guest"}</span>
+					</span>
 				</>
 			)}
 
@@ -97,7 +100,10 @@ function Header({ connections, activeConn, onConnect, onSelectConnection, onDele
 				
 				<div className="vertical-sep"/>
 
-				<UserMenu onSignOut={onSignOut}/>
+				<UserMenu 
+					currentUser={currentUser}
+					onSignOut={onSignOut}
+				/>
 			</div>
 		</header>
 	);

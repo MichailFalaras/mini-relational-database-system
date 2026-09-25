@@ -4,8 +4,8 @@ import "./../styles/database-dropdown.css";
 
 
 
-function DatabaseDropdown({ connections, activeConnId, onConnect, onSelectConnection,
-    onClose, onDeleteConnection, onNewConnection, onCreateDatabase
+function DatabaseDropdown({ databases, activeDatabaseId, onOpenDatabase, onSelectDatabase,
+    onClose, onDeleteDatabase, onCreateDatabase
 }) {
 	// State that keeps track of the "to-be-deleted" database (User clicked trash icon)
 	const [confirmId, setConfirmId] = useState(null);
@@ -20,16 +20,16 @@ function DatabaseDropdown({ connections, activeConnId, onConnect, onSelectConnec
 				</div>
 
 				<div id="dropdown-options">
-					{connections.map((conn) => {
-						const isActive = conn.id === activeConnId;
+					{databases.map((db) => {
+						const isActive = db.id === activeDatabaseId;
 
 						{/* Displaying styles for options that the user clicked the trash icon */}
-						if (confirmId === conn.id) {
+						if (confirmId === db.id) {
 							return (
-								<div key={conn.id} className="to-be-deleted-option">
+								<div key={db.id} className="to-be-deleted-option">
 									<Trash2 style={{ width: "0.875rem", height: "0.875rem", flexShrink: "0", color: "#DC2626" }}/>
 									<span>
-										Remove <strong>{conn.name}</strong>?
+										Remove <strong>{db.name}</strong>?
 									</span>
 
 									<button 
@@ -42,7 +42,7 @@ function DatabaseDropdown({ connections, activeConnId, onConnect, onSelectConnec
 									<button 
 										className="confirm-delete-option"
 										onClick={() => {
-											onDeleteConnection(conn.id);
+											onDeleteDatabase(db.id);
 											setConfirmId(null);
 										}}
 									>
@@ -54,42 +54,39 @@ function DatabaseDropdown({ connections, activeConnId, onConnect, onSelectConnec
 
 						return (
 							<div 
-								key={conn.id} 
+								key={db.id} 
 								className={`database-option ${isActive ? "is-active" : ""}`}
 								onClick={() => {
-									if (conn.status === "connected") {
-										onSelectConnection(conn.id);
+									if (db.status === "open") {
+										onSelectDatabase(db.id);
 										onClose();
 									}
 									else {
-										onConnect(conn);
+										onOpenDatabase(db);
 									}
 								}}
 							>
-								<div className={`active-db-option ${conn.status === "connected" ? "connected" : ""}`} />
+								<div className={`active-db-option ${db.status === "open" ? "open" : ""}`} />
 								
 								<div className="option-info">
 									<div className="db-name">
 										<span className={isActive ? "is-active" : ""}>
-											{conn.name}
+											{db.name}
 										</span>
 										{isActive && <Check style={{width: "0.75rem", height: "0.75rem", flexShrink: "0", color: "#4F46E5"}} />}
 									</div>
-									<div className="db-user">
-										{conn.user ? `${conn.user}@` : ""}
-									</div>
 								</div>
 								
-								{conn.status === "disconnected" && (
-									<span className="disconnected-dbs">Connect <ArrowRight style={{width: "0.75rem", height: "0.75rem", flexShrink: "0", color: "#4F46E5"}}/> </span>
+								{db.status === "closed" && (
+									<span className="closed-dbs">Open <ArrowRight style={{width: "0.75rem", height: "0.75rem", flexShrink: "0", color: "#4F46E5"}}/> </span>
 								)}
 
 								{!isActive && (
 									<button 
-										className="delete-disconnected-option"
+										className="remove-database-option"
 										onClick={(event) => {
 											event.stopPropagation();
-											setConfirmId(conn.id);
+											setConfirmId(db.id);
 										}}
 									>
 										<Trash2 style={{width: "0.75rem", height: "0.75rem"}}/>
@@ -103,10 +100,13 @@ function DatabaseDropdown({ connections, activeConnId, onConnect, onSelectConnec
 				<div id="dropdown-actions">
 					<button 
 						className="dropdown-btn"
-						onClick={() => { onNewConnection(); onClose(); }}
+						onClick={() => { 
+							onOpenDatabase(null);
+							onClose(); 
+						}}
 					>
 						<Plus style={{width: "0.875rem", height: "0.875rem", color: "#9CA3AF"}}/> 
-						New Connection
+						Open Database...
 					</button>
 					<button 
 						className="dropdown-btn"

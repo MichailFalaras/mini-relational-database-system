@@ -1,6 +1,6 @@
-/* ---------- Connect Database Modal ---------- */
+/* ---------- Open Database Modal ---------- */
 
-#connect-modal-backdrop {
+#open-modal-backdrop {
     position: fixed;
     inset: 0;
     z-index: 50;
@@ -11,7 +11,7 @@
     backdrop-filter: blur(4px);
 }
 
-#connect-database-modal {
+#open-database-modal {
     width: 440px;
     border-radius: 1rem;
     overflow: hidden;
@@ -22,7 +22,7 @@
 
 /* ---------- Connect Database Modal > Header ---------- */
 
-#connect-modal-header {
+#open-modal-header {
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
@@ -30,14 +30,14 @@
     border-bottom: 1px solid rgba(0, 0, 0, 0.07);
 }
 
-#connect-modal-header > div > h2 {
+#open-modal-header > div > h2 {
     font-size: 0.875rem;    
     line-height: 1.25rem;   
     font-weight: 600;
     color: #111827;
 }
 
-#connect-modal-header > div > p {
+#open-modal-header > div > p {
     font-size: 0.75rem;     
     line-height: 1rem;      
     margin-top: 0.125rem;   
@@ -45,7 +45,7 @@
     margin-bottom: 0;
 }
 
-#close-connect-modal {
+#close-open-modal {
     width: 1.75rem;          
     height: 1.75rem;         
     display: flex;
@@ -58,14 +58,14 @@
     background-color: transparent;
 }
 
-#close-create-modal:hover { background-color: rgba(0, 0, 0, 0.07); }
+#close-open-modal:hover { background-color: rgba(0, 0, 0, 0.07); }
 
 
-/* ---------- Connect Database Modal > DB Creation Form ---------- */
+/* ---------- Open Database Modal > DB Creation Form ---------- */
 
-#connect-modal-form { padding: 1rem 1.25rem; }
+#open-modal-form { padding: 1rem 1.25rem; }
 
-#connect-modal-form > :not(:last-child) { margin-bottom: 0.875rem; }
+#open-modal-form > :not(:last-child) { margin-bottom: 0.875rem; }
 
 .form-label {
     display: block;
@@ -90,20 +90,7 @@
 
 .form-input:focus { border: 1px solid #4F46E5; }
 
-#show-password-btn {
-    position: absolute;
-    right: 0.625rem;
-    top: 45%;
-    transform: translateY(-50%);
-    color: #9CA3AF;
-    border: none;
-    background: transparent;
-    transition: color 150ms;
-}
-
-#show-password-btn:hover { color: #4F46E5; }
-
-#connect-form-error {
+#open-form-error {
     display: flex;
     align-items: center;
     gap: 0.5rem;              
@@ -114,14 +101,14 @@
     border: 1px solid #FECACA;
 }
 
-#connect-form-error > span {
+#open-form-error > span {
     font-family: 'JetBrains Mono', monospace;
     font-size: 0.75rem;  
     line-height: 1rem;   
     color: #B91C1C;
 }
 
-#connect-form-btns {
+#open-form-btns {
     display: flex;
     gap: 0.5rem;        
     padding-top: 0.25rem; 
@@ -142,7 +129,7 @@
 
 #cancel-btn:hover { background-color: #E9EAEC; }
 
-#connect-btn {
+#open-btn {
     flex: 1 1 0%;
     display: flex;
     align-items: center;
@@ -159,11 +146,11 @@
     transition: color 150ms, background-color 150ms;
 }
 
-#create-btn:not(:disabled):hover { background-color: #4338CA; }
+#open-btn:not(:disabled):hover { background-color: #4338CA; }
 
-#create-btn:disabled { opacity: 0.6; }
+#open-btn:disabled { opacity: 0.6; }
 
-.connect-loader {
+.open-loader {
     width: 0.875rem;
     height: 0.875rem;
     animation: spin 1s linear infinite;
