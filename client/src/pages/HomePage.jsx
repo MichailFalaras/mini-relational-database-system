@@ -10,7 +10,7 @@ import ResultsPanel from "../components/ResultsPanel.jsx";
 import { X, Plus, Loader2, PlayIcon, Check, Copy, Download } from "lucide-react";
 import { loadQueryHistory, saveQueryHistory, MAX_HISTORY_ENTRIES } from "./../utils/queryHistory.js";
 import "./../styles/home.css";
-import { openDatabase, createDatabase, getDatabases, deleteDatabase } from "../api/databaseService.js";
+import { openDatabase, createDatabase, getDatabases, deleteDatabase, openDemoDatabase } from "../api/databaseService.js";
 import { getSchema } from "../api/schemaService.js";
 import { executeQuery } from "../api/queryService.js";
 import { getCurrentUser } from "../api/authService.js";
@@ -148,7 +148,7 @@ function HomePage() {
         }
 
         try {
-            const schema = await getSchema(activeDatabaseId);
+            const schema = await getSchema(activeDatabase);
 
             setTables(schema.tables);
             setIndexes(schema.indexes);
@@ -235,27 +235,18 @@ function HomePage() {
 
     // Try mock database
     async function handleTryDemo() {
-        const demo = databases.find((db) => db.id === 1);
-
-        if (!demo) {
-            return;
-        }
+        setIsInitialLoading(true);
 
         try {
-            setIsInitialLoading(true);
-
             // Load demo database
-            const openedDatabase = await openDatabase(demo.id);
+            const demo = await openDemoDatabase();
 
-            setDatabases((prev) => 
-                prev.map((db) =>
-                    db.id === openedDatabase.id
-                        ? { ...db, ...openedDatabase, status: "open" }
-                        : db
-                )
-            );
+            setDatabases((prev) => [
+                ...prev.filter((db) => db.id !== demo.id),
+                demo
+            ]);
 
-            setActiveDatabaseId(openedDatabase.id);
+            setActiveDatabaseId(demo.id);
 
         } catch(error) {
             console.error("Unable to open demo database");
@@ -371,7 +362,7 @@ function HomePage() {
         setResult(null);
 
         try {
-            const queryResult = await executeQuery(activeDatabase.id, sql);
+            const queryResult = await executeQuery(activeDatabase, sql);
 
 
             setResult(queryResult);

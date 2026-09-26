@@ -26,12 +26,12 @@ import { mockGetSchema } from "../mocks/mockSchemaService.js";
    ]
  }
 */
-export function getSchema(databaseId) {
-	if (isGuestMode()) {
-		return mockGetSchema(databaseId);
+export function getSchema(database) {
+	if (isGuestMode() || database?.isDemo === true) {
+		return mockGetSchema(database.id);
 	}
 
-	return apiRequest(`/databases/${databaseId}/schema`, {
+	return apiRequest(`/databases/${database.id}/schema`, {
 		method: "GET"
 	});
 }

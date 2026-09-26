@@ -63,3 +63,16 @@ export function deleteDatabase(databaseId) {
 		method: "DELETE"
 	});
 }
+
+// Open demo database when user is authenticated
+export async function openDemoDatabase() {
+	const databases = await mockGetDatabases();
+
+	const demo = databases.find((db) => db.id === 1) ?? null;
+
+	if (!demo) {
+		throw new Error("Demo database not found");
+	}
+
+	return mockOpenDatabase(demo.id);
+}

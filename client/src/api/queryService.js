@@ -31,16 +31,13 @@ import { isGuestMode } from "./apiMode.js";
     executionTime: 50
   }
  */
-export function executeQuery(databaseId, sql) {
-    if (isGuestMode()) {
-        return mockExecuteQuery(databaseId, sql);
+export function executeQuery(database, sql) {
+    if (isGuestMode() || database?.isDemo === true) {
+        return mockExecuteQuery(database.id, sql);
     } 
 
 	return apiRequest("/query", {
 		method: "POST",
-		body: JSON.stringify({
-			databaseId,
-			sql
-		})
+		body: JSON.stringify({ databaseId: database.id, sql })
 	});
 }
