@@ -18,7 +18,7 @@ export async function mockOpenDatabase(databaseId) {
 		throw new Error("Database not found");
 	}
 
-	database.status = "connected";
+	database.status = "open";
 
 	return structuredClone(database);
 }
