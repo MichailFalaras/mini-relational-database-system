@@ -38,7 +38,7 @@ char *read_query() {
         }
 
          /* Remove '\n' from multi-line queries.
-        Replace with ' '. */
+        Replace with whitespace. */
 
         /* If there's comments before dont remove '\n'
         so that we know when the comments stop. */
@@ -48,8 +48,7 @@ char *read_query() {
         }
     }
     if (n < 0) {
-        perror("read");
-        exit(1);
+        return NULL;
     }
 
     /* If EOF and buffer isn't empty then add terminating null byte. */
@@ -62,10 +61,13 @@ char *read_query() {
 
 /* Expand token buffer. */
 char *expand_buffer(char *buffer, int size) {
+    if (!buffer || !size) {
+        return NULL;
+    }
+
     char *new_buffer = realloc(buffer, size);
-    if (new_buffer == NULL) {
-        printf("Memory error.\n");
-        exit(1);
+    if (!new_buffer) {
+        return NULL;
     }
 
     return new_buffer;
@@ -73,15 +75,31 @@ char *expand_buffer(char *buffer, int size) {
 
 /* Move tokenizer position forward while also expanding token buffer. */
 char *move_tokenizer(Tokenizer *tokenizer, char *buffer, int *size) {
-    
-    /* EOF */
+    if (!tokenizer || !tokenizer->query
+        || !tokenizer->length
+        || !buffer || !size) {
+        return NULL;
+    }
+
+    /* Return NULL and free buffer to signal EOF.
+     *
+     * When we are moving tokenizer, this should never happen.
+     * It's an invalid state. To end token identification it should find ';'
+     * before ending. */
     if (tokenizer->current_position >= tokenizer->length){
-        return buffer;
+        if (buffer) {
+            free(buffer);
+        }
+
+        return NULL;
     }
 
     (*size)++;
     tokenizer->current_position++;
     buffer = expand_buffer(buffer, *size);
+    if (!buffer) {
+        return NULL;
+    }
     
     buffer[*size-1] = tokenizer->query[tokenizer->current_position];
 
@@ -89,21 +107,42 @@ char *move_tokenizer(Tokenizer *tokenizer, char *buffer, int *size) {
 }
 
 /* Check if operator. */
-bool isoperator(char c) {
+bool isoperator(char c, bool *peek_forward) {
+    if (c == '\0' || !peek_forward) {
+        return false;
+    }
+
+    /* If peek_forward is already true, we have less
+     * valid operator characters to read. */
+    if (*peek_forward) {
+        switch (c) {
+            case '-':
+            case '=':
+            case '>':
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /* First time checking for operator. */
     switch (c) {
-        case '+':
         case '-':
+        case '!':
+        case '<':
+        case '>':
+            *peek_forward = true;
+        case '+':
         case '*':
         case '/':
         case '%':
         case '=':
-        case '<':
-        case '>':
-        case '!': return true;
-        default: break;
-    }
+        case '~':
+            return true;
+        default:
+            return false;
+    } 
 
-    return false;
 }
 
 /* Check if punctuation */
@@ -122,88 +161,84 @@ bool ispunctuation(char c) {
 
 /* Check if One/Double Token Keyword. */
 bool iskeyword(char *token, bool *double_token_keyword) {
+    if (!token || !double_token_keyword) {
+        return false;
+    }
 
-    if (strcasecmp(token, "CREATE TABLE") == 0) {
+    /* Double Token KEYWORDs. */
+    if (!strcasecmp(token, "CREATE TABLE")
+        || !strcasecmp(token, "ALTER TABLE") 
+        || !strcasecmp(token, "TRUNCATE TABLE") 
+        || !strcasecmp(token, "DROP TABLE") 
+        || !strcasecmp(token, "CREATE INDEX") 
+        || !strcasecmp(token, "DROP INDEX") 
+        || !strcasecmp(token, "GROUP BY") 
+        || !strcasecmp(token, "ORDER BY")) {
         return true;
-    } else if (strcasecmp(token, "ALTER TABLE") == 0) {
+    }
+
+    /* Trigger double token search. */
+    if (!strcasecmp(token, "CREATE")
+        || !strcasecmp(token, "ALTER")
+        || !strcasecmp(token, "TRUNCATE")
+        || !strcasecmp(token, "DROP")
+        || !strcasecmp(token, "GROUP")
+        || !strcasecmp(token, "ORDER")) {
+        *double_token_keyword = true;
         return true;
-    } else if (strcasecmp(token, "TRUNCATE TABLE") == 0) {
-        return true;
-    } else if (strcasecmp(token, "DROP TABLE") == 0) {
-        return true;
-    } else if (strcasecmp(token, "CREATE INDEX") == 0) {
-        return true;
-    } else if (strcasecmp(token, "DROP INDEX") == 0) {
-        return true;
-    } else if (strcasecmp(token, "GROUP BY") == 0) {
-        return true;
-    }  else if (strcasecmp(token, "ORDER BY") == 0) {
+    }
+
+    /* Identify that it has the first token as KEYWORD. */
+    if (!strcasecmp(token, "SELECT")
+        || !strcasecmp(token, "INSERT")
+        || !strcasecmp(token, "UPDATE")
+        || !strcasecmp(token, "DELETE")
+        || !strcasecmp(token, "FROM")
+        || !strcasecmp(token, "WHERE")
+        || !strcasecmp(token, "HAVING")
+        || !strcasecmp(token, "JOIN")
+        || !strcasecmp(token, "ON")
+        || !strcasecmp(token, "LIMIT")
+        || !strcasecmp(token, "OFFSET")
+        || !strcasecmp(token, "INTO")
+        || !strcasecmp(token, "VALUES")
+        || !strcasecmp(token, "SET")) {
+        *double_token_keyword = false;
         return true;
     }
     
-    /* Identify that it has the first token as KEYWORD. */
-    if (strcasecmp(token, "SELECT") == 0) {
+    // Boolean Literals are KEYWORDs but not KEYWORDs that organize/comprise query
+    if (!strcasecmp(token, "TRUE")
+        || !strcasecmp(token, "FALSE")
+        || !strcasecmp(token, "AND")
+        || !strcasecmp(token, "OR")
+        || !strcasecmp(token, "NOT")) {
+        *double_token_keyword = false;
         return true;
-    } else if (strcasecmp(token, "INSERT") == 0) {
-        return true;
-    } else if (strcasecmp(token, "UPDATE") == 0) {
-        return true;
-    } else if (strcasecmp(token, "DELETE") == 0) {
-        return true;
-    } else if (strcasecmp(token, "CREATE") == 0) {
-        *double_token_keyword = true;
-        return true;
-    } else if (strcasecmp(token, "ALTER") == 0) {
-        *double_token_keyword = true;
-        return true;
-    } else if (strcasecmp(token, "TRUNCATE") == 0) {
-        *double_token_keyword = true;
-        return true;
-    } else if (strcasecmp(token, "DROP") == 0) {
-        *double_token_keyword = true;
-        return true;
-    } else if (strcasecmp(token, "FROM") == 0) {
-        return true;
-    } else if (strcasecmp(token, "WHERE") == 0) {
-        return true;
-    } else if (strcasecmp(token, "GROUP") == 0) {
-        *double_token_keyword = true;
-        return true;
-    } else if (strcasecmp(token, "HAVING") == 0) {
-        return true;
-    } else if (strcasecmp(token, "ORDER") == 0) {
-        *double_token_keyword = true;
-        return true;
-    } else if (strcasecmp(token, "JOIN") == 0) {
-        return true;
-    } else if (strcasecmp(token, "ON") == 0) {
-        return true;
-    } else if (strcasecmp(token, "LIMIT") == 0) {
-        return true;
-    } else if (strcasecmp(token, "OFFSET") == 0) {
-        return true;
-    } else if (strcasecmp(token, "INTO") == 0) {
-        return true;
-    } else if (strcasecmp(token, "VALUES") == 0) {
-        return true;
-    } else if (strcasecmp(token, "SET") == 0) {
-        return true;
-    } 
+    }
 
     return false;
 }
 
 /* Handles reading query for digits/numbers. */
 Token *digit_handling(Tokenizer *tokenizer, char *buffer, int *buffer_size) {
+    if (!tokenizer || !tokenizer->query 
+        || !tokenizer->length
+        || !buffer || !buffer_size) {
+        return NULL;
+    }
     bool decimal_found = false;
 
     while (isdigit(tokenizer->query[tokenizer->current_position]) ||
-     (!decimal_found && tokenizer->query[tokenizer->current_position] == '.' )) {
+     (!decimal_found && tokenizer->query[tokenizer->current_position] == '.')) {
         if (tokenizer->query[tokenizer->current_position] == '.') {
             decimal_found = true;
         }
         
         buffer = move_tokenizer(tokenizer, buffer, buffer_size);
+        if (!buffer) {
+            return NULL;
+        }
     }
 
     /* Make token a string. */
@@ -214,44 +249,48 @@ Token *digit_handling(Tokenizer *tokenizer, char *buffer, int *buffer_size) {
 
 /* Handles reading query for strings. */
 Token *string_handling(Tokenizer *tokenizer, char *buffer, int *buffer_size) {
+    if (!tokenizer || !tokenizer->query 
+        || !tokenizer->length
+        || !buffer || !buffer_size) {
+        return NULL;
+    }
+
     do {
-        if (tokenizer->current_position == tokenizer->length) {
+        buffer = move_tokenizer(tokenizer, buffer, buffer_size);
+        if (!buffer) {
             return NULL;
         }
 
-        buffer = move_tokenizer(tokenizer, buffer, buffer_size); 
     } while (tokenizer->query[tokenizer->current_position] != '\'');
         
-    buffer = move_tokenizer(tokenizer, buffer, buffer_size); 
+    buffer = move_tokenizer(tokenizer, buffer, buffer_size);
+    if (!buffer) {
+        return NULL;
+    }
+
     buffer[(*buffer_size)-1] = '\0';
 
     return token_create(buffer, STRING);
 }
 
 /* Handles reading query for operators and comments. */
-Token *operator_handling(Tokenizer *tokenizer, char *buffer, int *buffer_size) {
-    bool peek_forwards = false;
-    switch (tokenizer->query[tokenizer->current_position]) {
-        case '-':
-        case '!':
-        case '<':
-        case '>':
-            peek_forwards = true;
-            break;
-        default: break;
+Token *operator_handling(Tokenizer *tokenizer, bool peek_forwards, char *buffer, int *buffer_size) {
+    if (!tokenizer || !tokenizer->query 
+        || !tokenizer->length
+        || !buffer || !buffer_size) {
+        return NULL;
     }
 
     if (peek_forwards && ((tokenizer->current_position+1) < tokenizer->length)
-            && (isoperator(tokenizer->query[tokenizer->current_position+1]))) {
+        && isoperator(tokenizer->query[tokenizer->current_position+1], &peek_forwards)) {
         
         if (buffer[(*buffer_size)-1] == '-') {
             while (tokenizer->query[tokenizer->current_position] != '\n') {
 
-                if (tokenizer->current_position == tokenizer->length) {
+                buffer = move_tokenizer(tokenizer, buffer, buffer_size);
+                if (!buffer) {
                     return NULL;
                 }
-
-                buffer = move_tokenizer(tokenizer, buffer, buffer_size);
             }
 
             buffer[(*buffer_size)-1] = '\0';
@@ -259,10 +298,16 @@ Token *operator_handling(Tokenizer *tokenizer, char *buffer, int *buffer_size) {
             return token_create(buffer, COMMENT);
         } else {
             buffer = move_tokenizer(tokenizer, buffer, buffer_size);
+            if (!buffer) {
+                return NULL;
+            }
         }
     }
 
     buffer = move_tokenizer(tokenizer, buffer, buffer_size);
+    if (!buffer) {
+        return NULL;
+    }
     buffer[(*buffer_size)-1] = '\0';
 
     return token_create(buffer, OPERATOR);
@@ -270,8 +315,16 @@ Token *operator_handling(Tokenizer *tokenizer, char *buffer, int *buffer_size) {
 
 /* Handles reading query for punctuation. */
 Token *punctuation_handling(Tokenizer *tokenizer, char *buffer, int *buffer_size) {
+    if (!tokenizer || !tokenizer->query 
+        || !tokenizer->length
+        || !buffer || !buffer_size) {
+        return NULL;
+    }
     
     buffer = move_tokenizer(tokenizer, buffer, buffer_size);
+    if (!buffer) {
+        return NULL;
+    }
     buffer[(*buffer_size)-1] = '\0';
 
     return token_create(buffer, PUNCTUATION);
@@ -279,8 +332,17 @@ Token *punctuation_handling(Tokenizer *tokenizer, char *buffer, int *buffer_size
 
 /* Handles reading query for keywords/identifiers. */
 Token *keyword_identifier_handling(Tokenizer *tokenizer, char *buffer, int *buffer_size) {
-    while (tokenizer->query[tokenizer->current_position] != ' ') {
-        buffer = move_tokenizer(tokenizer, buffer, buffer_size); 
+    if (!tokenizer || !tokenizer->query 
+        || !tokenizer->length
+        || !buffer || !buffer_size) {
+        return NULL;
+    }
+
+    while (!isspace((unsigned char) tokenizer->query[tokenizer->current_position])) {
+        buffer = move_tokenizer(tokenizer, buffer, buffer_size);
+        if (!buffer) {
+            return NULL;
+        }
 
         if (!(isalnum(buffer[(*buffer_size)-1]) || (buffer[(*buffer_size)-1] == '_'))) {
             buffer[(*buffer_size)-1] = ' ';
@@ -295,8 +357,13 @@ Token *keyword_identifier_handling(Tokenizer *tokenizer, char *buffer, int *buff
             buffer[(*buffer_size)-1] = ' ';
 
             do {
-                buffer = move_tokenizer(tokenizer, buffer, buffer_size);       
-            } while (tokenizer->query[tokenizer->current_position] != ' ');
+                buffer = move_tokenizer(tokenizer, buffer, buffer_size);   
+                if (!buffer) {
+                    return NULL;
+                }
+
+            } while (isalnum(tokenizer->query[tokenizer->current_position])
+                    || tokenizer->query[tokenizer->current_position] == '_');
         
             buffer[(*buffer_size)-1] = '\0';
             if (!(iskeyword(buffer, &double_token_keyword))) {

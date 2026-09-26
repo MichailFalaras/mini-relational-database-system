@@ -12,8 +12,11 @@
 
 /* Create ExpressionNode. */
 ExpressionNode *expression_node_create(ExpressionType type) {
+    if (type > EXPR_FUNCTIONS) {
+        return NULL;
+    }
 
-    ExpressionNode *expr_node = (ExpressionNode*) malloc(sizeof(ExpressionNode));
+    ExpressionNode *expr_node = (ExpressionNode*) calloc(1, sizeof(ExpressionNode));
     if (expr_node == NULL) {
         perror("ExpressionNode");
         exit(1);
@@ -30,39 +33,65 @@ ExpressionNode *expression_node_create(ExpressionType type) {
     return expr_node;
 }
 
+/* Create Binary Expression from Left/Right operands and operator. */
+ExpressionNode *expression_create_binary_tree(ExpressionNode *left_operand, OperatorType operator,
+    ExpressionNode *right_operand) {
+    if (!left_operand || !right_operand
+        || operator > OP_BITWISE_NOT) {
+        return NULL;
+    }
+
+    ExpressionNode *root = expression_node_create(EXPR_BINARY);
+    if (!root) {
+        return NULL;
+    }
+
+    root->expression_data.binary_expr.left_operand = left_operand;
+    root->expression_data.binary_expr.op = operator;
+    root->expression_data.binary_expr.right_operand = right_operand;
+
+    return root;
+}
+
 /* Get operator type from operator token. */
 OperatorType get_operator_type(char *operator_token) {
-    OperatorType type = OP_ERROR; // placeholder value
+    if (!operator_token) {
+        return OP_ERROR;
+    }
 
     if (!strcmp(operator_token, "=")) {
-        type = OP_EQ;
+        return OP_EQ;
     } else if (!strcmp(operator_token, "!=")) {
-        type = OP_NEQ;
+        return OP_NEQ;
     } else if (!strcmp(operator_token, "<")) {
-        type = OP_LT;
+        return OP_LT;
     } else if (!strcmp(operator_token, "<=")) {
-        type = OP_LTE;
+        return OP_LTE;
     } else if (!strcmp(operator_token, ">")) {
-        type = OP_GT;
+        return OP_GT;
     } else if (!strcmp(operator_token, ">=")) {
-        type = OP_GTE;
+        return OP_GTE;
     } else if (!strcmp(operator_token, "AND")) {
-        type = OP_AND;
+        return OP_AND;
     } else if (!strcmp(operator_token, "OR")) {
-        type = OP_OR;
+        return OP_OR;
     } else if (!strcmp(operator_token, "NOT")) {
-        type = OP_NOT;
+        return OP_NOT;
     } else if (!strcmp(operator_token, "+")) {
-        type = OP_ADD;
+        return OP_ADD;
     } else if (!strcmp(operator_token, "-")) {
-        type = OP_SUB;
+        return OP_SUB;
     } else if (!strcmp(operator_token, "*")) {
-        type = OP_MUL;
+        return OP_MUL;
     } else if (!strcmp(operator_token, "/")) {
-        type = OP_DIV;
-    } // don't know why modulo isnt supported
+        return OP_DIV;
+    } else if (!strcmp(operator_token, "%")) {
+        return OP_MODULO;
+    } else if (!strcmp(operator_token, "~")) {
+        return OP_BITWISE_NOT;
+    }
 
-    return type;
+    return OP_ERROR;
 }
 
 /* Deep-Copy ExpressionNode for each ExpressionType. */
