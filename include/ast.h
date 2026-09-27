@@ -236,7 +236,7 @@ typedef struct ast_alter_modify {
 
 typedef struct ast_alter_add_constraint {
     char constraint_name[64];
-    ConstraintType new_type;
+    ASTConstraintType new_type;
     char column_name[64];
 } AlterAddConstraintNode;
 
