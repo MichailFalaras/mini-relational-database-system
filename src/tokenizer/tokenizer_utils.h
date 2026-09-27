@@ -1,5 +1,5 @@
-#ifndef TOKENIZER_INTERNAL_H_
-#define TOKENIZER_INTERNAL_H_
+#ifndef TOKENIZER_UTILS_H_
+#define TOKENIZER_UTILS_H_
 #include "tokenizer.h"
 
 extern char *read_query();
@@ -8,7 +8,7 @@ extern char *expand_buffer(char *buffer, int size);
 
 extern char *move_tokenizer(Tokenizer *tokenizer, char *buffer, int *size);
 
-extern bool isoperator(char c);
+extern bool isoperator(char c, bool *peek_forward);
 
 extern bool ispunctuation(char c);
 
@@ -18,7 +18,7 @@ extern Token *digit_handling(Tokenizer *tokenizer, char *buffer, int *buffer_siz
 
 extern Token *string_handling(Tokenizer *tokenizer, char *buffer, int *buffer_size);
 
-extern Token *operator_handling(Tokenizer *tokenizer, char *buffer, int *buffer_size);
+extern Token *operator_handling(Tokenizer *tokenizer, bool peek_forwards, char *buffer, int *buffer_size);
 
 extern Token *punctuation_handling(Tokenizer *tokenizer, char *buffer, int *buffer_size);
 

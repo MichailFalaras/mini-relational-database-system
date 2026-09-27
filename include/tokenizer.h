@@ -12,7 +12,7 @@ typedef enum token_type {
 	NUMBER, 
 	STRING, 
 	OPERATOR, 
-	PUNCTUATION, 
+	PUNCTUATION,
 	COMMENT 
 } TokenType;
 

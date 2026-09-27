@@ -42,7 +42,9 @@ typedef enum operator_type {
     OP_SUB = 10,
     OP_MUL = 11,
     OP_DIV = 12,
-    OP_ERROR = 13
+    OP_MODULO = 13,
+    OP_BITWISE_NOT = 14,
+    OP_ERROR = 15
 } OperatorType;
 
 /* Literal value in expression, e.g., integer, float, string */
@@ -143,6 +145,9 @@ typedef struct evaluation_context {
 } EvaluationContext;
 
 extern ExpressionNode *expression_node_create(ExpressionType type);
+
+extern ExpressionNode *expression_create_binary_tree(ExpressionNode *left_operand, OperatorType operator,
+    ExpressionNode *right_operand);
 
 extern OperatorType get_operator_type(char *operator_token);
 
