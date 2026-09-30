@@ -306,4 +306,8 @@ typedef struct abstract_syntax_tree_node {
     } node_contents;
 } ASTNode;
 
+
+/* Free an AST node */
+void ast_free_node(ASTNode *node);
+
 #endif
