@@ -7,6 +7,9 @@
 #include "../../include/parser.h"
 #include "../../include/tokenizer.h"
 #include "../../include/expressions.h"
+#include "../../include/ast.h"
+#include "../ast/ast_utils.h"
+
 
 /* ASTNodeType to StatementType. */
 StatementType ast_to_statement_type(ASTNodeType type) {
@@ -636,4 +639,282 @@ Value *create_string_literal(Parser *parser) {
     Value *char_value = value_create(CHAR, &char_n);
     free(content);
     return char_value;
+}
+
+/* ---------- Parsing of the available Query Types ---------- */
+
+/* Parse INSERT INTO query */
+ASTNode *parse_insert(Parser *parser) {
+    if (!parser || 
+        !parser->token_array || 
+        !parser->token_array->amount_tokens || 
+        parser->current_position >= parser->token_array->amount_tokens || 
+        !parser->token_array->tokens) {
+       return NULL;
+    }
+
+    // Parse INSERT token
+    Token *insert_token = get_current_token(parser);
+
+    if (!insert_token || 
+        insert_token->type != KEYWORD || 
+        strcasecmp(insert_token->token, "INSERT")) {
+        printf("parse_insert: INSERT keyword doesn't exist.");
+        return NULL;
+    }
+
+    consume_token(parser);
+
+    ASTNode *root = (ASTNode *) calloc(1, sizeof(ASTNode));
+
+    if (!root) {
+        return NULL;
+    }
+
+    root->type = AST_INSERT;
+
+    // Parse INTO component
+    root->node_contents.insert.into = parse_into(parser);
+    if (!root->node_contents.insert.into) {
+        printf("parse_insert: AST INTO node is NULL");
+        ast_free_node(root);
+        return NULL;
+    }
+
+    // Parse VALUES component
+    root->node_contents.insert.values = parse_values(parser);
+    if (!root->node_contents.insert.values) {
+        printf("parse_insert: AST VALUES node is NULL");
+        ast_free_node(root);
+        return NULL;
+    }
+
+    return root;
+}
+
+
+/* ---------- Parsing of Inner Query Components ---------- */
+
+/* Parse INTO clause in INSERT INTO */
+IntoNode *parse_into(Parser *parser) {
+    if (!parser || 
+        !parser->token_array || 
+        !parser->token_array->amount_tokens || 
+        parser->current_position >= parser->token_array->amount_tokens || 
+        !parser->token_array->tokens) {
+       return NULL;
+    }
+
+    // Parse INTO token
+    Token *into_token = get_current_token(parser);
+
+    if (!into_token ||
+        into_token->type != KEYWORD ||
+        strcasecmp(into_token->token, "INTO")) {
+        printf("parse_into: INTO keyword doesn't exist.");
+        return NULL;
+    }
+    
+    consume_token(parser);
+
+    // Parse table name after INTO,
+    Token *table_token = get_current_token(parser);
+
+    if (!table_token || table_token->type != IDENTIFIER) {
+        printf("parse_into: Table identifier name doesn't exist after INTO.");
+        return NULL;
+    }
+
+    IntoNode *into = (IntoNode *) calloc(1, sizeof(IntoNode));
+
+    if (!into) {
+        return NULL;
+    }
+
+    // and if it exists, add it to the new AST INTO node
+    strncpy(into->table_name, table_token->token, sizeof(into->table_name) - 1);
+
+    consume_token(parser);
+
+    Token *current = get_current_token(parser);
+
+    if (!current) {
+        ast_free_into(into);
+        return NULL;
+    }
+
+    // If there's no opening "(" that lists the column names, 
+    // return and parse the VALUES component
+    if (strcmp(current->token, "(")) {
+        return into;
+    }
+
+    consume_token(parser);
+
+    // Parse all Column references
+    while (true) {
+        Token *column_token = get_current_token(parser);
+
+        if (!column_token || column_token->type != IDENTIFIER) {
+            printf("parse_into: Expected column identifier.");
+            ast_free_into(into);
+            return NULL;
+        }
+
+        ExpressionNode *column = expression_node_create(EXPR_COLUMN_REF);
+
+        if (!column) {
+            ast_free_into(into);
+            return NULL;
+        }
+
+        // Copy column name to column reference node
+        strncpy(
+            column->expression_data.column_value.column_name, 
+            column_token->token,
+            sizeof(column->expression_data.column_value.column_name) - 1
+        );
+
+        consume_token(parser);
+
+        // Append the new expression node to the array of expression node pointers
+        ExpressionNode **new_refs = (ExpressionNode **) realloc(
+            into->column_refs,
+            (into->num_column_refs + 1) * sizeof(ExpressionNode *)
+        );
+
+        if (!new_refs) {
+            expression_node_free(column);
+            ast_free_into(into);
+            return NULL;
+        }
+
+        into->column_refs = new_refs;
+        into->column_refs[into->num_column_refs] = column;
+        into->num_column_refs++;
+
+        // Check if we've reached the closing ")" of the column names list
+        current = get_current_token(parser);
+
+        if (!current) {
+            ast_free_into(into);
+            return NULL;
+        }
+
+        // If so, exit the loop
+        if(!strcmp(current->token, ")")) {
+            consume_token(parser);
+            break;
+        }
+
+        // Otherwise, a comma is required after a column name
+        if (strcmp(current->token, ",")) {
+            printf("parse_into: expected ',' or ')'.");
+            ast_free_into(into);
+            return NULL;
+        }
+
+        consume_token(parser);
+    }
+
+    return into;
+}
+
+/* Parse VALUES clause in INSERT INTO */
+ValuesNode *parse_values(Parser *parser) {
+    if (!parser || 
+        !parser->token_array || 
+        !parser->token_array->amount_tokens || 
+        parser->current_position >= parser->token_array->amount_tokens || 
+        !parser->token_array->tokens) {
+       return NULL;
+    }
+
+    // Parse VALUES token
+    Token *values_token = get_current_token(parser);
+
+    if (!values_token ||
+        values_token->type != KEYWORD ||
+        strcasecmp(values_token->token, "VALUES")) {
+        printf("parse_values: VALUES keyword doesn't exist.");
+        return NULL;
+    }
+    
+    consume_token(parser);
+
+    Token *current = get_current_token(parser);
+
+    // If there's no opening "(" that lists the values expressions, we have invalid syntax 
+    if (!current || strcmp(current->token, "(")) {
+        printf("parse_values: Expected '('.");
+        return NULL;
+    }    
+
+    consume_token(parser);
+
+    ValuesNode *values = (ValuesNode *) calloc(1, sizeof(ValuesNode));
+
+    if (!values) {
+        return NULL;
+    }
+
+    // The 'VALUES ()' syntax is invalid
+    current = get_current_token(parser);
+
+    if (!current || !strcmp(current->token, ")")) {
+        printf("parse_values: Expected at least one value expression.");
+        ast_free_values(values);
+        return NULL;
+    }
+
+    // Parse all Values expressions
+    while (true) {
+        ExpressionNode *expression = parse_expression(parser);
+
+        if (!expression) {
+            printf("parse_values: Invalid value expression.");
+            ast_free_values(values);
+            return NULL;
+        }
+
+        ExpressionNode **new_values = (ExpressionNode **) realloc(
+            values->values,
+            (values->num_values + 1) * sizeof(ExpressionNode *)
+        );
+
+        if (!new_values) {
+            expression_node_free(expression);
+            ast_free_values(values);
+            return NULL;
+        }
+
+        values->values = new_values;
+        values->values[values->num_values] = expression;
+        values->num_values++;
+
+        current = get_current_token(parser);
+
+        if (!current) {
+            printf("parse_values: Unexpected end of VALUES clause.");
+            ast_free_values(values);
+            return NULL;
+        }
+
+        // Check for the end of the VALUES list with a ")"
+        if (!strcmp(current->token, ")")) {
+            consume_token(parser);
+            break;
+        }
+
+        // Otherwise, a comma must follow the latest parsed expression
+        if(strcmp(current->token, ",")) {
+            printf("parse_values: Expected ',' or ')'.");
+            ast_free_values(values);
+            return NULL;
+        }
+        
+        consume_token(parser);
+    }
+
+    return values;
 }
