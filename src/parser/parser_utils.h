@@ -77,6 +77,7 @@ ASTNode *parse_drop_index(Parser *parser);
 
 /* ---------- Parsing of Inner Query Components ---------- */
 
+FromNode *parse_from(Parser *parser);
 
 WhereNode *parse_where(Parser *parser);
 

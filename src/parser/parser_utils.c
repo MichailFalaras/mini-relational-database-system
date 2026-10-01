@@ -763,10 +763,153 @@ ASTNode *parse_insert(Parser *parser) {
     return root;
 }
 
+/* Parse DELETE query */
+ASTNode *parse_delete(Parser *parser) {
+    if (!parser || 
+        !parser->token_array || 
+        !parser->token_array->amount_tokens || 
+        parser->current_position >= parser->token_array->amount_tokens || 
+        !parser->token_array->tokens) {
+       return NULL;
+    }
 
+    Token *delete_token = get_current_token(parser);
 
+    if (!delete_token ||
+        delete_token->type != KEYWORD ||
+        strcasecmp(delete_token->token, "DELETE")) {
+        printf("parse_delete: DELETE keyword doesn't exist.");
+        return NULL;
+    }
+
+    consume_token(parser);
+
+    ASTNode *root = (ASTNode *) calloc(1, sizeof(ASTNode));
+
+    if (!root) {
+        return NULL;
+    }
+
+    root->type = AST_DELETE;
+
+    root->node_contents.delete.from = parse_from(parser);
+    if (!root->node_contents.delete.from) {
+        printf("parse_delete: AST FROM node is NULL");
+        ast_free_node(root);
+        return NULL;
+    }
+
+    // A DELETE FROM statement should only have one table reference
+    if (root->node_contents.delete.from->num_expressions != 1) {
+        printf("parse_delete: DELETE requires exactly one target table.");
+        ast_free_node(root);
+        return NULL;
+    }
+
+    // Parse optional WHERE clause
+    Token *current = get_current_token(parser);
+
+    if (current && current->type == KEYWORD && !strcasecmp(current->token, "WHERE")) {
+        root->node_contents.delete.where = parse_where(parser);
+
+        if (!root->node_contents.delete.where) {
+            printf("parse_delete: Invalid WHERE clause.");
+            ast_free_node(root);
+            return NULL;
+        }
+    }
+
+    return root;
+}
 
 /* ---------- Parsing of Inner Query Components ---------- */
+
+/* Parse FROM clause */
+FromNode *parse_from(Parser *parser) {
+    if (!parser || 
+        !parser->token_array || 
+        !parser->token_array->amount_tokens || 
+        parser->current_position >= parser->token_array->amount_tokens || 
+        !parser->token_array->tokens) {
+       return NULL;
+    }
+
+    // Parse FROM token
+    Token *from_token = get_current_token(parser);
+
+    if (!from_token ||
+        from_token->type != KEYWORD ||
+        strcasecmp(from_token->token, "FROM")) {
+        printf("parse_from: FROM token is NULL.");
+        return NULL;
+    }
+
+    consume_token(parser);
+
+    FromNode *from = (FromNode *) calloc(1, sizeof(FromNode));
+
+    if (!from) {
+        return NULL;
+    }
+
+    // Parse one or more table identifier names
+    while (true) {
+        Token *table_token = get_current_token(parser);
+
+        if (!table_token || table_token->type != IDENTIFIER) {
+            printf("parse_from: Expected table identifier.");
+            ast_free_from(from);
+            return NULL;
+        }
+
+        ExpressionNode *table = expression_node_create(EXPR_COLUMN_REF);
+
+        if (!table) {
+            ast_free_from(from);
+            return NULL;
+        }
+
+        strncpy(
+            table->expression_data.column_value.column_name,
+            table_token->token,
+            sizeof(table->expression_data.column_value.column_name) - 1
+        );
+
+        consume_token(parser);
+
+        ExpressionNode **new_expressions = (ExpressionNode **) realloc(
+            from->expressions,
+            (from->num_expressions + 1) * sizeof(ExpressionNode *)
+        );
+
+        if (!new_expressions) {
+            expression_node_free(table);
+            ast_free_from(from);
+            return NULL;
+        }
+
+        from->expressions = new_expressions;
+        from->expressions[from->num_expressions] = table;
+        from->num_expressions++;
+
+        Token *current = get_current_token(parser);  
+        
+        if (!current) {
+            ast_free_from(from);
+            return NULL;
+        }
+
+        // Checking for a ',' that separates table references
+        // If there is no ',', leave the current token untouched for the parent parser to handle
+        if (strcmp(current->token, ",")) {
+            break;
+        }
+
+        consume_token(parser);
+    }
+
+    return from;
+}
 
 /* Parse WHERE clause */
 WhereNode *parse_where(Parser *parser) {
