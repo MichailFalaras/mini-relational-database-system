@@ -643,6 +643,77 @@ Value *create_string_literal(Parser *parser) {
 
 /* ---------- Parsing of the available Query Types ---------- */
 
+/* Parse UPDATE query */
+ASTNode *parse_update(Parser *parser) {
+    if (!parser || 
+        !parser->token_array || 
+        !parser->token_array->amount_tokens || 
+        parser->current_position >= parser->token_array->amount_tokens || 
+        !parser->token_array->tokens) {
+       return NULL;
+    }
+
+    // Parse UPDATE token
+    Token *update_token = get_current_token(parser);
+
+    if (!update_token ||
+        update_token->type != KEYWORD ||
+        strcasecmp(update_token->token, "UPDATE")) {
+        printf("parse_update: UPDATE keyword doesn't exist.");
+        return NULL;
+    }
+
+    consume_token(parser);
+
+    // Parse table name after UPDATE,
+    Token *table_token = get_current_token(parser);
+
+    if (!table_token || table_token->type != IDENTIFIER) {
+        printf("parse_update: Table identifier name doesn't exist after UPDATE.");
+        return NULL;
+    }
+
+    ASTNode *root = (ASTNode *) calloc(1, sizeof(ASTNode));
+
+    if (!root) {
+        return NULL;
+    }
+
+    root->type = AST_UPDATE;
+
+    // and if it exists, add it to the new AST UPDATE node
+    strncpy(
+        root->node_contents.update.table_name, 
+        table_token->token, 
+        sizeof(root->node_contents.update.table_name) - 1
+    );
+
+    consume_token(parser);
+
+    // Parse SET clause
+    root->node_contents.update.set = parse_set(parser);
+    if (!root->node_contents.update.set) {
+        printf("parse_update: AST SET node is NULL");
+        ast_free_node(root);
+        return NULL;
+    }
+
+    // Parse optional WHERE clause
+    Token *current = get_current_token(parser);
+
+    if (current && current->type == KEYWORD && !strcasecmp(current->token, "WHERE")) {
+        root->node_contents.update.where = parse_where(parser);
+
+        if (!root->node_contents.update.where) {
+            printf("parse_update: Invalid WHERE clause.");
+            ast_free_node(root);
+            return NULL;
+        }
+    }
+
+    return root;
+}
+
 /* Parse INSERT INTO query */
 ASTNode *parse_insert(Parser *parser) {
     if (!parser || 
@@ -673,7 +744,7 @@ ASTNode *parse_insert(Parser *parser) {
 
     root->type = AST_INSERT;
 
-    // Parse INTO component
+    // Parse INTO clause
     root->node_contents.insert.into = parse_into(parser);
     if (!root->node_contents.insert.into) {
         printf("parse_insert: AST INTO node is NULL");
@@ -681,7 +752,7 @@ ASTNode *parse_insert(Parser *parser) {
         return NULL;
     }
 
-    // Parse VALUES component
+    // Parse VALUES clause
     root->node_contents.insert.values = parse_values(parser);
     if (!root->node_contents.insert.values) {
         printf("parse_insert: AST VALUES node is NULL");
@@ -693,7 +764,48 @@ ASTNode *parse_insert(Parser *parser) {
 }
 
 
+
+
 /* ---------- Parsing of Inner Query Components ---------- */
+
+/* Parse WHERE clause */
+WhereNode *parse_where(Parser *parser) {
+    if (!parser || 
+        !parser->token_array || 
+        !parser->token_array->amount_tokens || 
+        parser->current_position >= parser->token_array->amount_tokens || 
+        !parser->token_array->tokens) {
+       return NULL;
+    }
+
+    // Parse WHERE token
+    Token *where_token = get_current_token(parser);
+
+    if (!where_token ||
+        where_token->type != KEYWORD ||
+        strcasecmp(where_token->token, "WHERE")) {
+        printf("parse_where: WHERE token is NULL.");
+        return NULL;
+    }
+
+    consume_token(parser);
+
+    WhereNode *where = (WhereNode *) calloc(1, sizeof(WhereNode));
+    
+    if (!where) {
+        return NULL;
+    }
+
+    // Parse WHERE's expression
+    where->expression = parse_expression(parser);
+
+    if (!where->expression) {
+        ast_free_where(where);
+        return NULL;
+    }
+
+    return where;
+}
 
 /* Parse INTO clause in INSERT INTO */
 IntoNode *parse_into(Parser *parser) {
@@ -917,4 +1029,106 @@ ValuesNode *parse_values(Parser *parser) {
     }
 
     return values;
+}
+
+/* Parse SET clause in UPDATE */
+SetNode *parse_set(Parser *parser) {
+    if (!parser || 
+        !parser->token_array || 
+        !parser->token_array->amount_tokens || 
+        parser->current_position >= parser->token_array->amount_tokens || 
+        !parser->token_array->tokens) {
+       return NULL;
+    }
+
+    // Parse SET token
+    Token *set_token = get_current_token(parser);
+
+    if (!set_token ||
+        set_token->type != KEYWORD ||
+        strcasecmp(set_token->token, "SET")) {
+        printf("parse_set: SET token is NULL.");
+        return NULL;
+    }
+
+    consume_token(parser);
+
+    SetNode *set = (SetNode *) calloc(1, sizeof(SetNode));
+    
+    if (!set) {
+        return NULL;
+    }
+
+    // Parse one or more update assignments
+    while (true) {
+        // Extract column that is being assigned
+        Token *column_token = get_current_token(parser);
+
+        if (!column_token || column_token->type != IDENTIFIER) {
+            printf("parse_set: Expected column identifier.");
+            ast_free_set(set);
+            return NULL;
+        }
+
+        AssignmentNode assignment = {0};
+
+        strncpy(assignment.column_name, column_token->token, sizeof(assignment.column_name) - 1);
+
+        consume_token(parser);
+
+        // Parse mandatory '=' in assignment expression
+        Token *equals_token = get_current_token(parser);
+
+        if (!equals_token ||
+            equals_token->type != OPERATOR ||
+            strcmp(equals_token->token, "=")) {
+            printf("parse_set: Expected '=' after column identifier.");
+            ast_free_set(set);
+            return NULL;
+        }
+
+        consume_token(parser);
+        
+        // Parse right-hand side expression
+        assignment.value = parse_expression(parser);
+
+        if (!assignment.value) {
+            printf("parse_set: Invalid assignment expression.");
+            ast_free_set(set);
+            return NULL;
+        }
+
+        AssignmentNode *new_assignments = (AssignmentNode *) realloc(
+            set->assignments,
+            (set->num_assignments + 1) * sizeof(AssignmentNode)
+        );
+
+        if (!new_assignments) {
+            expression_node_free(assignment.value);
+            ast_free_set(set);
+            return NULL;
+        }
+
+        set->assignments = new_assignments;
+        set->assignments[set->num_assignments] = assignment;
+        set->num_assignments++;
+
+        Token *current = get_current_token(parser);
+
+        if (!current) {
+            ast_free_set(set);
+            return NULL;
+        }
+
+        // Check for a comma ',' that separates SET assignments
+        // If there's no ',', leave the current token untouched
+        // so parse_update() can handle WHERE or the terminating ';'
+        if (strcmp(current->token, ",")) {
+            break;
+        }
+
+        consume_token(parser);
+    }
+
+    return set;
 }
