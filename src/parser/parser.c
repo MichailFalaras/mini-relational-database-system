@@ -5,6 +5,8 @@
 #include "../../include/parser.h"
 #include "parser_utils.h"
 #include "../../include/expressions.h"
+#include "../../include/ast.h"
+
 
 /* Allocate and initialize Parser component. */
 Parser *parser_init(TokenArray *token_array) {
@@ -45,11 +47,20 @@ Statement *parse_query(Parser *parser, Database *db) {
     }
     
     if (!bind_statement(root, db)) {
-        free(root);
+        ast_free_node(root);
         return NULL;
     }
     
-    return statement_init(root, ast_to_statement_type(root->type));
+    StatementType type = ast_to_statement_type(root->type);
+
+    Statement *statement = statement_init(root, type);
+    
+    if (!statement) {
+        ast_free_node(root);
+        return NULL;
+    }
+
+    return statement;
 }
 
 /* Parse top-level keyword and create Abstract Syntax Tree. */
@@ -91,7 +102,7 @@ ASTNode *parse(Parser *parser) {
         root = parse_alter_table(parser);
 
     } else if (!strcasecmp(token_str, "TRUNCATE TABLE")) {
-        root = parse_alter_table(parser);
+        root = parse_truncate_table(parser);
 
     } else if (!strcasecmp(token_str, "CREATE INDEX")) {
         root = parse_create_index(parser);
@@ -101,6 +112,23 @@ ASTNode *parse(Parser *parser) {
 
     } else {
         fprintf(stderr, "Token string is not a keyword.\n");
+        return NULL;
+    }
+
+    if (!root) {
+        return NULL;
+    }
+
+    // After successfully parsing the query,
+    // we have to make sure the ";" token is the last token in the token array
+    Token *current = get_current_token(parser);
+
+    if (!current || 
+        current->type != PUNCTUATION || 
+        strcmp(current->token, ";") ||
+        parser->current_position != parser->token_array->amount_tokens - 1) {
+
+        ast_free_node(root);
         return NULL;
     }
 
