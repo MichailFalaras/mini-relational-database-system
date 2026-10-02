@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 import Header from "./../components/Header.jsx";
 import Sidebar from "./../components/Sidebar.jsx";
 import EmptyWorkspace from "./../components/EmptyWorkspace.jsx";
@@ -13,7 +14,7 @@ import "./../styles/home.css";
 import { openDatabase, createDatabase, getDatabases, deleteDatabase, openDemoDatabase } from "../api/databaseService.js";
 import { getSchema } from "../api/schemaService.js";
 import { executeQuery } from "../api/queryService.js";
-import { getCurrentUser } from "../api/authService.js";
+import { useAuth } from "../hooks/useAuth.jsx";
 
 // Status text options for the Footer section 
 const STATUS_TEXT = {
@@ -26,17 +27,8 @@ const STATUS_TEXT = {
 
 function HomePage() {
     // User state
-    const [currentUser, setCurrentUser] = useState(null);
-
-    // Load current user
-    async function loadCurrentUser() {
-        try {
-            const user = await getCurrentUser();
-            setCurrentUser(user);
-        } catch (error) {
-            console.error("Unable to load current user");
-        }
-    }
+    const { currentUser, logout } = useAuth();
+    const navigate = useNavigate();
 
     // Header-related state
     const [isRefreshing, setIsRefreshing] = useState(false);
@@ -126,7 +118,6 @@ function HomePage() {
     }
 
     useEffect(() => {
-        loadCurrentUser();
         loadDatabases();
     }, []);
 
@@ -255,9 +246,8 @@ function HomePage() {
     }
 
     async function handleSignOut() {
-        // TODO: API call
-
-        // Redirect back to Auth Page
+        await logout();
+        navigate("/auth");
     }
      
     // Resize Handler-related state and event listener
