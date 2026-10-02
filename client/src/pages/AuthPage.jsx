@@ -2,9 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { AlertCircle, ArrowRight, Check, Database, Eye, EyeOff, Loader2, Terminal } from "lucide-react";
 import "./../styles/auth.css";
-import { resetGuestState } from "../mocks/guestState.js";
-import { setApiMode, API_MODES } from "../api/apiMode.js";
-import { login, register } from "../api/authService.js";
+import { useAuth } from "../hooks/useAuth.jsx";
 
 
 const BRAND_DETAILS = [
@@ -16,6 +14,8 @@ const BRAND_DETAILS = [
 
 
 function AuthPage() {
+	const { login, loginAsGuest, register } = useAuth();
+
 	const [mode, setMode] = useState("login");
 
 	// Login Form state
@@ -40,17 +40,26 @@ function AuthPage() {
 	// Performs API request to login
 	async function handleLogin(event) {
 		event.preventDefault();
-
 		setLoginError("");
+
+		if (!loginEmail.trim()) {
+			setLoginError("Email is required");
+			return;
+		}
+
+		if (!loginPassword.trim()) {
+			setLoginError("Password is required");
+			return;
+		}
+
 		setLoginLoading(true);
 
 		try {
 			await login({
-				email: loginEmail,
+				email: loginEmail.trim(),
 				password: loginPassword
 			});
 
-			setApiMode(API_MODES.USER);
 			navigate("/home");
 
 		} catch(error) {
@@ -88,12 +97,11 @@ function AuthPage() {
 
 		try {
 			await register({
-				fullName,
-				email,
+				fullName: fullName.trim(),
+				email: email.trim(),
 				password
 			});
 
-			setApiMode(API_MODES.USER);
 			navigate("/home");
 
 		} catch (error) {
@@ -104,9 +112,9 @@ function AuthPage() {
 	}
 
 	// Guest login lets users access a demo database
-	function handleGuestLogin() {
-		resetGuestState();
-		setApiMode(API_MODES.GUEST);
+	async function handleGuestLogin() {
+		await loginAsGuest();
+
 		navigate("/home");
 	}
 
