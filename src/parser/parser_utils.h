@@ -53,6 +53,8 @@ Value *create_number_literal(Parser *parser);
 /* Identify if string is CHAR(n), DATE, TIMESTAMP or BOOL. */
 Value *create_string_literal(Parser *parser);
 
+/* ---------- Parsing of the available Query Types ---------- */
+
 ASTNode *parse_select(Parser *parser);
 
 ASTNode *parse_update(Parser *parser);
@@ -67,10 +69,22 @@ ASTNode *parse_drop_table(Parser *parser);
 
 ASTNode *parse_alter_table(Parser *parser);
 
-ASTNode *parse_alter_table(Parser *parser);
+ASTNode *parse_truncate_table(Parser *parser);
 
 ASTNode *parse_create_index(Parser *parser);
 
 ASTNode *parse_drop_index(Parser *parser);
+
+/* ---------- Parsing of Inner Query Components ---------- */
+
+FromNode *parse_from(Parser *parser);
+
+WhereNode *parse_where(Parser *parser);
+
+IntoNode *parse_into(Parser *parser);
+
+ValuesNode *parse_values(Parser *parser);
+
+SetNode *parse_set(Parser *parser);
 
 #endif
