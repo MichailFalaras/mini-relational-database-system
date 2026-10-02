@@ -1,4 +1,4 @@
-import { getAuthToken } from "./authToken.js";
+import { clearAuthToken, getAuthToken } from "./authToken.js";
 import { ApiError } from "./utils/ApiError.js";
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:3000/api";
@@ -33,6 +33,13 @@ export async function apiRequest(endpoint, options = {}) {
 		// Determine if we have a response body (success or failure at this point)
 		if (response.status !== 204) {
 			data = await response.json();	
+		}
+
+		if (response.status === 401) {
+			clearAuthToken();
+			window.dispatchEvent(new Event("auth-expired"));
+
+			throw new ApiError(data?.message ?? "Authentication expired", response.status,data);
 		}
 
 		// Request failure
