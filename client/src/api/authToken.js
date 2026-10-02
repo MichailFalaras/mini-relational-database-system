@@ -8,6 +8,6 @@ export function setAuthToken(token) {
 	localStorage.setItem(TOKEN_KEY, token);
 }
 
-export function removeAuthToken() {
+export function clearAuthToken() {
 	localStorage.removeItem(TOKEN_KEY);
 }
