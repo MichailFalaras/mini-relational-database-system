@@ -1,15 +1,16 @@
 export const API_MODES = {
 	USER: "user",
-	GUEST: "guest"
+	GUEST: "guest",
+	NONE: "none"
 };
 
-let apiMode = null;
+let apiMode = API_MODES.NONE;
 
 
 /* API Mode utilities */
 
 export function setApiMode(mode) {
-	if (mode !== API_MODES.USER && mode !== API_MODES.GUEST) {
+	if (mode !== API_MODES.USER && mode !== API_MODES.GUEST && mode !== API_MODES.NONE) {
 		throw new Error(`Invalid API mode ${mode}`);
 	}
 
