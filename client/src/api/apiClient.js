@@ -1,3 +1,4 @@
+import { getAuthToken } from "./authToken.js";
 import { ApiError } from "./utils/ApiError.js";
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:3000/api";
@@ -11,12 +12,20 @@ const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:3000/api
  */
 export async function apiRequest(endpoint, options = {}) {
 	try {
+		const token = getAuthToken();
+		
+		const headers = {
+			"Content-Type": "application/json",
+			...options.headers
+		};
+
+		if (token) {
+			headers.Authorization = `Bearer ${token}`;
+		}
+
 		const response = await fetch(`${BASE_URL}${endpoint}`, {
 			...options,
-			headers: {
-				"Content-Type": "application/json",
-				...options.headers
-			}
+			headers
 		});
 
 		let data = null;
