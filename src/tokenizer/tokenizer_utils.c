@@ -207,12 +207,18 @@ bool iskeyword(char *token, bool *double_token_keyword) {
         return true;
     }
     
-    // Boolean Literals are KEYWORDs but not KEYWORDs that organize/comprise query
+    // Boolean Literals/Logical Operators,
+    // AS/IS/NULL/IN/BETWEEM are all KEYWORDs used in expressions
     if (!strcasecmp(token, "TRUE")
         || !strcasecmp(token, "FALSE")
         || !strcasecmp(token, "AND")
         || !strcasecmp(token, "OR")
-        || !strcasecmp(token, "NOT")) {
+        || !strcasecmp(token, "NOT")
+        || !strcasecmp(token, "AS")
+        || !strcasecmp(token, "IS")
+        || !strcasecmp(token, "NULL")
+        || !strcasecmp(token, "IN")
+        || !strcasecmp(token, "BETWEEN")) {
         *double_token_keyword = false;
         return true;
     }
