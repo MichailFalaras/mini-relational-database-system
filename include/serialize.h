@@ -19,6 +19,7 @@ typedef struct btree_page BTreePage;
 typedef struct btree_cell_contents BTreeCellContents;
 typedef struct btree_cell_view BTreeCellView;
 typedef struct btree_index_spec BTreeIndexSpec;
+typedef enum aggregate_function_types AggregateFunctionTypes;
 
 /* Serialize/Deserialize cell contents type agnostic functions. */
 extern bool serialize_cell_contents(uint8_t *write_offset, BTreePage *btree_page, BTreeCellContents *cell, BTreeIndexSpec *spec);

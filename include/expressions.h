@@ -2,6 +2,7 @@
 #define EXPRESSIONS_H_
 
 #include <stdint.h>
+#include <stdbool.h>
 
 typedef struct database Database;
 typedef struct transaction Transaction;
@@ -102,16 +103,18 @@ typedef struct between {
 } Between;
 
 typedef enum aggregate_function_types {
-    SUM = 0,
-    COUNT = 1,
-    AVG = 2,
-    MIN = 3,
-    MAX = 4
+    EXPR_AGGREGATE_SUM = 0,
+    EXPR_AGGREGATE_COUNT = 1,
+    EXPR_AGGREGATE_AVG = 2,
+    EXPR_AGGREGATE_MIN = 3,
+    EXPR_AGGREGATE_MAX = 4,
+    EXPR_AGGREGATE_ERROR = 5
 } AggregateFunctionTypes;
 
 typedef struct aggregate_function {
     AggregateFunctionTypes type;
     ExpressionNode *expression;
+    bool wildcard; // Only for COUNT(*) to acknowledge operator *
 } AggregateFunction;
 
 /* Generic expression struct that can be any of the above expression entities */
@@ -150,6 +153,8 @@ extern ExpressionNode *expression_create_binary_tree(ExpressionNode *left_operan
     ExpressionNode *right_operand);
 
 extern OperatorType get_operator_type(char *operator_token);
+
+extern AggregateFunctionTypes get_aggregate_function_type_from_str(char *string);
 
 extern ExpressionNode *expression_node_copy(const ExpressionNode *source);
 

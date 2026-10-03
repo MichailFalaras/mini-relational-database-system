@@ -432,37 +432,382 @@ static int test_timestamp_query() {
     return 0;
 }
 
-static int test_bool_query() {
-    char *query = strdup("SELECT * FROM users WHERE active = true;");
+static int test_keyword_query() {
 
-    Tokenizer *tokenizer = tokenizer_init(query);
-    ASSERT(tokenizer != NULL);
+    /* ----- TEST BOOLEAN KEYWORDS ----- */
+    {
+        char *query = strdup("True False true false;");
 
-    TokenArray *token_array = tokenize_query(tokenizer);
-    ASSERT(token_array->tokens != NULL);
-    ASSERT(token_array->amount_tokens == 9);
+        Tokenizer *tokenizer = tokenizer_init(query);
+        ASSERT(tokenizer != NULL);
 
-    ASSERT(strcasecmp(token_array->tokens[0]->token, "SELECT") == 0);
-    ASSERT(token_array->tokens[0]->type == KEYWORD);
-    ASSERT(strcasecmp(token_array->tokens[1]->token, "*") == 0);
-    ASSERT(token_array->tokens[1]->type == OPERATOR);
-    ASSERT(strcasecmp(token_array->tokens[2]->token, "FROM") == 0);
-    ASSERT(token_array->tokens[2]->type == KEYWORD);
-    ASSERT(strcasecmp(token_array->tokens[3]->token, "users") == 0);
-    ASSERT(token_array->tokens[3]->type == IDENTIFIER);
-    ASSERT(strcasecmp(token_array->tokens[4]->token, "WHERE") == 0);
-    ASSERT(token_array->tokens[4]->type == KEYWORD);
-    ASSERT(strcasecmp(token_array->tokens[5]->token, "active") == 0);
-    ASSERT(token_array->tokens[5]->type == IDENTIFIER);
-    ASSERT(strcasecmp(token_array->tokens[6]->token, "=") == 0);
-    ASSERT(token_array->tokens[6]->type == OPERATOR);
-    ASSERT(strcasecmp(token_array->tokens[7]->token, "true") == 0);
-    ASSERT(token_array->tokens[7]->type == KEYWORD);
-    ASSERT(strcasecmp(token_array->tokens[8]->token, ";") == 0);
-    ASSERT(token_array->tokens[8]->type == PUNCTUATION);
+        TokenArray *token_array = tokenize_query(tokenizer);
+        ASSERT(token_array->tokens != NULL);
+        ASSERT(token_array->amount_tokens == 5);
 
-    tokenizer_free(tokenizer);
-    token_array_free(token_array);
+        ASSERT(strcasecmp(token_array->tokens[0]->token, "True") == 0);
+        ASSERT(token_array->tokens[0]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[1]->token, "False") == 0);
+        ASSERT(token_array->tokens[1]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[2]->token, "true") == 0);
+        ASSERT(token_array->tokens[2]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[3]->token, "false") == 0);
+        ASSERT(token_array->tokens[3]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[4]->token, ";") == 0);
+        ASSERT(token_array->tokens[4]->type == PUNCTUATION);
+
+        tokenizer_free(tokenizer);
+        token_array_free(token_array);
+    }
+    
+    
+    /* ----- IS NULL / IS NOT NULL QUERY ----- */
+    {
+        char *query = strdup("SELECT username FROM Employees WHERE Department IS NULL AND ManagerID IS NOT NULL;");
+
+        Tokenizer *tokenizer = tokenizer_init(query);
+        ASSERT(tokenizer != NULL);
+
+        TokenArray *token_array = tokenize_query(tokenizer);
+        ASSERT(token_array->tokens != NULL);
+        ASSERT(token_array->amount_tokens == 14);
+
+        ASSERT(strcasecmp(token_array->tokens[0]->token, "SELECT") == 0);
+        ASSERT(token_array->tokens[0]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[1]->token, "username") == 0);
+        ASSERT(token_array->tokens[1]->type == IDENTIFIER);
+        ASSERT(strcasecmp(token_array->tokens[2]->token, "FROM") == 0);
+        ASSERT(token_array->tokens[2]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[3]->token, "Employees") == 0);
+        ASSERT(token_array->tokens[3]->type == IDENTIFIER);
+        ASSERT(strcasecmp(token_array->tokens[4]->token, "WHERE") == 0);
+        ASSERT(token_array->tokens[4]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[5]->token, "Department") == 0);
+        ASSERT(token_array->tokens[5]->type == IDENTIFIER);
+        ASSERT(strcasecmp(token_array->tokens[6]->token, "IS") == 0);
+        ASSERT(token_array->tokens[6]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[7]->token, "NULL") == 0);
+        ASSERT(token_array->tokens[7]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[8]->token, "AND") == 0);
+        ASSERT(token_array->tokens[8]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[9]->token, "ManagerID") == 0);
+        ASSERT(token_array->tokens[9]->type == IDENTIFIER);
+        ASSERT(strcasecmp(token_array->tokens[10]->token, "IS") == 0);
+        ASSERT(token_array->tokens[10]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[11]->token, "NOT") == 0);
+        ASSERT(token_array->tokens[11]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[12]->token, "NULL") == 0);
+        ASSERT(token_array->tokens[12]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[13]->token, ";") == 0);
+        ASSERT(token_array->tokens[13]->type == PUNCTUATION);
+
+        tokenizer_free(tokenizer);
+        token_array_free(token_array);
+    }
+
+    /* ----- IN QUERY ----- */
+    {
+        char *query = strdup("SELECT FirstName, LastName, Department FROM Employees WHERE Department IN ('IT', 'Sales');");
+
+        Tokenizer *tokenizer = tokenizer_init(query);
+        ASSERT(tokenizer != NULL);
+
+        TokenArray *token_array = tokenize_query(tokenizer);
+        ASSERT(token_array->tokens != NULL);
+        ASSERT(token_array->amount_tokens == 17);
+
+        ASSERT(strcasecmp(token_array->tokens[0]->token, "SELECT") == 0);
+        ASSERT(token_array->tokens[0]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[1]->token, "FirstName") == 0);
+        ASSERT(token_array->tokens[1]->type == IDENTIFIER);
+        ASSERT(strcasecmp(token_array->tokens[2]->token, ",") == 0);
+        ASSERT(token_array->tokens[2]->type == PUNCTUATION);
+        ASSERT(strcasecmp(token_array->tokens[3]->token, "LastName") == 0);
+        ASSERT(token_array->tokens[3]->type == IDENTIFIER);
+        ASSERT(strcasecmp(token_array->tokens[4]->token, ",") == 0);
+        ASSERT(token_array->tokens[4]->type == PUNCTUATION);
+        ASSERT(strcasecmp(token_array->tokens[5]->token, "Department") == 0);
+        ASSERT(token_array->tokens[5]->type == IDENTIFIER);
+        ASSERT(strcasecmp(token_array->tokens[6]->token, "FROM") == 0);
+        ASSERT(token_array->tokens[6]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[7]->token, "Employees") == 0);
+        ASSERT(token_array->tokens[7]->type == IDENTIFIER);
+        ASSERT(strcasecmp(token_array->tokens[8]->token, "WHERE") == 0);
+        ASSERT(token_array->tokens[8]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[9]->token, "Department") == 0);
+        ASSERT(token_array->tokens[9]->type == IDENTIFIER);
+        ASSERT(strcasecmp(token_array->tokens[10]->token, "IN") == 0);
+        ASSERT(token_array->tokens[10]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[11]->token, "(") == 0);
+        ASSERT(token_array->tokens[11]->type == PUNCTUATION);
+        ASSERT(strcasecmp(token_array->tokens[12]->token, "'IT'") == 0);
+        ASSERT(token_array->tokens[12]->type == STRING);
+        ASSERT(strcasecmp(token_array->tokens[13]->token, ",") == 0);
+        ASSERT(token_array->tokens[13]->type == PUNCTUATION);
+        ASSERT(strcasecmp(token_array->tokens[14]->token, "'Sales'") == 0);
+        ASSERT(token_array->tokens[14]->type == STRING);
+        ASSERT(strcasecmp(token_array->tokens[15]->token, ")") == 0);
+        ASSERT(token_array->tokens[15]->type == PUNCTUATION);
+        ASSERT(strcasecmp(token_array->tokens[16]->token, ";") == 0);
+        ASSERT(token_array->tokens[16]->type == PUNCTUATION);
+
+        tokenizer_free(tokenizer);
+        token_array_free(token_array);
+    }
+
+    /* ----- BETWEEN QUERY ----- */
+    {
+        char *query = strdup("SELECT FirstName, LastName, Department FROM Employees WHERE Salary BETWEEN 1000 AND 2000;");
+
+        Tokenizer *tokenizer = tokenizer_init(query);
+        ASSERT(tokenizer != NULL);
+
+        TokenArray *token_array = tokenize_query(tokenizer);
+        ASSERT(token_array->tokens != NULL);
+        ASSERT(token_array->amount_tokens == 15);
+
+        ASSERT(strcasecmp(token_array->tokens[0]->token, "SELECT") == 0);
+        ASSERT(token_array->tokens[0]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[1]->token, "FirstName") == 0);
+        ASSERT(token_array->tokens[1]->type == IDENTIFIER);
+        ASSERT(strcasecmp(token_array->tokens[2]->token, ",") == 0);
+        ASSERT(token_array->tokens[2]->type == PUNCTUATION);
+        ASSERT(strcasecmp(token_array->tokens[3]->token, "LastName") == 0);
+        ASSERT(token_array->tokens[3]->type == IDENTIFIER);
+        ASSERT(strcasecmp(token_array->tokens[4]->token, ",") == 0);
+        ASSERT(token_array->tokens[4]->type == PUNCTUATION);
+        ASSERT(strcasecmp(token_array->tokens[5]->token, "Department") == 0);
+        ASSERT(token_array->tokens[5]->type == IDENTIFIER);
+        ASSERT(strcasecmp(token_array->tokens[6]->token, "FROM") == 0);
+        ASSERT(token_array->tokens[6]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[7]->token, "Employees") == 0);
+        ASSERT(token_array->tokens[7]->type == IDENTIFIER);
+        ASSERT(strcasecmp(token_array->tokens[8]->token, "WHERE") == 0);
+        ASSERT(token_array->tokens[8]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[9]->token, "Salary") == 0);
+        ASSERT(token_array->tokens[9]->type == IDENTIFIER);
+        ASSERT(strcasecmp(token_array->tokens[10]->token, "BETWEEN") == 0);
+        ASSERT(token_array->tokens[10]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[11]->token, "1000") == 0);
+        ASSERT(token_array->tokens[11]->type == NUMBER);
+        ASSERT(strcasecmp(token_array->tokens[12]->token, "AND") == 0);
+        ASSERT(token_array->tokens[12]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[13]->token, "2000") == 0);
+        ASSERT(token_array->tokens[13]->type == NUMBER);
+        ASSERT(strcasecmp(token_array->tokens[14]->token, ";") == 0);
+        ASSERT(token_array->tokens[14]->type == PUNCTUATION);
+
+        tokenizer_free(tokenizer);
+        token_array_free(token_array);
+    }
+
+    return 0;
+}
+
+static int test_aggregate_function_query() {
+
+    /* ----- COUNT() QUERY -----*/
+    {
+        char *query = strdup("SELECT\n \
+                        COUNT(*) AS total_employees,\n \
+                        FROM employees;");
+
+        Tokenizer *tokenizer = tokenizer_init(query);
+        ASSERT(tokenizer != NULL);
+
+        TokenArray *token_array = tokenize_query(tokenizer);
+        ASSERT(token_array->tokens != NULL);
+        ASSERT(token_array->amount_tokens == 11);
+
+        ASSERT(strcasecmp(token_array->tokens[0]->token, "SELECT") == 0);
+        ASSERT(token_array->tokens[0]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[1]->token, "COUNT") == 0);
+        ASSERT(token_array->tokens[1]->type == IDENTIFIER);
+        ASSERT(strcasecmp(token_array->tokens[2]->token, "(") == 0);
+        ASSERT(token_array->tokens[2]->type == PUNCTUATION);
+        ASSERT(strcasecmp(token_array->tokens[3]->token, "*") == 0);
+        ASSERT(token_array->tokens[3]->type == OPERATOR);
+        ASSERT(strcasecmp(token_array->tokens[4]->token, ")") == 0);
+        ASSERT(token_array->tokens[4]->type == PUNCTUATION);
+        ASSERT(strcasecmp(token_array->tokens[5]->token, "AS") == 0);
+        ASSERT(token_array->tokens[5]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[6]->token, "total_employees") == 0);
+        ASSERT(token_array->tokens[6]->type == IDENTIFIER);
+        ASSERT(strcasecmp(token_array->tokens[7]->token, ",") == 0);
+        ASSERT(token_array->tokens[7]->type == PUNCTUATION);
+        ASSERT(strcasecmp(token_array->tokens[8]->token, "FROM") == 0);
+        ASSERT(token_array->tokens[8]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[9]->token, "employees") == 0);
+        ASSERT(token_array->tokens[9]->type == IDENTIFIER);
+        ASSERT(strcasecmp(token_array->tokens[10]->token, ";") == 0);
+        ASSERT(token_array->tokens[10]->type == PUNCTUATION);
+
+        tokenizer_free(tokenizer);
+        token_array_free(token_array);
+    }
+
+    /* ----- SUM() QUERY -----*/
+    {
+        char *query = strdup("SELECT\n \
+                        SUM(salary) AS total_payroll,\n \
+                        FROM employees;");
+
+        Tokenizer *tokenizer = tokenizer_init(query);
+        ASSERT(tokenizer != NULL);
+
+        TokenArray *token_array = tokenize_query(tokenizer);
+        ASSERT(token_array->tokens != NULL);
+        ASSERT(token_array->amount_tokens == 11);
+
+        ASSERT(strcasecmp(token_array->tokens[0]->token, "SELECT") == 0);
+        ASSERT(token_array->tokens[0]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[1]->token, "SUM") == 0);
+        ASSERT(token_array->tokens[1]->type == IDENTIFIER);
+        ASSERT(strcasecmp(token_array->tokens[2]->token, "(") == 0);
+        ASSERT(token_array->tokens[2]->type == PUNCTUATION);
+        ASSERT(strcasecmp(token_array->tokens[3]->token, "salary") == 0);
+        ASSERT(token_array->tokens[3]->type == IDENTIFIER);
+        ASSERT(strcasecmp(token_array->tokens[4]->token, ")") == 0);
+        ASSERT(token_array->tokens[4]->type == PUNCTUATION);
+        ASSERT(strcasecmp(token_array->tokens[5]->token, "AS") == 0);
+        ASSERT(token_array->tokens[5]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[6]->token, "total_payroll") == 0);
+        ASSERT(token_array->tokens[6]->type == IDENTIFIER);
+        ASSERT(strcasecmp(token_array->tokens[7]->token, ",") == 0);
+        ASSERT(token_array->tokens[7]->type == PUNCTUATION);
+        ASSERT(strcasecmp(token_array->tokens[8]->token, "FROM") == 0);
+        ASSERT(token_array->tokens[8]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[9]->token, "employees") == 0);
+        ASSERT(token_array->tokens[9]->type == IDENTIFIER);
+        ASSERT(strcasecmp(token_array->tokens[10]->token, ";") == 0);
+        ASSERT(token_array->tokens[10]->type == PUNCTUATION);
+
+        tokenizer_free(tokenizer);
+        token_array_free(token_array);
+    }
+
+    /* ----- AVG() QUERY -----*/
+    {
+        char *query = strdup("SELECT\n \
+                        AVG(salary) AS average_salary,\n \
+                        FROM employees;");
+
+        Tokenizer *tokenizer = tokenizer_init(query);
+        ASSERT(tokenizer != NULL);
+
+        TokenArray *token_array = tokenize_query(tokenizer);
+        ASSERT(token_array->tokens != NULL);
+        ASSERT(token_array->amount_tokens == 11);
+
+        ASSERT(strcasecmp(token_array->tokens[0]->token, "SELECT") == 0);
+        ASSERT(token_array->tokens[0]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[1]->token, "AVG") == 0);
+        ASSERT(token_array->tokens[1]->type == IDENTIFIER);
+        ASSERT(strcasecmp(token_array->tokens[2]->token, "(") == 0);
+        ASSERT(token_array->tokens[2]->type == PUNCTUATION);
+        ASSERT(strcasecmp(token_array->tokens[3]->token, "salary") == 0);
+        ASSERT(token_array->tokens[3]->type == IDENTIFIER);
+        ASSERT(strcasecmp(token_array->tokens[4]->token, ")") == 0);
+        ASSERT(token_array->tokens[4]->type == PUNCTUATION);
+        ASSERT(strcasecmp(token_array->tokens[5]->token, "AS") == 0);
+        ASSERT(token_array->tokens[5]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[6]->token, "average_salary") == 0);
+        ASSERT(token_array->tokens[6]->type == IDENTIFIER);
+        ASSERT(strcasecmp(token_array->tokens[7]->token, ",") == 0);
+        ASSERT(token_array->tokens[7]->type == PUNCTUATION);
+        ASSERT(strcasecmp(token_array->tokens[8]->token, "FROM") == 0);
+        ASSERT(token_array->tokens[8]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[9]->token, "employees") == 0);
+        ASSERT(token_array->tokens[9]->type == IDENTIFIER);
+        ASSERT(strcasecmp(token_array->tokens[10]->token, ";") == 0);
+        ASSERT(token_array->tokens[10]->type == PUNCTUATION);
+
+        tokenizer_free(tokenizer);
+        token_array_free(token_array);
+    }
+
+    /* ----- MIN() QUERY -----*/
+    {
+        char *query = strdup("SELECT\n \
+                        MIN(salary) AS lowest_salary,\n \
+                        FROM employees;");
+
+        Tokenizer *tokenizer = tokenizer_init(query);
+        ASSERT(tokenizer != NULL);
+
+        TokenArray *token_array = tokenize_query(tokenizer);
+
+        ASSERT(token_array->tokens != NULL);
+        ASSERT(token_array->amount_tokens == 11);
+
+        ASSERT(strcasecmp(token_array->tokens[0]->token, "SELECT") == 0);
+        ASSERT(token_array->tokens[0]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[1]->token, "MIN") == 0);
+        ASSERT(token_array->tokens[1]->type == IDENTIFIER);
+        ASSERT(strcasecmp(token_array->tokens[2]->token, "(") == 0);
+        ASSERT(token_array->tokens[2]->type == PUNCTUATION);
+        ASSERT(strcasecmp(token_array->tokens[3]->token, "salary") == 0);
+        ASSERT(token_array->tokens[3]->type == IDENTIFIER);
+        ASSERT(strcasecmp(token_array->tokens[4]->token, ")") == 0);
+        ASSERT(token_array->tokens[4]->type == PUNCTUATION);
+        ASSERT(strcasecmp(token_array->tokens[5]->token, "AS") == 0);
+        ASSERT(token_array->tokens[5]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[6]->token, "lowest_salary") == 0);
+        ASSERT(token_array->tokens[6]->type == IDENTIFIER);
+        ASSERT(strcasecmp(token_array->tokens[7]->token, ",") == 0);
+        ASSERT(token_array->tokens[7]->type == PUNCTUATION);
+        ASSERT(strcasecmp(token_array->tokens[8]->token, "FROM") == 0);
+        ASSERT(token_array->tokens[8]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[9]->token, "employees") == 0);
+        ASSERT(token_array->tokens[9]->type == IDENTIFIER);
+        ASSERT(strcasecmp(token_array->tokens[10]->token, ";") == 0);
+        ASSERT(token_array->tokens[10]->type == PUNCTUATION);
+
+        tokenizer_free(tokenizer);
+        token_array_free(token_array);
+    }
+
+    /* ----- MAX() QUERY -----*/
+    {
+        char *query = strdup("SELECT\n \
+                        MAX(salary) AS highest_salary,\n \
+                        FROM employees;");
+
+        Tokenizer *tokenizer = tokenizer_init(query);
+        ASSERT(tokenizer != NULL);
+
+        TokenArray *token_array = tokenize_query(tokenizer);
+        
+        ASSERT(token_array->tokens != NULL);
+        ASSERT(token_array->amount_tokens == 11);
+
+        ASSERT(strcasecmp(token_array->tokens[0]->token, "SELECT") == 0);
+        ASSERT(token_array->tokens[0]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[1]->token, "MAX") == 0);
+        ASSERT(token_array->tokens[1]->type == IDENTIFIER);
+        ASSERT(strcasecmp(token_array->tokens[2]->token, "(") == 0);
+        ASSERT(token_array->tokens[2]->type == PUNCTUATION);
+        ASSERT(strcasecmp(token_array->tokens[3]->token, "salary") == 0);
+        ASSERT(token_array->tokens[3]->type == IDENTIFIER);
+        ASSERT(strcasecmp(token_array->tokens[4]->token, ")") == 0);
+        ASSERT(token_array->tokens[4]->type == PUNCTUATION);
+        ASSERT(strcasecmp(token_array->tokens[5]->token, "AS") == 0);
+        ASSERT(token_array->tokens[5]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[6]->token, "highest_salary") == 0);
+        ASSERT(token_array->tokens[6]->type == IDENTIFIER);
+        ASSERT(strcasecmp(token_array->tokens[7]->token, ",") == 0);
+        ASSERT(token_array->tokens[7]->type == PUNCTUATION);
+        ASSERT(strcasecmp(token_array->tokens[8]->token, "FROM") == 0);
+        ASSERT(token_array->tokens[8]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[9]->token, "employees") == 0);
+        ASSERT(token_array->tokens[9]->type == IDENTIFIER);
+        ASSERT(strcasecmp(token_array->tokens[10]->token, ";") == 0);
+        ASSERT(token_array->tokens[10]->type == PUNCTUATION);
+
+        tokenizer_free(tokenizer);
+        token_array_free(token_array);
+    }
+    
     return 0;
 }
 
@@ -933,16 +1278,18 @@ int main(int argc, char *argv[]) {
     generate_output(result, 6, "test_date_query");
     result = test_timestamp_query();
     generate_output(result, 7, "test_timestamp_query");
-    result = test_bool_query();
-    generate_output(result, 8, "test_bool_query");
+    result = test_keyword_query();
+    generate_output(result, 8, "test_keyword_query");
+    result = test_aggregate_function_query();
+    generate_output(result, 9, "test_aggregate_function_query");
     result = test_empty_query();
-    generate_output(result, 9, "test_empty_query");
+    generate_output(result, 10, "test_empty_query");
     result = test_invalid_character_query();
-    generate_output(result, 10, "test_invalid_character_query");
+    generate_output(result, 11, "test_invalid_character_query");
     result = test_dml_queries();
-    generate_output(result, 11, "test_dml_queries");
+    generate_output(result, 12, "test_dml_queries");
     result = test_ddl_queries();
-    generate_output(result, 12, "test_ddl_queries");
+    generate_output(result, 13, "test_ddl_queries");
     
     printf("> TESTS RAN SUCCESSFULLY\n");
     return 0;

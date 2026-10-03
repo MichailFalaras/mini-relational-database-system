@@ -21,6 +21,9 @@ bool is_token_comparison_operator(char *token_str);
  * Then return Token* .*/
 Token *get_current_token(Parser *parser);
 
+/* Consume token if possible. */
+void consume_token(Parser *parser);
+
 /* ----- EXPRESSION PARSING ----- */
 
 /* Parse OR Expression. */
@@ -46,6 +49,13 @@ ExpressionNode *parse_unary(Parser *parser);
 
 /* Parse Identifier/Literal/Parentheses Expression. */
 ExpressionNode *parse_primary_expression(Parser *parser);
+
+/* Parse postfix expressions like: IS NULL / IS NOT NULL / IN / BETWEEN
+ * that require their own unique parsing. */
+ExpressionNode *parse_postfix_expression(Parser *parser, ExpressionNode **operand);
+
+/* Parse literal expressions. */
+ExpressionNode *parse_literal_expression(Parser *parser);
 
 /* Identify INTEGER or NUMERIC literal. */
 Value *create_number_literal(Parser *parser);
