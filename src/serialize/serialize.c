@@ -1125,6 +1125,9 @@ bool serialize_expression_node(uint8_t **write_offset, const ExpressionNode *exp
             if (!serialize_expression_node(write_offset, expr_node->expression_data.aggregate_func_expr.expression)) {
                 return false;
             }
+
+            memcpy(*write_offset, &expr_node->expression_data.aggregate_func_expr.wildcard, sizeof(uint8_t));
+            *write_offset += sizeof(uint8_t);
             
             break;
         }
@@ -1914,7 +1917,7 @@ ExpressionNode *deserialize_expression_node(uint8_t **read_offset) {
             memcpy(&aggregate_function_type, *read_offset, sizeof(uint8_t));
             *read_offset += sizeof(uint8_t);
 
-            if (aggregate_function_type > MAX) {
+            if (aggregate_function_type > EXPR_AGGREGATE_MAX) {
                 expression_node_free(expr_node);
                 return NULL;
             }
@@ -1928,6 +1931,9 @@ ExpressionNode *deserialize_expression_node(uint8_t **read_offset) {
                 expression_node_free(expr_node);
                 return NULL;
             }
+
+            memcpy(&expr_node->expression_data.aggregate_func_expr.wildcard, *read_offset, sizeof(uint8_t));
+            *read_offset += sizeof(uint8_t);
             
             break;
         }
@@ -2268,6 +2274,7 @@ size_t serialized_expression_node_size(ExpressionNode *expr_node) {
         case EXPR_FUNCTIONS: {
             size += sizeof(uint8_t);
             size += serialized_expression_node_size(expr_node->expression_data.aggregate_func_expr.expression);
+            size += sizeof(uint8_t);
             
             break;
         }
