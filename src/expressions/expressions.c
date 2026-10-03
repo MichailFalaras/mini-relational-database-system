@@ -94,6 +94,32 @@ OperatorType get_operator_type(char *operator_token) {
     return OP_ERROR;
 }
 
+/* String to AggregateFunctionType. */
+AggregateFunctionTypes get_aggregate_function_type_from_str(char *string) {
+    if (!string) {
+        return EXPR_AGGREGATE_ERROR;
+    }
+
+    if (!strcasecmp(string, "SUM")) {
+        return EXPR_AGGREGATE_SUM;
+
+    } else if (!strcasecmp(string, "COUNT")) {
+        return EXPR_AGGREGATE_COUNT;
+
+    } else if (!strcasecmp(string, "AVG")) {
+        return EXPR_AGGREGATE_AVG;
+
+    } else if (!strcasecmp(string, "MIN")) {
+        return EXPR_AGGREGATE_MIN;
+
+    } else if (!strcasecmp(string, "MAX")) {
+        return EXPR_AGGREGATE_MAX;
+
+    } 
+
+    return EXPR_AGGREGATE_ERROR;
+}
+
 /* Deep-Copy ExpressionNode for each ExpressionType. */
 ExpressionNode *expression_node_copy(const ExpressionNode *source) {
 
@@ -150,6 +176,7 @@ ExpressionNode *expression_node_copy(const ExpressionNode *source) {
         case EXPR_FUNCTIONS:
             copy->expression_data.aggregate_func_expr.type = source->expression_data.aggregate_func_expr.type;
             copy->expression_data.aggregate_func_expr.expression = expression_node_copy(source->expression_data.aggregate_func_expr.expression);
+            copy->expression_data.aggregate_func_expr.wildcard = source->expression_data.aggregate_func_expr.wildcard;
             break;
         default:
             printf("Source type doesn't match with ExpressionNode types\n");
