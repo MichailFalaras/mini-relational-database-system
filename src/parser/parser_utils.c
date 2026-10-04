@@ -475,41 +475,38 @@ ExpressionNode *parse_primary_expression(Parser *parser) {
 
             aggregate_funct_expr->expression_data.aggregate_func_expr.type = get_aggregate_function_type_from_str(curr_token->token);
 
-            if (aggregate_funct_expr->expression_data.aggregate_func_expr.type == EXPR_AGGREGATE_COUNT) {
-                curr_token = get_current_token(parser);
-                
-                if (strcmp(curr_token->token, "(")) {
-                    expression_node_free(aggregate_funct_expr);
-                    return NULL;
-                }
-                consume_token(parser);
-
-                curr_token = get_current_token(parser);
-                if (curr_token->type == OPERATOR && !strcmp(curr_token->token, "*")) {
-                    aggregate_funct_expr->expression_data.aggregate_func_expr.wildcard = true;
-
-                    consume_token(parser);
-                    curr_token = get_current_token(parser);
-
-                    if (strcmp(curr_token->token, ")")) {
-                        expression_node_free(aggregate_funct_expr);
-                        return NULL;
-                    }
-
-                    return aggregate_funct_expr;
-
-                } else {
-                    parser->current_position -= 2; // Go back 2 positions, to parse expression normally
-                }
-            }
-
-            /* Call primary expression, so that the parentheses are identified. */
-            aggregate_funct_expr->expression_data.aggregate_func_expr.expression = parse_primary_expression(parser);
-            if (!aggregate_funct_expr->expression_data.aggregate_func_expr.expression) {
+            
+            curr_token = get_current_token(parser);
+            
+            if (curr_token->type != PUNCTUATION || strcmp(curr_token->token, "(") != 0) {
                 expression_node_free(aggregate_funct_expr);
                 return NULL;
             }
+            consume_token(parser);
 
+            curr_token = get_current_token(parser);
+            if (aggregate_funct_expr->expression_data.aggregate_func_expr.type == EXPR_AGGREGATE_COUNT
+                && curr_token->type == OPERATOR && !strcmp(curr_token->token, "*")) {
+                aggregate_funct_expr->expression_data.aggregate_func_expr.wildcard = true;
+
+                consume_token(parser);
+            } else {
+                /* Parse addition to allow for operations inside aggregate functions but not
+                 * OR/AND/NOT. */
+                aggregate_funct_expr->expression_data.aggregate_func_expr.expression = parse_addition(parser);
+                if (!aggregate_funct_expr->expression_data.aggregate_func_expr.expression) {
+                    expression_node_free(aggregate_funct_expr);
+                    return NULL;
+                }
+            }
+
+            curr_token = get_current_token(parser);
+            if (curr_token->type != PUNCTUATION || strcmp(curr_token->token, ")") != 0) {
+                expression_node_free(aggregate_funct_expr);
+                return NULL;
+            }
+            consume_token(parser);
+            
             return aggregate_funct_expr;
         }
 
@@ -535,9 +532,7 @@ ExpressionNode *parse_primary_expression(Parser *parser) {
     expr = literal_expr;
     return expr;
 
-    /* Parse KEYWORDs that come right after parentheses/literals.
-     *
-     * These "special" expressions being handled are: IS NULL/IS NOT NULL/IN/BETWEEN exprs. */
+    /* Parse postfix expression KEYWORDs that come right after parentheses/identifiers. */
 parse_postfix_expression: 
     consume_token(parser);
     ExpressionNode *postfix_expr = parse_postfix_expression(parser, &expr);
@@ -575,7 +570,7 @@ ExpressionNode *parse_postfix_expression(Parser *parser, ExpressionNode **operan
             expr_type = EXPR_IS_NOT_NULL;
         } 
 
-        if (curr_token->type == KEYWORD || strcasecmp(curr_token->token, "NULL") != 0) {
+        if (curr_token->type != KEYWORD || strcasecmp(curr_token->token, "NULL") != 0) {
             expression_node_free(*operand);
             *operand = NULL;
             return NULL;
@@ -618,13 +613,10 @@ ExpressionNode *parse_postfix_expression(Parser *parser, ExpressionNode **operan
             return NULL;
         }
 
-        while (strcmp(curr_token->token, ")") != 0) {
+        /* Require another expression immediately.
+         * Used to reject lists like (1, 2,).  */
+        while (strcmp(curr_token->token, ",") == 0) {
             consume_token(parser);
-            curr_token = get_current_token(parser);
-
-            if (!strcmp(curr_token->token, ",")) {
-                continue;
-            }
 
             uint32_t option_count = ++in_expr->expression_data.in_expr.option_count; 
             ExpressionNode **new_set_options = (ExpressionNode **) realloc(in_expr->expression_data.in_expr.set_options,
@@ -642,7 +634,26 @@ ExpressionNode *parse_postfix_expression(Parser *parser, ExpressionNode **operan
                 *operand = NULL;
                 return NULL;
             }
-        } 
+
+            curr_token = get_current_token(parser);
+        }
+
+        curr_token = get_current_token(parser);
+        if (strcmp(curr_token->token, ")") != 0) {
+            expression_node_free(in_expr);
+            *operand = NULL;
+            return NULL;
+        }
+
+        /* If empty list is given in queries like:
+         * number in ()
+         *
+         * It should be rejected. */
+        if (in_expr->expression_data.in_expr.option_count == 0) {
+            expression_node_free(in_expr);
+            *operand = NULL;
+            return NULL;
+        }
 
         consume_token(parser);
         curr_token = get_current_token(parser);
@@ -671,7 +682,15 @@ ExpressionNode *parse_postfix_expression(Parser *parser, ExpressionNode **operan
             *operand = NULL;
             return NULL;
         }
-        consume_token(parser); // Consume AND
+
+        curr_token = get_current_token(parser);
+        if (!curr_token || curr_token->type != KEYWORD
+            || strcasecmp(curr_token->token, "AND") != 0) {
+            expression_node_free(between_expr);
+            *operand = NULL;
+            return NULL;
+        }
+        consume_token(parser);
 
         between_expr->expression_data.between_expr.upper = parse_not(parser);
         if (!between_expr->expression_data.between_expr.upper) {
