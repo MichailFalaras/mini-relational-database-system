@@ -95,7 +95,7 @@ OperatorType get_operator_type(char *operator_token) {
 }
 
 /* String to AggregateFunctionType. */
-AggregateFunctionTypes get_aggregate_function_type_from_str(char *string) {
+AggregateFunctionType get_aggregate_function_type_from_str(char *string) {
     if (!string) {
         return EXPR_AGGREGATE_ERROR;
     }

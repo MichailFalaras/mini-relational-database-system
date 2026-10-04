@@ -1922,7 +1922,7 @@ ExpressionNode *deserialize_expression_node(uint8_t **read_offset) {
                 return NULL;
             }
             expr_node->expression_data.aggregate_func_expr.type =
-                (AggregateFunctionTypes) aggregate_function_type;
+                (AggregateFunctionType) aggregate_function_type;
 
             expr_node->expression_data.aggregate_func_expr.expression =
                 deserialize_expression_node(read_offset);
