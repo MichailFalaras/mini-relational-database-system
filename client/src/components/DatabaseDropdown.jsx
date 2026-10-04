@@ -1,14 +1,16 @@
 import { useState } from "react";
-import { Trash2, Check, ArrowRight, Plus, Database } from "lucide-react";
+import { Trash2, Check, ArrowRight, Plus, Database, LogOut } from "lucide-react";
 import "./../styles/database-dropdown.css";
 
 
 
-function DatabaseDropdown({ databases, activeDatabaseId, onOpenDatabase, onSelectDatabase,
-    onClose, onDeleteDatabase, onCreateDatabase
+function DatabaseDropdown({ databases, activeDatabaseId, onOpenDatabase, onCloseDatabase,
+	onSelectDatabase, onClose, onDeleteDatabase, onCreateDatabase
 }) {
 	// State that keeps track of the "to-be-deleted" database (User clicked trash icon)
 	const [confirmId, setConfirmId] = useState(null);
+
+	const activeDatabase = databases.find((db) => db.id === activeDatabaseId);
 
 	return (
 		<>
@@ -115,6 +117,16 @@ function DatabaseDropdown({ databases, activeDatabaseId, onOpenDatabase, onSelec
 						<Database style={{width: "0.875rem", height: "0.875rem", color: "#9CA3AF"}}/> 
 						Create Database
 					</button>
+
+					{activeDatabase != null && (
+						<button
+							className="dropdown-btn"
+							onClick={() => { onCloseDatabase(); onClose(); }}
+						>
+							<LogOut style={{width: "0.875rem", height: "0.875rem", color: "#9CA3AF"}}/>
+							Close {activeDatabase.name}
+						</button>
+					)}
 				</div>
 			</div>
 		</>

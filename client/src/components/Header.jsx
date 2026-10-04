@@ -4,8 +4,9 @@ import DatabaseDropdown from "./DatabaseDropdown.jsx";
 import UserMenu from "./UserMenu.jsx";
 import "./../styles/header.css";
 
-function Header({ currentUser, databases, activeDatabase, onOpenDatabase, onSelectDatabase, onDeleteDatabase, 
-	onCreateDatabase, isRefreshing, onRefresh, showSettings, setShowSettings, onSignOut }) {
+function Header({ currentUser, databases, activeDatabase, onOpenDatabase, onCloseDatabase,
+	onSelectDatabase, onDeleteDatabase, onCreateDatabase, isRefreshing, onRefresh, showSettings, 
+	setShowSettings, onSignOut }) {
 	
 	const [showDropdown, setShowDropdown] = useState(false);
 
@@ -54,6 +55,7 @@ function Header({ currentUser, databases, activeDatabase, onOpenDatabase, onSele
 						databases={databases} 
 						activeDatabaseId={activeDatabase?.id}
 						onOpenDatabase={onOpenDatabase}
+						onCloseDatabase={onCloseDatabase}
 						onSelectDatabase={onSelectDatabase}
 						onDeleteDatabase={onDeleteDatabase}
 						onCreateDatabase={onCreateDatabase}
@@ -71,7 +73,7 @@ function Header({ currentUser, databases, activeDatabase, onOpenDatabase, onSele
 					<span id="database-user">
 						as
 						{" "}
-						<span>{activeDatabase?.user ?? activeDatabase?.email ?? "Guest"}</span>
+						<span>{currentUser?.user ?? currentUser?.email ?? "Guest"}</span>
 					</span>
 				</>
 			)}
