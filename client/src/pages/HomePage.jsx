@@ -11,7 +11,7 @@ import ResultsPanel from "../components/ResultsPanel.jsx";
 import { X, Plus, Loader2, PlayIcon, Check, Copy, Download } from "lucide-react";
 import { loadQueryHistory, saveQueryHistory, MAX_HISTORY_ENTRIES } from "./../utils/queryHistory.js";
 import "./../styles/home.css";
-import { openDatabase, createDatabase, getDatabases, deleteDatabase, openDemoDatabase } from "../api/databaseService.js";
+import { openDatabase, closeDatabase, createDatabase, getDatabases, deleteDatabase, openDemoDatabase } from "../api/databaseService.js";
 import { getSchema } from "../api/schemaService.js";
 import { executeQuery } from "../api/queryService.js";
 import { useAuth } from "../hooks/useAuth.jsx";
@@ -172,27 +172,72 @@ function HomePage() {
     
 
     // Open an existing database
-    async function handleOpenDatabase() {
+    async function handleOpenDatabase(form) {
         try {
-            if (openDatabaseModal) {
-                const openedDatabase = await openDatabase(openDatabaseModal.id);
+            const openedDatabase = await openDatabase(form);
 
-                // Change status of existing database
-                setDatabases((prev) => 
-                    prev.map((db) => 
+            // Change status of existing database
+            setDatabases((prev) => {
+                const exists = prev.some((db) => db.id === openedDatabase.id);
+
+                if (exists) {
+                    return prev.map((db) => 
                         db.id === openedDatabase.id
-                            ? { ...db, status: "open" }
+                            ? openedDatabase
                             : db
-                    )
-                );
+                    );
+                }
 
-                setActiveDatabaseId(openedDatabase.id);
-            }
+                return [...prev, openedDatabase];
+            });
 
+            setActiveDatabaseId(openedDatabase.id);
             setOpenDatabaseModal(undefined);
 
+            return openedDatabase;
         } catch (error) {
-            console.error("Unable to open database");
+            console.error("Unable to open database", error);
+            throw error;
+        }
+    }
+
+    // Close an existing database
+    async function handleCloseDatabase() {
+        if (!activeDatabase) {
+            return;
+        }
+
+        try {
+            await closeDatabase(activeDatabase.id);
+
+            setDatabases((prev) => 
+                prev.map((db) => 
+                    db.id === activeDatabase.id
+                        ? { ...db, status: "closed"}
+                        : db
+                )
+            );
+
+            setActiveDatabaseId(null);
+        } catch (error) {
+            console.error("Unable to close database", error);
+        }
+    }
+
+    // Create a database
+    async function handleCreateDatabase(form) {
+        try {
+            const newDatabase = await createDatabase(form);
+
+            setDatabases((prev) => [...prev, newDatabase]);
+
+            setActiveDatabaseId(newDatabase.id);
+            setShowCreateModal(false);
+
+            return newDatabase;
+        } catch(error) {
+            console.error("Unable to create new database", error);
+            throw error;
         }
     }
 
@@ -208,19 +253,6 @@ function HomePage() {
             }
         } catch (error) {
             console.error("Unable to delete database");
-        }
-    }
-
-    async function handleCreateDatabase(form) {
-        try {
-            const newDatabase = await createDatabase(form);
-
-            setDatabases((prev) => [...prev, newDatabase]);
-            setActiveDatabaseId(newDatabase.id);
-            setShowCreateModal(false);
-
-        } catch(error) {
-            console.error("Unable to create new database");
         }
     }
 
@@ -392,6 +424,7 @@ function HomePage() {
                 activeDatabase={activeDatabase}
 
                 onOpenDatabase={(db) => setOpenDatabaseModal(db)}
+                onCloseDatabase={handleCloseDatabase}
                 onSelectDatabase={setActiveDatabaseId}
                 onDeleteDatabase={handleDeleteDatabase}
                 onCreateDatabase={() => setShowCreateModal(true)}
