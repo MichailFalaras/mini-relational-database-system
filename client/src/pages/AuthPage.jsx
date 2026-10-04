@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { AlertCircle, ArrowRight, Check, Database, Eye, EyeOff, Loader2, Terminal } from "lucide-react";
 import "./../styles/auth.css";
+import { useAuth } from "../hooks/useAuth.jsx";
 
 
 const BRAND_DETAILS = [
@@ -13,6 +14,8 @@ const BRAND_DETAILS = [
 
 
 function AuthPage() {
+	const { login, loginAsGuest, register } = useAuth();
+
 	const [mode, setMode] = useState("login");
 
 	// Login Form state
@@ -37,13 +40,33 @@ function AuthPage() {
 	// Performs API request to login
 	async function handleLogin(event) {
 		event.preventDefault();
-
 		setLoginError("");
+
+		if (!loginEmail.trim()) {
+			setLoginError("Email is required");
+			return;
+		}
+
+		if (!loginPassword.trim()) {
+			setLoginError("Password is required");
+			return;
+		}
+
 		setLoginLoading(true);
 
-		// TODO: API Request
+		try {
+			await login({
+				email: loginEmail.trim(),
+				password: loginPassword
+			});
 
-		setLoginLoading(false);
+			navigate("/home");
+
+		} catch(error) {
+			setLoginError(error.message);
+		} finally {
+			setLoginLoading(false);
+		}
 	}
 
 	// Performs API request to register
@@ -55,7 +78,7 @@ function AuthPage() {
 		// Validate input data
 		// i) Full name existence
 		// ii) Email existence and correct format
-		/// iii) Password length and matching confirm password 
+		// iii) Password length and matching confirm password 
 		if (!fullName.trim()) { setRegisterError("Full name is required."); return; }
 
 		if (!email.trim()) { setRegisterError("Email is required."); return; }
@@ -72,20 +95,44 @@ function AuthPage() {
 
 		setRegisterLoading(true);
 
-		// TODO: API Request
+		try {
+			await register({
+				fullName: fullName.trim(),
+				email: email.trim(),
+				password
+			});
 
-		setRegisterLoading(false);
+			navigate("/home");
+
+		} catch (error) {
+			setRegisterError(error.message);
+		} finally {
+			setRegisterLoading(false);
+		}
 	}
 
+	const [guestLoading, setGuestLoading] = useState(false);
+	const [guestError, setGuestError] = useState("");
+
 	// Guest login lets users access a demo database
-	function handleGuestLogin() {
-		navigate("/home");
+	async function handleGuestLogin() {
+		setGuestError("");
+		setGuestLoading(true);
+
+		try {
+			await loginAsGuest();
+			navigate("/home");
+		} catch(error) {
+			setGuestError(error instanceof Error ? error.message : "Unable to start guest mode.");
+		} finally {
+			setGuestLoading(false);
+		}
 	}
 
 	return (
 		<div id="auth-page">
 			{/* Authentication Container */}
-			<main>
+			<div id="auth-container">
 
 				{/* Left Brand Panel */}
 				<div id="brand-panel">
@@ -116,7 +163,7 @@ function AuthPage() {
 						))}
 					</div>
 
-					{/* Demo Login Credentials */}
+					{/* Brand Footer */}
 					<div id="brand-demo-login">
 						<p>BaseQL — powered by the MiniDB relational engine</p>
 					</div>
@@ -208,11 +255,22 @@ function AuthPage() {
 							<button 
 								type="button"
 								id="guest-login-btn"
+								disabled={guestLoading}
 								onClick={handleGuestLogin}
 							>
-								<Terminal style={{ width: "1rem", height: "1rem", color: "#9CA3AF"}}/>
-								Continue as guest
+								{guestLoading
+									? <Loader2 className="guest-login-loader" />
+									: <Terminal style={{ width: "1rem", height: "1rem", color: "#9CA3AF"}} />
+								}
+								{guestLoading ? "Starting guest session..." : "Continue as guest"}
 							</button>
+
+							{guestError && (
+								<p id="guest-error-msg">
+									<AlertCircle style={{ width: "0.75rem", height: "0.75rem", flexShrink: "0" }}/>
+									{guestError}
+								</p>
+							)}
 
 						</form>
 					) : (
@@ -286,7 +344,7 @@ function AuthPage() {
 							{/* Registration error */}
 							{registerError && (
 								<div className="error-msg">
-									<AlertCircle style={{ width: "1rem", height: "1rem", flexShrink: 0, color: "#DC02626"}} />
+									<AlertCircle style={{ width: "1rem", height: "1rem", flexShrink: 0, color: "#DC2626"}} />
 									<span>{registerError}</span>
 								</div>
 							)}
@@ -315,7 +373,7 @@ function AuthPage() {
 						</form>
 					)}
 				</div>
-			</main>
+			</div>
 
 
 		</div>

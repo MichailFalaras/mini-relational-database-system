@@ -1,4 +1,3 @@
-import { useState } from "react";
 import ResultsTable from "./ResultsTable.jsx";
 import SchemaView from "./SchemaView.jsx";
 import IndexView from "./IndexView.jsx";
@@ -8,8 +7,9 @@ import "./../styles/results-panel.css"
 
 const RESULTS_TABS = ["results", "schema", "indexes", "history"];
 
-function ResultsPanel({ result, isRunning, tables, indexes, activeTable, updateSQL, history, setHistory }) {
-	const [resultPanel, setResultPanel] = useState(RESULTS_TABS[0]);
+function ResultsPanel({ result, isRunning, tables, indexes, activeTable, resultPanel, setResultPanel,
+	updateSQL, history, setHistory, selectedHistoryId, setSelectedHistoryId, onHistoryRerun }) {
+	
 
 	return (
 		<div id="results-panel">
@@ -43,10 +43,10 @@ function ResultsPanel({ result, isRunning, tables, indexes, activeTable, updateS
 				})}
 
 				<div id="execution-time">
-					{result && result.type !== "error" && (
+					{result?.executionTime != null && (
 						<div>
 							<Clock style={{ width: "0.875rem", height: "0.875rem" }}/>
-							<span>{result?.executionTime ?? 5}ms</span>
+							<span>{result?.executionTime}ms</span>
 						</div>
 					) }
 				</div>
@@ -60,12 +60,20 @@ function ResultsPanel({ result, isRunning, tables, indexes, activeTable, updateS
 				{resultPanel === "history" &&
 					<HistoryView 
 						history={history} 
-						onRestore={(sql) => { 
-							updateSQL(sql); 
+    					selectedId={selectedHistoryId}
+    					setSelectedId={setSelectedHistoryId}
+
+						onLoad={(entry) => {
+							updateSQL(entry.sql); 
 							setResultPanel("results"); 
-							}
-						} 
-						onClear={() => setHistory([])}
+						}}
+
+						onRerun={onHistoryRerun} 
+
+						onClear={() => {
+							setSelectedHistoryId(null);
+							setHistory([]);
+						}}
 					/>
 				}
 			</div>

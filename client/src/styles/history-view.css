@@ -70,10 +70,16 @@
 
 .history-entry {
     padding: 0.75rem 1rem; 
+    border-left: 2px solid transparent;
     border-bottom: 1px solid rgba(0, 0, 0, 0.05);
     cursor: default;
     background-color: transparent;
     transition: background-color 150ms;
+}
+
+.history-entry.selected {
+    background-color: #F8F7FF;
+    border-left-color: #6D4AFF;
 }
 
 .history-entry:hover { background-color: rgba(79, 70, 229, 0.025); }
@@ -126,7 +132,7 @@
 
 .history-entry-actions {
     display: flex;
-    align-items: center;
+    align-items: stretch;
     gap: 0.25rem;
     opacity: 0;
     transition: opacity 150ms;
@@ -151,7 +157,23 @@
 
 .history-entry-copy.copied { color: #16A34A; }
 
-.history-entry-restore {
+.history-entry-load {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;         
+    padding: 0.125rem 0.5rem; 
+    border: none;
+    border-radius: 0.375rem;   
+    font-size: 11px;       
+    font-weight: 500;      
+    color: #6b7280;
+    background-color: rgba(0, 0, 0, 0.05);
+    transition: color 150ms, background-color 150ms;
+}
+
+.history-entry-load:hover { background-color: rgba(0, 0, 0, 0.09); }
+
+.history-entry-rerun {
     display: flex;
     align-items: center;
     gap: 0.25rem;
@@ -165,7 +187,7 @@
     transition: background-color 150ms;
 }
 
-.history-entry-restore:hover { background-color: rgba(79, 70, 229, 0.14); }
+.history-entry-rerun:hover { background-color: rgba(79, 70, 229, 0.14); }
 
 .history-sql-preview {
     font-family: 'JetBrains Mono', monospace;

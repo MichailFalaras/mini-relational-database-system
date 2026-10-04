@@ -1,0 +1,252 @@
+/* ---------- Open Database Modal ---------- */
+
+#open-database-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.3);
+    backdrop-filter: blur(4px);
+}
+
+#open-database-modal {
+    width: 24rem;
+    overflow: hidden;
+    background: #FFFFFF;
+    border: 1px solid rgba(0, 0, 0, 0.1);
+    border-radius: 1rem;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.18);
+}
+
+/* ---------- Connect Database Modal > Header ---------- */
+
+#open-database-modal-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    padding: 1.25rem 1.25rem 1rem;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.07);
+}
+
+#open-database-modal-header h2 {
+    margin: 0;
+    color: #111827;
+    font-size: 0.875rem;
+    font-weight: 600;
+}
+
+#open-database-modal-header p {
+    margin: 0.125rem 0 0;
+    color: #9CA3AF;
+    font-size: 0.75rem;
+}
+
+#close-open-database-modal {
+    width: 1.75rem;
+    height: 1.75rem;
+    margin-top: 0.125rem;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #9CA3AF;
+    background-color: transparent;
+    border: none;
+    border-radius: 0.5rem;
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+}
+
+#close-open-database-modal:hover { background-color: rgba(0, 0, 0, 0.07); }
+
+/* ---------- Connect Database Modal > Form ---------- */
+
+#open-database-form {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    padding: 1.25rem;
+}
+
+.open-database-field {
+    display: flex;
+    flex-direction: column;
+}
+
+.open-database-label {
+    display: block;
+    margin-bottom: 0.5rem;
+    color: #374151;
+    font-size: 0.75rem;
+    font-weight: 500;
+}
+
+/* ---------- Connect Database Modal > Form > Database file picker ---------- */
+
+#database-file-picker {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    padding: 1.25rem 1rem;
+    background: #FAFAFA;
+    border: 2px dashed rgba(0, 0, 0, 0.12);
+    border-radius: 0.75rem;
+    cursor: pointer;
+    transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+#database-file-picker:not(.has-file):not(:disabled):hover { border-color: rgba(79, 70, 229, 0.35); }
+
+#database-file-picker.has-file {
+    background-color: rgba(79, 70, 229, 0.04);
+    border: 1px solid rgba(79, 70, 229, 0.3);
+}
+
+#database-file-picker:disabled { cursor: wait; }
+
+.database-file-icon {
+    width: 2rem;
+    height: 2rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: #F3F4F6;
+    border-radius: 0.5rem;
+}
+
+.database-file-icon.selected { background-color: rgba(79, 70, 229, 0.1); }
+
+.database-file-icon svg {
+    width: 1rem;
+    height: 1rem;
+    color: #9CA3AF;
+}
+
+.database-file-icon.selected svg { color: #4F46E5; }
+
+.database-file-info { text-align: center; }
+
+.database-file-info p { margin: 0; }
+
+.database-file-name {
+    color: #4F46E5;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.75rem;
+    font-weight: 500;
+}
+
+.database-file-prompt {
+    color: #374151;
+    font-size: 0.75rem;
+    font-weight: 500;
+}
+
+.database-file-description {
+    margin-top: 0.125rem !important;
+    color: #9CA3AF;
+    font-size: 0.6875rem;
+}
+
+/* ---------- Connect Database Modal > Form > Display Name ---------- */
+
+#database-display-name {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 0.625rem 0.75rem;
+    color: #374151;
+    background-color: #FFFFFF;
+    border: 1px solid rgba(0, 0, 0, 0.1);
+    border-radius: 0.5rem;
+    outline: none;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.875rem;
+    transition: border-color 0.15s ease;
+}
+
+#database-display-name:focus { border-color: #4f46e5; }
+
+#database-display-name::placeholder { color: #9CA3AF; }
+
+#database-display-name-description {
+    margin: 0.25rem 0.125rem 0;
+    color: #C4CAD4;
+    font-size: 0.6875rem;
+}
+
+/* ---------- Connect Database Modal > Form > Error ---------- */
+
+#open-database-error {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.625rem 0.75rem;
+    color: #B91C1C;
+    background: #FEF2F2;
+    border: 1px solid #FECACA;
+    border-radius: 0.5rem;
+    font-size: 0.75rem;
+}
+
+/* ---------- Connect Database Modal > Form > Action Buttons ---------- */
+
+#open-database-actions {
+    display: flex;
+    gap: 0.5rem;
+    padding-top: 0.25rem;
+}
+
+#open-database-actions button {
+    flex: 1;
+    padding: 0.5rem;
+    border: none;
+    border-radius: 0.5rem;
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: background-color 0.15s ease, opacity 0.15s ease;
+}
+
+#cancel-open-database-btn {
+    color: #374151;
+    background-color: #F3F4F6;
+    font-weight: 500;
+}
+
+#cancel-open-database-btn:hover { background: #E9EAEC; }
+
+#open-database-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    color: #FFFFFF;
+    background: #4F46E5;
+    font-weight: 600;
+}
+
+#open-database-btn:not(:disabled):hover { background: #4338CA; }
+
+#open-database-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ---------- Connect Database Modal > Form > Loading Spinner ---------- */
+
+.loader-icon { animation: open-database-spin 1s linear infinite; }
+
+#open-database-btn .loader-icon {
+    width: 0.875rem;
+    height: 0.875rem;
+}
+
+@keyframes open-database-spin {
+    from {
+        transform: rotate(0deg);
+    }
+
+    to {
+        transform: rotate(360deg);
+    }
+}
