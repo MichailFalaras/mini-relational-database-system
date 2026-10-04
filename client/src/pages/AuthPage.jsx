@@ -111,11 +111,22 @@ function AuthPage() {
 		}
 	}
 
+	const [guestLoading, setGuestLoading] = useState(false);
+	const [guestError, setGuestError] = useState("");
+
 	// Guest login lets users access a demo database
 	async function handleGuestLogin() {
-		await loginAsGuest();
+		setGuestError("");
+		setGuestLoading(true);
 
-		navigate("/home");
+		try {
+			await loginAsGuest();
+			navigate("/home");
+		} catch(error) {
+			setGuestError(error instanceof Error ? error.message : "Unable to start guest mode.");
+		} finally {
+			setGuestLoading(false);
+		}
 	}
 
 	return (
@@ -244,11 +255,22 @@ function AuthPage() {
 							<button 
 								type="button"
 								id="guest-login-btn"
+								disabled={guestLoading}
 								onClick={handleGuestLogin}
 							>
-								<Terminal style={{ width: "1rem", height: "1rem", color: "#9CA3AF"}}/>
-								Continue as guest
+								{guestLoading
+									? <Loader2 className="guest-login-loader" />
+									: <Terminal style={{ width: "1rem", height: "1rem", color: "#9CA3AF"}} />
+								}
+								{guestLoading ? "Starting guest session..." : "Continue as guest"}
 							</button>
+
+							{guestError && (
+								<p id="guest-error-msg">
+									<AlertCircle style={{ width: "0.75rem", height: "0.75rem", flexShrink: "0" }}/>
+									{guestError}
+								</p>
+							)}
 
 						</form>
 					) : (
