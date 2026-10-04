@@ -1,7 +1,8 @@
 import { apiRequest } from "./apiClient.js";
 import { 
 	mockGetDatabases, 
-	mockOpenDatabase, 
+	mockOpenDatabase,
+	mockCloseDatabase, 
 	mockCreateDatabase, 
 	mockDeleteDatabase } from "../mocks/mockDatabaseService.js";
 import { isGuestMode } from "./apiMode.js";
@@ -12,8 +13,9 @@ import { isGuestMode } from "./apiMode.js";
   	{
 		id: 1,
 		name: "e_commercedb",
-		status: "connected",
-		user: "apostolis",
+		path: "demo/ecommerce.db",
+		status: "open" | "closed",
+		isDemo: true | false,
 		numTables: 8,
 		size: "7.2 MB"
   	}
@@ -29,27 +31,49 @@ export function getDatabases() {
 	});
 }
 
-// User connects to a database
-export function openDatabase(databaseId, credentials) {
+// User opens to a database
+export function openDatabase(form) {
 	if (isGuestMode()) {
-		return mockOpenDatabase(databaseId);
+		return mockOpenDatabase(form);
 	}
 
-	return apiRequest(`/databases/${databaseId}/open`, {
+	// Reopen known existing database
+	if (form.id != null) {
+		return apiRequest(`/databases/${form.id}/open`, {
+			method: "POST"
+		});
+	}
+
+	// Open and register external MiniDB file
+	return apiRequest("/databases/open", {
 		method: "POST",
-		body: JSON.stringify(credentials)
+		body: JSON.stringify({
+			filePath: form.filePath,
+			displayName: form.displayName
+		})
+	});
+}
+
+// User closes the current database
+export function closeDatabase(databaseId) {
+	if (isGuestMode()) {
+		return mockCloseDatabase(databaseId);
+	}
+
+	return apiRequest(`/databases/${databaseId}/close`, {
+		method: "POST"
 	});
 }
 
 // User creates a database
-export function createDatabase(database) {
+export function createDatabase(form) {
 	if (isGuestMode()) {
-		return mockCreateDatabase(database);
+		return mockCreateDatabase(form);
 	}
 
 	return apiRequest(`/databases`, {
 		method: "POST",
-		body: JSON.stringify(database)
+		body: JSON.stringify(form)
 	});
 }
 
@@ -74,5 +98,7 @@ export async function openDemoDatabase() {
 		throw new Error("Demo database not found");
 	}
 
-	return mockOpenDatabase(demo.id);
+	return mockOpenDatabase({
+		id: demo.id
+	});
 }

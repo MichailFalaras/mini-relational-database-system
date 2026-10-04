@@ -2,6 +2,7 @@ export const MOCK_DATABASES = [
     {
 		id: 1, 
 		name: "e_commercedb", 
+		path: "demo/ecommerce.db",
 		status: "open", 
 		isDemo: true, 
 		numTables: 6, 
