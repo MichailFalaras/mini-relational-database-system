@@ -1,6 +1,6 @@
 /* ---------- Create Database Modal ---------- */
 
-#create-modal-backdrop {
+#create-database-modal-backdrop {
     position: fixed;
     inset: 0;
     z-index: 50;
@@ -12,17 +12,17 @@
 }
 
 #create-database-modal {
-    width: 440px;
-    border-radius: 1rem;
+    width: 22rem;
     overflow: hidden;
     background: #FFFFFF;
     border: 1px solid rgba(0, 0, 0, 0.1);
+    border-radius: 1rem;
     box-shadow: 0 24px 64px rgba(0, 0, 0, 0.18);
 }
 
 /* ---------- Create Database Modal > Header ---------- */
 
-#create-modal-header {
+#create-database-modal-header {
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
@@ -30,133 +30,183 @@
     border-bottom: 1px solid rgba(0, 0, 0, 0.07);
 }
 
-#create-modal-header > div > h2 {
-    font-size: 0.875rem;    
-    line-height: 1.25rem;   
-    font-weight: 600;
+#create-database-modal-header h2 {
+    margin: 0;
     color: #111827;
+    font-size: 0.875rem;
+    font-weight: 600;
 }
 
-#create-modal-header > div > p {
-    font-size: 0.75rem;     
-    line-height: 1rem;      
-    margin-top: 0.125rem;   
+#create-database-modal-header p {
+    margin: 0.125rem 0 0;
     color: #9CA3AF;
-    margin-bottom: 0;
+    font-size: 0.75rem;
 }
 
-#close-create-modal {
-    width: 1.75rem;          
-    height: 1.75rem;         
+#close-create-database-modal {
+    width: 1.75rem;
+    height: 1.75rem;
+    margin-top: 0.125rem;
+    padding: 0;
     display: flex;
     align-items: center;
     justify-content: center;
-    margin-top: 0.125rem; 
-    border: none;   
-    border-radius: 0.5rem;   
     color: #9CA3AF;
-    background-color: transparent;
+    background: transparent;
+    border: none;
+    border-radius: 0.5rem;
+    cursor: pointer;
+    transition: background-color 0.15s ease;
 }
 
-#close-create-modal:hover { background-color: rgba(0, 0, 0, 0.07); }
+#close-create-database-modal:hover { background-color: rgba(0, 0, 0, 0.07); }
 
+/* ---------- Create Database Modal > Form ---------- */
 
-/* ---------- Create Database Modal > DB Creation Form ---------- */
+#create-database-form {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    padding: 1rem 1.25rem;
+}
 
-#create-modal-form { padding: 1rem 1.25rem; }
+.create-database-field {
+    display: flex;
+    flex-direction: column;
+}
 
-#create-modal-form > :not(:last-child) { margin-bottom: 0.875rem; }
-
-.form-label {
+.create-database-label {
     display: block;
-    font-size: 0.75rem;      
-    line-height: 1rem;       
-    font-weight: 500;
-    margin-bottom: 0.375rem; 
+    margin: 0 0 0.375rem;
     color: #374151;
+    font-size: 0.75rem;
+    font-weight: 500;
 }
 
-.form-input {
+#new-database-name {
     width: 100%;
-    background-color: #F9FAFB;
+    box-sizing: border-box;
+    padding: 0.5rem 0.75rem;
     color: #111827;
+    background: #F9FAFB;
+    border: 1px solid rgba(0, 0, 0, 0.1);
+    border-radius: 0.5rem;
     outline: none;
-    border: 1px solid rgba(0,0,0,0.1);
-    border-radius: 8;
-    padding: 0.625rem 0.875rem;
-    font-size: 13px;
-    transition: border-color 0.15s;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.875rem;
+    transition: border-color 0.15s ease;
 }
 
-.form-input:focus { border: 1px solid #4F46E5; }
+#new-database-name:focus { border-color: #4F46E5; }
 
-#create-form-error {
+#new-database-name::placeholder { color: #9CA3AF; }
+
+/* ---------- Create Database Modal > Form > Save Location Picker ---------- */
+
+#database-location-picker {
+    width: 100%;
+    box-sizing: border-box;
     display: flex;
     align-items: center;
-    gap: 0.5rem;              
-    padding: 0.625rem 0.75rem; 
-    border: none;
-    border-radius: 0.5rem;     
-    background-color: #FEF2F2;
-    border: 1px solid #FECACA;
+    gap: 0.625rem;
+    padding: 0.5rem 0.75rem;
+    color: #9CA3AF;
+    background-color: #F9FAFB;
+    border: 1px solid rgba(0, 0, 0, 0.1);
+    border-radius: 0.5rem;
+    text-align: left;
+    cursor: pointer;
+    transition: background-color 0.15s ease;
 }
 
-#create-form-error > span {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.75rem;  
-    line-height: 1rem;   
+#database-location-picker:hover:not(:disabled) { background-color: #F3F4F6; }
+
+#database-location-picker:disabled { cursor: wait; }
+
+#database-location-picker.has-location { color: #374151; }
+
+#database-location-text {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    font-family: "Inter", sans-serif;
+    font-size: 0.75rem;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#database-location-picker.has-location #database-location-text {
+    font-family: "JetBrains Mono", monospace;
+}
+
+#database-default-location-description {
+    margin: 0.25rem 0.125rem 0;
+    color: #C4CAD4;
+    font-size: 0.6875rem;
+}
+
+#database-default-location-description span {
+    font-family: "JetBrains Mono", monospace;
+}
+
+/* ---------- Create Database Modal > Form > Error ---------- */
+
+#create-database-error {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.625rem 0.75rem;
     color: #B91C1C;
+    background: #FEF2F2;
+    border: 1px solid #FECACA;
+    border-radius: 0.5rem;
+    font-size: 0.75rem;
 }
 
-#create-form-btns {
+/* ---------- Create Database Modal > Form > Action Buttons ---------- */
+
+#create-database-actions {
     display: flex;
-    gap: 0.5rem;        
-    padding-top: 0.25rem; 
+    gap: 0.5rem;
+    padding-top: 0.25rem;
 }
 
-#cancel-btn {
-    flex: 1 1 0%;
-    padding: 0.5rem 0;
-    border: none; 
-    border-radius: 0.5rem; 
-    font-size: 0.875rem;  
-    line-height: 1.25rem; 
-    font-weight: 500;
-    background-color: #F3F4F6;
-    color: #374151;
-    transition: color 150ms, background-color 150ms;
-}
-
-#cancel-btn:hover { background-color: #E9EAEC; }
-
-#create-btn {
-    flex: 1 1 0%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.5rem; 
-    padding: 0.5rem 0; 
+#create-database-actions button {
+    flex: 1;
+    padding: 0.5rem;
     border: none;
-    border-radius: 0.5rem; 
-    font-size: 0.875rem;   
-    line-height: 1.25rem;  
-    font-weight: 600;
-    background-color: #4F46E5;
+    border-radius: 0.5rem;
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: background-color 0.15s ease, opacity 0.15s ease;
+}
+
+#cancel-create-database-btn {
+    color: #374151;
+    background-color: #F3F4F6;
+    font-weight: 500;
+}
+
+#cancel-create-database-btn:hover { background-color: #E9EAEC; }
+
+#create-database-btn {
     color: #FFFFFF;
-    transition: color 150ms, background-color 150ms;
+    background-color: #4F46E5;
+    font-weight: 600;
 }
 
-#create-btn:not(:disabled):hover { background-color: #4338CA; }
+#create-database-btn:hover { background-color: #4338CA; }
 
-#create-btn:disabled { opacity: 0.6; }
+/* ---------- Create Database Modal > Form > Action Buttons ---------- */
 
-.create-loader {
-    width: 0.875rem;
-    height: 0.875rem;
-    animation: spin 1s linear infinite;
-}
+.create-database-loader { animation: create-database-spin 1s linear infinite; }
 
-@keyframes spin {
+@keyframes create-database-spin {
+    from {
+        transform: rotate(0deg);
+    }
+
     to {
         transform: rotate(360deg);
     }
