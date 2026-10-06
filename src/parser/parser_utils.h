@@ -1,6 +1,7 @@
 #ifndef PARSER_UTILS_H_
 #define PARSER_UTILS_H_
 
+typedef enum data_types DataType;
 typedef struct parser Parser;
 #include "../../include/ast.h"
 #include "../../include/expressions.h"
@@ -11,11 +12,20 @@ StatementType ast_to_statement_type(ASTNodeType type);
 /* Token string to OperatorType. */
 OperatorType token_str_to_operator_type(char *token_str);
 
+/* Token string to DataType */
+DataType token_str_to_data_type(char *token_str);
+
 /* Check if Token string is a specific OperatorType. */
 bool is_token_operator(char *token_str, OperatorType type);
 
 /* Check if Token string is specifically a comparison operator. */
 bool is_token_comparison_operator(char *token_str);
+
+/* Check if current token is the start of a column-level constraint */
+bool is_column_constraint_start(Token *token);
+
+/* Check if current token is the start of a table-level constraint */
+bool is_table_constraint_start(Token *token);
 
 /* Validate that there is a token for Parser's current position in the TokenArray.
  * Then return Token* .*/
@@ -96,5 +106,25 @@ IntoNode *parse_into(Parser *parser);
 ValuesNode *parse_values(Parser *parser);
 
 SetNode *parse_set(Parser *parser);
+
+ColumnsNode *parse_columns(Parser *parser);
+
+ColumnDefNode *parse_column_def(Parser *parser);
+
+ConstraintNode *parse_constraint(Parser *parser, const char *column_name);
+
+bool parse_primary_key_constraint(Parser *parser, ConstraintNode *constraint, const char *column_name);
+
+bool parse_unique_constraint(Parser *parser, ConstraintNode *constraint, const char *column_name);
+
+bool parse_not_null_constraint(Parser *parser, ConstraintNode *constraint, const char *column_name);
+
+bool parse_foreign_key_constraint(Parser *parser, ConstraintNode *constraint, const char *column_name);
+
+bool parse_check_constraint(Parser *parser, ConstraintNode *constraint);
+
+bool parse_default_constraint(Parser *parser, ConstraintNode *constraint, const char *column_name);
+
+bool parse_constraint_column_list(Parser *parser, ExpressionNode ***column_refs, uint32_t *num_columns);
 
 #endif

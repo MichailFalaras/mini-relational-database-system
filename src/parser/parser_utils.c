@@ -9,7 +9,7 @@
 #include "../../include/expressions.h"
 #include "../../include/ast.h"
 #include "../ast/ast_utils.h"
-
+#include "../../include/data_types.h"
 
 /* ASTNodeType to StatementType. */
 StatementType ast_to_statement_type(ASTNodeType type) {
@@ -91,6 +91,52 @@ OperatorType token_str_to_operator_type(char *token_str) {
     return OP_ERROR;
 }
 
+/* Token string to DataType */
+DataType token_str_to_data_type(char *token_str) {
+    if (!token_str) {
+        return -1;
+    }
+
+    if (!strcasecmp(token_str, "INTEGER") || !strcasecmp(token_str, "INT")) {
+        return INTEGER;
+    }
+    else if (!strcasecmp(token_str, "NUMERIC")) {
+        return NUMERIC;
+    }
+    else if (!strcasecmp(token_str, "FLOAT")) {
+        return FLOAT;
+    }
+    else if (!strcasecmp(token_str, "DOUBLE")) {
+        return DOUBLE;
+    }
+    else if (!strcasecmp(token_str, "CHAR")) {
+        return CHAR;
+    }
+    else if (!strcasecmp(token_str, "VARCHAR")) {
+        return VARCHAR;
+    }
+    else if (!strcasecmp(token_str, "TEXT")) {
+        return TEXT;
+    }
+    else if (!strcasecmp(token_str, "DATE")) {
+        return DATE;
+    }
+    else if (!strcasecmp(token_str, "TIMESTAMP")) {
+        return TIMESTAMP;
+    }
+    else if (!strcasecmp(token_str, "BLOB")) {
+        return BLOB;
+    }
+    else if (!strcasecmp(token_str, "JSONB")) {
+        return JSONB;
+    }
+    else if (!strcasecmp(token_str, "BOOL")) {
+        return BOOL;
+    }
+
+    return -1;
+}
+
 /* Check if Token string is a specific OperatorType. */
 bool is_token_operator(char *token_str, OperatorType type) {
     if (!token_str || type >= OP_ERROR) {
@@ -124,6 +170,34 @@ bool is_token_comparison_operator(char *token_str) {
        token_operator_type == OP_LT  || token_operator_type == OP_LTE ||
        token_operator_type == OP_GT  || token_operator_type == OP_GTE;
 } 
+
+/* Check if current token is the start of a column-level constraint */
+bool is_column_constraint_start(Token *token) {
+    if (!token || token->type != KEYWORD) {
+        return false;
+    }
+
+    return !strcasecmp(token->token, "CONSTRAINT") ||
+           !strcasecmp(token->token, "PRIMARY") ||
+           !strcasecmp(token->token, "UNIQUE") ||
+           !strcasecmp(token->token, "NOT") ||
+           !strcasecmp(token->token, "REFERENCES") ||
+           !strcasecmp(token->token, "CHECK") ||
+           !strcasecmp(token->token, "DEFAULT");
+}
+
+/* Check if current token is the start of a table-level constraint */
+bool is_table_constraint_start(Token *token) {
+    if (!token || token->type != KEYWORD) {
+        return false;
+    }
+
+    return !strcasecmp(token->token, "CONSTRAINT") ||
+           !strcasecmp(token->token, "PRIMARY") ||
+           !strcasecmp(token->token, "UNIQUE") ||
+           !strcasecmp(token->token, "FOREIGN") ||
+           !strcasecmp(token->token, "CHECK");
+}
 
 /* Validate that there is a token for Parser's current position in the TokenArray.
  * Then return Token* .*/
@@ -1078,6 +1152,143 @@ ASTNode *parse_delete(Parser *parser) {
     return root;
 }
 
+/* Parse CREATE TABLE query */
+ASTNode *parse_create_table(Parser *parser) {
+    if (!parser || 
+        !parser->token_array || 
+        !parser->token_array->amount_tokens || 
+        parser->current_position >= parser->token_array->amount_tokens || 
+        !parser->token_array->tokens) {
+       return NULL;
+    }
+
+    // Parse CREATE TABLE keyword token
+    Token *create_table_token = get_current_token(parser);
+
+    if (!create_table_token ||
+        create_table_token->type != KEYWORD ||
+        strcasecmp(create_table_token->token, "CREATE TABLE")) {
+        printf("parse_create_table: CREATE TABLE keywords don't exist.");
+        return NULL;
+    }
+
+    consume_token(parser);
+
+    // Parse table name
+    Token *table_token = get_current_token(parser);
+
+    if (!table_token || table_token->type != IDENTIFIER) {
+        printf("parse_create_table: Table identifier name doesn't exist after CREATE TABLE.");
+        return NULL;
+    }
+
+    consume_token(parser);
+
+    // Parse mandatory opening "("
+    Token *current_token = get_current_token(parser);
+
+    if (!current_token || strcmp(current_token->token, "(")) {
+        printf("parse_create_table: Opening '(' is missing.");
+        return NULL; 
+    }
+
+    consume_token(parser);
+
+    ASTNode *root = (ASTNode *) calloc(1, sizeof(ASTNode));
+
+    if (!root) {
+        return NULL;
+    }
+
+    root->type = AST_CREATE_TABLE;
+
+    // and if it exists, add it to the new AST CREATE TABLE node
+    strncpy(
+        root->node_contents.create_table.table_name, 
+        table_token->token, 
+        sizeof(root->node_contents.create_table.table_name) - 1
+    );
+
+    // Parse column definitions
+    root->node_contents.create_table.columns = parse_columns(parser);
+    if (!root->node_contents.create_table.columns) {
+        printf("parse_create_table: Invalid column definitions");
+        ast_free_node(root);
+        return NULL;
+    }
+
+    // Parse table-level constraints, as long as each line starts with a token
+    // that signals the beginning of a constraint definition
+    Token *current = get_current_token(parser);
+
+    while(current && is_table_constraint_start(current)) {
+        ConstraintNode *constraint = parse_constraint(parser, NULL);
+
+        if (!constraint) {
+            ast_free_node(root);
+            return NULL;
+        }
+
+        ConstraintNode **new_constraints = realloc(
+            root->node_contents.create_table.constraints,
+            (root->node_contents.create_table.num_constraints + 1) * sizeof(ConstraintNode *)
+        );
+
+        if (!new_constraints) {
+            ast_free_constraint(constraint);
+            ast_free_node(root);
+            return NULL;
+        }
+
+        root->node_contents.create_table.constraints = new_constraints;
+        root->node_contents.create_table.constraints[
+            root->node_contents.create_table.num_constraints
+        ] = constraint;
+        root->node_contents.create_table.num_constraints++;
+
+        current = get_current_token(parser);
+
+        if (!current) {
+            ast_free_node(root);
+            return NULL;
+        }
+
+        // Checking if we've reached the end of the CREATE TABLE query
+        if (!strcmp(current->token, ")")) {
+            break;
+        }
+
+        // Table-level constraint definitions must be separated by ','
+        if (strcmp(current->token, ",")) {
+            ast_free_node(root);
+            return NULL;
+        }
+
+        consume_token(parser);
+
+        current = get_current_token(parser);
+
+        if (!current || !is_table_constraint_start(current)) {
+            ast_free_node(root);
+            return NULL;
+        }
+    }
+
+    // After parsing all table-level constraint definitions
+    // we should parse the closing ")"
+    current = get_current_token(parser);
+
+    if (!current || strcmp(current->token, ")")) {
+        printf("parse_create_table: Expected ')'.");
+        ast_free_node(root);
+        return NULL;
+    }
+
+    consume_token(parser);
+    
+    return root;
+}
+
 /* ---------- Parsing of Inner Query Components ---------- */
 
 /* Parse FROM clause */
@@ -1530,4 +1741,792 @@ SetNode *parse_set(Parser *parser) {
     }
 
     return set;
+}
+
+/* Parse the Column definitions in a CREATE TABLE query */
+ColumnsNode *parse_columns(Parser *parser) {
+    if (!parser || 
+        !parser->token_array || 
+        !parser->token_array->amount_tokens || 
+        parser->current_position >= parser->token_array->amount_tokens || 
+        !parser->token_array->tokens) {
+       return NULL;
+    }
+
+    ColumnsNode *columns = (ColumnsNode *) calloc(1, sizeof(ColumnsNode));
+
+    if (!columns) {
+        return NULL;
+    }
+
+    // Parse all column definitions, as long as each line starts with an identifier token
+    // that signals the beginning of a columns definition
+    while (true) {
+        Token *current = get_current_token(parser);
+
+        if (!current || current->type != IDENTIFIER) {
+            ast_free_columns(columns);
+            return NULL;
+        }
+
+        ColumnDefNode *column_def = parse_column_def(parser);
+
+        if (!column_def) {
+            ast_free_columns(columns);
+            return NULL;
+        }
+
+        ColumnDefNode **new_column_defs = realloc(
+            columns->column_defs,
+            (columns->num_column_defs + 1) * sizeof(ColumnDefNode *)
+        );
+
+        if (!new_column_defs) {
+            ast_free_column_def(column_def);
+            ast_free_columns(columns);
+            return NULL;
+        }
+
+        columns->column_defs = new_column_defs;
+        columns->column_defs[columns->num_column_defs] = column_def;
+        columns->num_column_defs++;
+
+        current = get_current_token(parser);
+
+        if (!current) {
+            ast_free_columns(columns);
+            return NULL;
+        }
+
+        // Checking for the end of CREATE TABLE
+        if (!strcmp(current->token, ")")) {
+            break;
+        }
+
+        // Every table element must be comma-separated
+        if (strcmp(current->token, ",")) {
+            ast_free_columns(columns);
+            return NULL;
+        }
+
+        consume_token(parser);
+
+        // Check if the current column is followed by a table constraint definition
+        current = get_current_token(parser);
+
+        if (!current) {
+            ast_free_columns(columns);
+            return NULL;
+        }
+
+        if (is_table_constraint_start(current)) {
+            break;
+        }
+
+        // Otherwise another column definition must follow
+        if (current->type != IDENTIFIER) {
+            ast_free_columns(columns);
+            return NULL;
+        }
+    }
+
+    return columns;
+}
+
+/* Parse a single Column definition in a CREATE TABLE query */
+ColumnDefNode *parse_column_def(Parser *parser) {
+    if (!parser || 
+        !parser->token_array || 
+        !parser->token_array->amount_tokens || 
+        parser->current_position >= parser->token_array->amount_tokens || 
+        !parser->token_array->tokens) {
+       return NULL;
+    }
+    
+    // Parse column name,
+    Token *name = get_current_token(parser);
+    if (!name || name->type != IDENTIFIER) {
+        return NULL;
+    }
+
+    ColumnDefNode *column_def = (ColumnDefNode *) calloc(1, sizeof(ColumnDefNode));
+    
+    if (!column_def) {
+        return NULL;
+    }
+
+    // and if the name is valid, copy it in the AST Column Def. node
+    strncpy(column_def->column_name, name->token, sizeof(column_def->column_name) - 1);
+
+    consume_token(parser);
+
+    // Parse column type
+    Token *data_type = get_current_token(parser);
+
+    if (!data_type || data_type->type != KEYWORD) {
+        ast_free_column_def(column_def);
+        return NULL;
+    }
+
+    DataType type;
+
+    // UNSIGNED from UNSIGNED INTEGER is scanned individually
+    if (!strcasecmp(data_type->token, "UNSIGNED")) {
+        consume_token(parser);
+
+        Token *integer_token = get_current_token(parser);
+
+        if (!integer_token ||
+            integer_token->type != KEYWORD ||
+            (strcasecmp(integer_token->token, "INTEGER") && strcasecmp(integer_token->token, "INT"))) {
+                
+            ast_free_column_def(column_def);
+            return NULL;
+        }
+
+        type = UNSIGNED_INTEGER;
+        consume_token(parser);
+    } else {
+        type = token_str_to_data_type(data_type->token);
+
+        if (type == -1) {
+            ast_free_column_def(column_def);
+            return NULL;
+        }
+
+        consume_token(parser);
+    }
+
+    column_def->type = type;
+
+    // If required, parse the type parameters of CHAR(n), VARCHAR(n), and NUMERIC(p,s)
+    if (type == CHAR || type == VARCHAR || type == NUMERIC) {
+        Token *current = get_current_token(parser);
+
+        if (!current || current->type != PUNCTUATION || strcmp(current->token, "(")) {
+            printf("parse_column_def: Expected ( after data type");
+            ast_free_column_def(column_def);
+            return NULL;
+        }
+
+        consume_token(parser);
+
+        if (type == CHAR || type == VARCHAR) {
+            current = get_current_token(parser);
+
+            if (!current || current->type != NUMBER) {
+                printf("parse_column_def: Expected length type parameter");
+                ast_free_column_def(column_def);
+                return NULL;
+            }
+
+            // Convert number inside a string to an unsigned integer
+            column_def->type_args.length = (uint32_t) strtoul(current->token, NULL, 10);
+
+            consume_token(parser);
+        }
+        else if (type == NUMERIC) {
+            current = get_current_token(parser);
+            if (!current || current->type != NUMBER) {
+                printf("parse_column_def: Expected precision type parameter");
+                ast_free_column_def(column_def);
+                return NULL;
+            }
+
+            column_def->type_args.precision = (uint32_t) strtoul(current->token, NULL, 10);
+
+            consume_token(parser);
+
+            current = get_current_token(parser);
+            if (!current || current->type != PUNCTUATION || strcmp(current->token, ",")) {
+                printf("parse_column_def: Expected ',' after precision type parameter");
+                ast_free_column_def(column_def);
+                return NULL;
+            }
+
+            consume_token(parser);
+
+            current = get_current_token(parser);
+            if (!current || current->type != NUMBER) {
+                printf("parse_column_def: Expected scalie type parameter");
+                ast_free_column_def(column_def);
+                return NULL;
+            }
+
+            column_def->type_args.scale = (uint32_t) strtoul(current->token, NULL, 10);
+
+            consume_token(parser);
+        }
+        else {
+            printf("parse_column_def: Invalid data type");
+            ast_free_column_def(column_def);
+            return NULL;
+        }
+
+        Token *current = get_current_token(parser);
+
+        if (!current || current->type != PUNCTUATION || strcmp(current->token, ")")) {
+            printf("parse_column_def: Expected ) after type parameter");
+            ast_free_column_def(column_def);
+            return NULL;
+        }
+
+        consume_token(parser);
+    }
+
+    // Check if there are column-level constraints after the column definition 
+    Token *current = get_current_token(parser);
+
+    while (current && is_column_constraint_start(current)) {
+        ConstraintNode *constraint = parse_constraint(parser, column_def->column_name);
+
+        if (!constraint) {
+            ast_free_column_def(column_def);
+            return NULL;
+        }
+
+        ConstraintNode **new_constraints = realloc(
+            column_def->constraints,
+            (column_def->num_constraints + 1) * sizeof(ConstraintNode *)
+        );
+
+        if (!new_constraints) {
+            ast_free_constraint(constraint);
+            ast_free_column_def(column_def);
+            return NULL;
+        }
+
+        column_def->constraints = new_constraints;
+        column_def->constraints[column_def->num_constraints] = constraint;
+        column_def->num_constraints++;
+
+        current = get_current_token(parser);
+    }
+    
+    return column_def;
+}
+
+/* Parse a single column-level or table-level constraint in a CREATE TABLE query */
+ConstraintNode *parse_constraint(Parser *parser, const char *column_name) {
+    if (!parser || 
+        !parser->token_array || 
+        !parser->token_array->amount_tokens || 
+        parser->current_position >= parser->token_array->amount_tokens || 
+        !parser->token_array->tokens) {
+       return NULL;
+    }
+
+    ConstraintNode *constraint = (ConstraintNode *) calloc(1, sizeof(ConstraintNode));
+
+    if (!constraint) {
+        return NULL;
+    }
+
+    // Parse start of optional named constraint
+    Token *current = get_current_token(parser);
+
+    if (current && 
+        current->type == KEYWORD &&
+        !strcasecmp(current->token, "CONSTRAINT")) {
+
+        consume_token(parser);
+
+        // Parse the constraint's name
+        Token *name = get_current_token(parser);
+
+        if (!name || name->type != IDENTIFIER) {
+            printf("parse_constraint: Constraint name doesn't exist");
+            ast_free_constraint(constraint);
+            return NULL;
+        }
+
+        strncpy(constraint->constraint_name, name->token, sizeof(constraint->constraint_name) - 1);
+
+        consume_token(parser);
+    }
+
+    // Parse constraint type
+    current = get_current_token(parser);
+
+    if (!current || current->type != KEYWORD) {
+        ast_free_constraint(constraint);
+        return NULL;
+    }
+
+    bool success = false;
+
+    if (!strcasecmp(current->token, "PRIMARY")) {
+        success = parse_primary_key_constraint(parser, constraint, column_name);
+    }
+    else if (!strcasecmp(current->token, "UNIQUE")) {
+        success = parse_unique_constraint(parser, constraint, column_name);
+    }
+    else if (!strcasecmp(current->token, "NOT")) {
+        success = parse_not_null_constraint(parser, constraint, column_name);
+    }
+    else if (!strcasecmp(current->token, "FOREIGN") || !strcasecmp(current->token, "REFERENCES")) {
+        success = parse_foreign_key_constraint(parser, constraint, column_name);
+    }
+    else if (!strcasecmp(current->token, "CHECK")) {
+        success = parse_check_constraint(parser, constraint);
+    }
+    else if (!strcasecmp(current->token, "DEFAULT")) {
+        success = parse_default_constraint(parser, constraint, column_name);
+    }
+
+    if (!success) {
+        ast_free_constraint(constraint);
+        return NULL;
+    }
+
+    return constraint;
+}
+
+/* Parse PRIMARY KEY constraint */
+bool parse_primary_key_constraint(Parser *parser, ConstraintNode *constraint, const char *column_name) {
+    if (!parser || 
+        !parser->token_array || 
+        !parser->token_array->amount_tokens || 
+        parser->current_position >= parser->token_array->amount_tokens || 
+        !parser->token_array->tokens) {
+       return false;
+    }
+
+    // Parse PRIMARY KEY
+    Token *current = get_current_token(parser);
+    if (!current || current->type != KEYWORD || strcasecmp(current->token, "PRIMARY")) {
+        return false;
+    }
+
+    consume_token(parser);
+
+    current = get_current_token(parser);
+    if (!current || current->type != KEYWORD || strcasecmp(current->token, "KEY")) {
+        return false;
+    }
+
+    consume_token(parser);
+
+    constraint->type = AST_CONSTRAINT_PRIMARY_KEY;
+
+    // Column-level (1 column) PRIMARY KEY
+    if (column_name) {
+        // Create and initialize column reference Expression
+        ExpressionNode *column = expression_node_create(EXPR_COLUMN_REF);
+
+        if (!column) {
+            return false;
+        }
+
+        strncpy(
+            column->expression_data.column_value.column_name, 
+            column_name,
+            sizeof(column->expression_data.column_value.column_name) - 1
+        );
+
+        // and populate the constraint
+        constraint->constraint_data.primary_key.column_refs = malloc(sizeof(ExpressionNode *));
+
+        if (!constraint->constraint_data.primary_key.column_refs) {
+            expression_node_free(column);
+            return false;
+        }
+
+        constraint->constraint_data.primary_key.column_refs[0] = column;
+        constraint->constraint_data.primary_key.num_columns = 1;
+        return true;
+    }
+
+    // Table-level (1 or more columns) PRIMARY KEY
+    return parse_constraint_column_list(
+        parser,
+        &constraint->constraint_data.primary_key.column_refs,
+        &constraint->constraint_data.primary_key.num_columns
+    );
+}
+
+/* Parse UNIQUE constraint */
+bool parse_unique_constraint(Parser *parser, ConstraintNode *constraint, const char *column_name) {
+    if (!parser || 
+        !parser->token_array || 
+        !parser->token_array->amount_tokens || 
+        parser->current_position >= parser->token_array->amount_tokens || 
+        !parser->token_array->tokens) {
+       return false;
+    }
+
+    // Parse UNIQUE
+    Token *current = get_current_token(parser);
+
+    if (!current || current->type != KEYWORD || strcasecmp(current->token, "UNIQUE")) {
+        return false;
+    }
+
+    consume_token(parser);
+
+    constraint->type = AST_CONSTRAINT_UNIQUE;
+
+    // Column-level (1 column) UNIQUE
+    if (column_name) {
+        ExpressionNode *column = expression_node_create(EXPR_COLUMN_REF);
+
+        if (!column) {
+            return false;
+        }
+
+        strncpy(
+            column->expression_data.column_value.column_name,
+            column_name,
+            sizeof(column->expression_data.column_value.column_name) - 1
+        );
+
+        constraint->constraint_data.unique.column_refs = malloc(sizeof(ExpressionNode *));
+
+        if (!constraint->constraint_data.unique.column_refs) {
+            expression_node_free(column);
+            return false;
+        }
+
+        constraint->constraint_data.unique.column_refs[0] = column;
+        constraint->constraint_data.unique.num_columns = 1;
+        return true;
+    }
+
+    // Table-level (1 or more columns) UNIQUE
+    return parse_constraint_column_list(
+        parser,
+        &constraint->constraint_data.unique.column_refs,
+        &constraint->constraint_data.unique.num_columns
+    );
+}
+
+/* Parse NOT NULL constraint */
+bool parse_not_null_constraint(Parser *parser, ConstraintNode *constraint, const char *column_name) {
+    if (!parser || 
+        !parser->token_array || 
+        !parser->token_array->amount_tokens || 
+        parser->current_position >= parser->token_array->amount_tokens || 
+        !parser->token_array->tokens) {
+       return false;
+    }
+
+    if (!column_name) {
+        return false;
+    }
+
+    // Parse NOT NULL
+    Token *current = get_current_token(parser);
+    if (!current || current->type != KEYWORD || strcasecmp(current->token, "NOT")) {
+        return false;
+    }
+
+    consume_token(parser);
+
+    current = get_current_token(parser);
+    if (!current || current->type != KEYWORD || strcasecmp(current->token, "NULL")) {
+        return false;
+    }
+
+    consume_token(parser);
+
+    constraint->type = AST_CONSTRAINT_NOT_NULL;
+
+    // Create column reference expression
+    ExpressionNode *column = expression_node_create(EXPR_COLUMN_REF);
+
+    if (!column) {
+        return false;
+    }
+
+    strncpy(
+        column->expression_data.column_value.column_name,
+        column_name,
+        sizeof(column->expression_data.column_value.column_name) - 1
+    );
+
+    constraint->constraint_data.not_null.column_ref = column;
+    return true;
+}
+
+/* Parse FOREIGN KEY constraint */
+bool parse_foreign_key_constraint(Parser *parser, ConstraintNode *constraint, const char *column_name) {
+    if (!parser || 
+        !parser->token_array || 
+        !parser->token_array->amount_tokens || 
+        parser->current_position >= parser->token_array->amount_tokens || 
+        !parser->token_array->tokens) {
+       return false;
+    }
+
+    Token *current = get_current_token(parser);
+
+    constraint->type = AST_CONSTRAINT_FOREIGN_KEY;
+
+    if (column_name) {
+        // Column-level FOREIGN KEY constraint --> REFERENCES table(column)
+
+        // Parse REFERENCES
+        if (!current ||
+            current->type != KEYWORD ||
+            strcasecmp(current->token, "REFERENCES")) {
+            return false;
+        }
+
+        ExpressionNode *column = expression_node_create(EXPR_COLUMN_REF);
+
+        if (!column) {
+            return false;
+        }
+
+        strncpy(
+            column->expression_data.column_value.column_name,
+            column_name,
+            sizeof(column->expression_data.column_value.column_name) - 1
+        );
+
+        constraint->constraint_data.foreign_key.local_column_refs = malloc(sizeof(ExpressionNode *));
+
+        if (!constraint->constraint_data.foreign_key.local_column_refs) {
+            expression_node_free(column);
+            return false;
+        }
+
+        constraint->constraint_data.foreign_key.local_column_refs[0] = column;
+        constraint->constraint_data.foreign_key.num_local_columns = 1;
+
+        consume_token(parser);
+    }
+    else {
+        // Table-level FOREIGN KEY constraint -->
+        // FOREIGN KEY (column, ...) REFERENCES table(column, ...)
+        
+        // Parse FOREIGN 
+        if (!current ||
+            current->type != KEYWORD ||
+            strcasecmp(current->token, "FOREIGN")) {
+            return false;
+        }
+
+        consume_token(parser);
+
+        // Parse KEY
+        current = get_current_token(parser);
+
+        if (!current ||
+            current->type != KEYWORD ||
+            strcasecmp(current->token, "KEY")) {
+            return false;
+        }
+
+        consume_token(parser);
+
+        // Parse columns that constitute the FOREIGN KEY
+        if (!parse_constraint_column_list(
+                parser,
+                &constraint->constraint_data.foreign_key.local_column_refs,
+                &constraint->constraint_data.foreign_key.num_local_columns)) {
+            return false;
+        }
+
+        current = get_current_token(parser);
+
+        if (!current ||
+            current->type != KEYWORD ||
+            strcasecmp(current->token, "REFERENCES")) {
+            return false;
+        }
+
+        consume_token(parser);
+    }
+
+    // Parse referenced table name
+    current = get_current_token(parser);
+
+    if (!current || current->type != IDENTIFIER) {
+        return false;
+    }
+
+    strncpy(
+        constraint->constraint_data.foreign_key.referenced_table_name,
+        current->token,
+        sizeof(constraint->constraint_data.foreign_key.referenced_table_name) - 1
+    );
+
+    consume_token(parser);
+
+    // Parse referenced table's column list
+    if (!parse_constraint_column_list(
+            parser,
+            &constraint->constraint_data.foreign_key.referenced_column_refs,
+            &constraint->constraint_data.foreign_key.num_referenced_columns)) {
+        return false;
+    }
+
+    return true;
+}
+
+/* Parse CHECK constraint */
+bool parse_check_constraint(Parser *parser, ConstraintNode *constraint) {
+    if (!parser || 
+        !parser->token_array || 
+        !parser->token_array->amount_tokens || 
+        parser->current_position >= parser->token_array->amount_tokens || 
+        !parser->token_array->tokens) {
+       return false;
+    }
+
+    // Parse CHECK
+    Token *current = get_current_token(parser);
+
+    if (!current || current->type != KEYWORD || strcasecmp(current->token, "CHECK")) {
+        return false;
+    }
+
+    consume_token(parser);
+
+    // Parse opening "("
+    current = get_current_token(parser);
+
+    if (!current || strcmp(current->token, "(")) {
+        return false;
+    }
+
+    consume_token(parser);
+
+    constraint->type = AST_CONSTRAINT_CHECK;
+
+    // Parse CHECK expression
+    constraint->constraint_data.check.check_expr = parse_expression(parser);
+
+    if (!constraint->constraint_data.check.check_expr) {
+        return false;
+    }
+
+    // Parse closing ")"
+    current = get_current_token(parser);
+
+    if (!current || strcmp(current->token, ")")) {
+        return false;
+    }
+
+    consume_token(parser);
+
+    return true;
+}
+
+/* Parse DEFAULT constraint */
+bool parse_default_constraint(Parser *parser, ConstraintNode *constraint, const char *column_name) {
+    if (!parser || 
+        !parser->token_array || 
+        !parser->token_array->amount_tokens || 
+        parser->current_position >= parser->token_array->amount_tokens || 
+        !parser->token_array->tokens) {
+       return false;
+    }
+
+    if (!column_name) {
+        return false;
+    }
+
+    // Parse DEFAULT 
+    Token *current = get_current_token(parser);
+    if (!current || current->type != KEYWORD || strcasecmp(current->token, "DEFAULT")) {
+        return false;
+    }
+
+    consume_token(parser);
+
+    constraint->type = AST_CONSTRAINT_DEFAULT;
+
+    strncpy(
+        constraint->constraint_data.default_value.column_name,
+        column_name,
+        sizeof(constraint->constraint_data.default_value.column_name) - 1
+    );
+
+    // Parse DEFAULT value
+    constraint->constraint_data.default_value.default_expr = parse_expression(parser);
+
+    if (!constraint->constraint_data.default_value.default_expr) {
+        return false;
+    }
+
+    return true;
+}
+
+bool parse_constraint_column_list(Parser *parser, ExpressionNode ***column_refs, uint32_t *num_columns) {
+    if (!parser || 
+        !parser->token_array || 
+        !parser->token_array->amount_tokens || 
+        parser->current_position >= parser->token_array->amount_tokens || 
+        !parser->token_array->tokens) {
+       return false;
+    }
+
+    // Parse opening '('
+    Token *current = get_current_token(parser);
+
+    if (!current ||
+        current->type != PUNCTUATION ||
+        strcmp(current->token, "(")) {
+        return false;
+    }
+
+    consume_token(parser);
+
+    // Parse each column in the column list as a column reference expression
+    while (true) {
+        current = get_current_token(parser);
+
+        if (!current || current->type != IDENTIFIER) {
+            return false;
+        }
+
+        ExpressionNode *column = expression_node_create(EXPR_COLUMN_REF);
+
+        if (!column) {
+            return false;
+        }
+
+        strncpy(
+            column->expression_data.column_value.column_name,
+            current->token,
+            sizeof(column->expression_data.column_value.column_name) - 1
+        );
+
+        ExpressionNode **new_column_refs = realloc(
+            *column_refs,
+            (*num_columns + 1) * sizeof(ExpressionNode *)
+        );
+
+        if (!new_column_refs) {
+            expression_node_free(column);
+            return false;
+        }
+
+        *column_refs = new_column_refs;
+        (*column_refs)[*num_columns] = column;
+        (*num_columns)++;
+
+        consume_token(parser);
+
+        current = get_current_token(parser);
+
+        if (!current) {
+            return false;
+        }
+
+        // Parse potential end of column list after the current token
+        if (!strcmp(current->token, ")")) {
+            consume_token(parser);
+            return true;
+        }
+
+        // Otherwise a ',' must follow the current column
+        if (current->type != PUNCTUATION || strcmp(current->token, ",")) {
+            return false;
+        }
+
+        consume_token(parser);
+    }
 }
