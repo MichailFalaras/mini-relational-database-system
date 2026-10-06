@@ -223,6 +223,40 @@ bool iskeyword(char *token, bool *double_token_keyword) {
         return true;
     }
 
+    // SQL Data Types
+    if (!strcasecmp(token, "INTEGER")
+        || !strcasecmp(token, "INT")
+        || !strcasecmp(token, "UNSIGNED")
+        || !strcasecmp(token, "NUMERIC")
+        || !strcasecmp(token, "FLOAT")
+        || !strcasecmp(token, "DOUBLE")
+        || !strcasecmp(token, "CHAR")
+        || !strcasecmp(token, "VARCHAR")
+        || !strcasecmp(token, "TEXT")
+        || !strcasecmp(token, "DATE")
+        || !strcasecmp(token, "TIMESTAMP")
+        || !strcasecmp(token, "BLOB")
+        || !strcasecmp(token, "JSONB")
+        || !strcasecmp(token, "BOOL")) {
+        *double_token_keyword = false;
+        return true;
+    }
+
+    // Constraint-related keywords
+    if (!strcasecmp(token, "CONSTRAINT")
+        || !strcasecmp(token, "PRIMARY")
+        || !strcasecmp(token, "FOREIGN")
+        || !strcasecmp(token, "KEY")
+        || !strcasecmp(token, "UNIQUE")
+        || !strcasecmp(token, "CHECK")
+        || !strcasecmp(token, "REFERENCES")
+        || !strcasecmp(token, "NOT")
+        || !strcasecmp(token, "NULL")
+        || !strcasecmp(token, "DEFAULT")) {
+        *double_token_keyword = false;
+        return true;
+    }
+
     return false;
 }
 

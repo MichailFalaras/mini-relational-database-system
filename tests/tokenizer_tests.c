@@ -365,7 +365,7 @@ static int test_comment_query() {
 }
 
 static int test_date_query() {
-    char *query = strdup("SELECT * FROM table WHERE date < '2026-09-21';");
+    char *query = strdup("SELECT * FROM table WHERE created_date < '2026-09-21';");
 
     Tokenizer *tokenizer = tokenizer_init(query);
     ASSERT(tokenizer != NULL);
@@ -374,6 +374,7 @@ static int test_date_query() {
     ASSERT(token_array->tokens != NULL);
     ASSERT(token_array->amount_tokens == 9);
 
+    
     ASSERT(strcasecmp(token_array->tokens[0]->token, "SELECT") == 0);
     ASSERT(token_array->tokens[0]->type == KEYWORD);
     ASSERT(strcasecmp(token_array->tokens[1]->token, "*") == 0);
@@ -384,7 +385,7 @@ static int test_date_query() {
     ASSERT(token_array->tokens[3]->type == IDENTIFIER);
     ASSERT(strcasecmp(token_array->tokens[4]->token, "WHERE") == 0);
     ASSERT(token_array->tokens[4]->type == KEYWORD);
-    ASSERT(strcasecmp(token_array->tokens[5]->token, "date") == 0);
+    ASSERT(strcasecmp(token_array->tokens[5]->token, "created_date") == 0);
     ASSERT(token_array->tokens[5]->type == IDENTIFIER);
     ASSERT(strcasecmp(token_array->tokens[6]->token, "<") == 0);
     ASSERT(token_array->tokens[6]->type == OPERATOR);
@@ -596,6 +597,195 @@ static int test_keyword_query() {
         ASSERT(token_array->tokens[13]->type == NUMBER);
         ASSERT(strcasecmp(token_array->tokens[14]->token, ";") == 0);
         ASSERT(token_array->tokens[14]->type == PUNCTUATION);
+
+        tokenizer_free(tokenizer);
+        token_array_free(token_array);
+    }
+
+        /* ----- SQL DATA TYPE KEYWORDS ----- */
+    {
+        char *query = strdup(
+            "INTEGER INT UNSIGNED NUMERIC FLOAT DOUBLE CHAR VARCHAR "
+            "TEXT DATE TIMESTAMP BLOB JSONB BOOL;"
+        );
+
+        Tokenizer *tokenizer = tokenizer_init(query);
+        ASSERT(tokenizer != NULL);
+
+        TokenArray *token_array = tokenize_query(tokenizer);
+        ASSERT(token_array->tokens != NULL);
+        ASSERT(token_array->amount_tokens == 15);
+
+        ASSERT(strcasecmp(token_array->tokens[0]->token, "INTEGER") == 0);
+        ASSERT(token_array->tokens[0]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[1]->token, "INT") == 0);
+        ASSERT(token_array->tokens[1]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[2]->token, "UNSIGNED") == 0);
+        ASSERT(token_array->tokens[2]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[3]->token, "NUMERIC") == 0);
+        ASSERT(token_array->tokens[3]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[4]->token, "FLOAT") == 0);
+        ASSERT(token_array->tokens[4]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[5]->token, "DOUBLE") == 0);
+        ASSERT(token_array->tokens[5]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[6]->token, "CHAR") == 0);
+        ASSERT(token_array->tokens[6]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[7]->token, "VARCHAR") == 0);
+        ASSERT(token_array->tokens[7]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[8]->token, "TEXT") == 0);
+        ASSERT(token_array->tokens[8]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[9]->token, "DATE") == 0);
+        ASSERT(token_array->tokens[9]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[10]->token, "TIMESTAMP") == 0);
+        ASSERT(token_array->tokens[10]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[11]->token, "BLOB") == 0);
+        ASSERT(token_array->tokens[11]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[12]->token, "JSONB") == 0);
+        ASSERT(token_array->tokens[12]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[13]->token, "BOOL") == 0);
+        ASSERT(token_array->tokens[13]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[14]->token, ";") == 0);
+        ASSERT(token_array->tokens[14]->type == PUNCTUATION);
+
+        tokenizer_free(tokenizer);
+        token_array_free(token_array);
+    }
+
+    /* ----- CONSTRAINT-RELATED KEYWORDS ----- */
+    {
+        char *query = strdup(
+            "CONSTRAINT PRIMARY FOREIGN KEY UNIQUE CHECK REFERENCES "
+            "NOT NULL DEFAULT;"
+        );
+
+        Tokenizer *tokenizer = tokenizer_init(query);
+        ASSERT(tokenizer != NULL);
+
+        TokenArray *token_array = tokenize_query(tokenizer);
+        ASSERT(token_array->tokens != NULL);
+        ASSERT(token_array->amount_tokens == 11);
+
+        ASSERT(strcasecmp(token_array->tokens[0]->token, "CONSTRAINT") == 0);
+        ASSERT(token_array->tokens[0]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[1]->token, "PRIMARY") == 0);
+        ASSERT(token_array->tokens[1]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[2]->token, "FOREIGN") == 0);
+        ASSERT(token_array->tokens[2]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[3]->token, "KEY") == 0);
+        ASSERT(token_array->tokens[3]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[4]->token, "UNIQUE") == 0);
+        ASSERT(token_array->tokens[4]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[5]->token, "CHECK") == 0);
+        ASSERT(token_array->tokens[5]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[6]->token, "REFERENCES") == 0);
+        ASSERT(token_array->tokens[6]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[7]->token, "NOT") == 0);
+        ASSERT(token_array->tokens[7]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[8]->token, "NULL") == 0);
+        ASSERT(token_array->tokens[8]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[9]->token, "DEFAULT") == 0);
+        ASSERT(token_array->tokens[9]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[10]->token, ";") == 0);
+        ASSERT(token_array->tokens[10]->type == PUNCTUATION);
+
+        tokenizer_free(tokenizer);
+        token_array_free(token_array);
+    }
+
+        /* ----- CREATE TABLE WITH DATA TYPES AND CONSTRAINTS ----- */
+    {
+        char *query = strdup(
+            "CREATE TABLE users ("
+            "id INTEGER PRIMARY KEY, "
+            "username VARCHAR NOT NULL UNIQUE, "
+            "age INT DEFAULT 18, "
+            "account_id INTEGER REFERENCES accounts(id), "
+            "CHECK (age >= 18)"
+            ");"
+        );
+
+        Tokenizer *tokenizer = tokenizer_init(query);
+        ASSERT(tokenizer != NULL);
+
+        TokenArray *token_array = tokenize_query(tokenizer);
+        ASSERT(token_array->tokens != NULL);
+        ASSERT(token_array->amount_tokens == 35);
+
+        ASSERT(strcasecmp(token_array->tokens[0]->token, "CREATE TABLE") == 0);
+        ASSERT(token_array->tokens[0]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[1]->token, "users") == 0);
+        ASSERT(token_array->tokens[1]->type == IDENTIFIER);
+        ASSERT(strcasecmp(token_array->tokens[2]->token, "(") == 0);
+        ASSERT(token_array->tokens[2]->type == PUNCTUATION);
+
+        ASSERT(strcasecmp(token_array->tokens[3]->token, "id") == 0);
+        ASSERT(token_array->tokens[3]->type == IDENTIFIER);
+        ASSERT(strcasecmp(token_array->tokens[4]->token, "INTEGER") == 0);
+        ASSERT(token_array->tokens[4]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[5]->token, "PRIMARY") == 0);
+        ASSERT(token_array->tokens[5]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[6]->token, "KEY") == 0);
+        ASSERT(token_array->tokens[6]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[7]->token, ",") == 0);
+        ASSERT(token_array->tokens[7]->type == PUNCTUATION);
+
+        ASSERT(strcasecmp(token_array->tokens[8]->token, "username") == 0);
+        ASSERT(token_array->tokens[8]->type == IDENTIFIER);
+        ASSERT(strcasecmp(token_array->tokens[9]->token, "VARCHAR") == 0);
+        ASSERT(token_array->tokens[9]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[10]->token, "NOT") == 0);
+        ASSERT(token_array->tokens[10]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[11]->token, "NULL") == 0);
+        ASSERT(token_array->tokens[11]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[12]->token, "UNIQUE") == 0);
+        ASSERT(token_array->tokens[12]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[13]->token, ",") == 0);
+        ASSERT(token_array->tokens[13]->type == PUNCTUATION);
+
+        ASSERT(strcasecmp(token_array->tokens[14]->token, "age") == 0);
+        ASSERT(token_array->tokens[14]->type == IDENTIFIER);
+        ASSERT(strcasecmp(token_array->tokens[15]->token, "INT") == 0);
+        ASSERT(token_array->tokens[15]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[16]->token, "DEFAULT") == 0);
+        ASSERT(token_array->tokens[16]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[17]->token, "18") == 0);
+        ASSERT(token_array->tokens[17]->type == NUMBER);
+        ASSERT(strcasecmp(token_array->tokens[18]->token, ",") == 0);
+        ASSERT(token_array->tokens[18]->type == PUNCTUATION);
+
+        ASSERT(strcasecmp(token_array->tokens[19]->token, "account_id") == 0);
+        ASSERT(token_array->tokens[19]->type == IDENTIFIER);
+        ASSERT(strcasecmp(token_array->tokens[20]->token, "INTEGER") == 0);
+        ASSERT(token_array->tokens[20]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[21]->token, "REFERENCES") == 0);
+        ASSERT(token_array->tokens[21]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[22]->token, "accounts") == 0);
+        ASSERT(token_array->tokens[22]->type == IDENTIFIER);
+        ASSERT(strcasecmp(token_array->tokens[23]->token, "(") == 0);
+        ASSERT(token_array->tokens[23]->type == PUNCTUATION);
+        ASSERT(strcasecmp(token_array->tokens[24]->token, "id") == 0);
+        ASSERT(token_array->tokens[24]->type == IDENTIFIER);
+        ASSERT(strcasecmp(token_array->tokens[25]->token, ")") == 0);
+        ASSERT(token_array->tokens[25]->type == PUNCTUATION);
+        ASSERT(strcasecmp(token_array->tokens[26]->token, ",") == 0);
+        ASSERT(token_array->tokens[26]->type == PUNCTUATION);
+
+        ASSERT(strcasecmp(token_array->tokens[27]->token, "CHECK") == 0);
+        ASSERT(token_array->tokens[27]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[28]->token, "(") == 0);
+        ASSERT(token_array->tokens[28]->type == PUNCTUATION);
+        ASSERT(strcasecmp(token_array->tokens[29]->token, "age") == 0);
+        ASSERT(token_array->tokens[29]->type == IDENTIFIER);
+        ASSERT(strcasecmp(token_array->tokens[30]->token, ">=") == 0);
+        ASSERT(token_array->tokens[30]->type == OPERATOR);
+        ASSERT(strcasecmp(token_array->tokens[31]->token, "18") == 0);
+        ASSERT(token_array->tokens[31]->type == NUMBER);
+        ASSERT(strcasecmp(token_array->tokens[32]->token, ")") == 0);
+        ASSERT(token_array->tokens[32]->type == PUNCTUATION);
+        ASSERT(strcasecmp(token_array->tokens[33]->token, ")") == 0);
+        ASSERT(token_array->tokens[33]->type == PUNCTUATION);
+        ASSERT(strcasecmp(token_array->tokens[34]->token, ";") == 0);
+        ASSERT(token_array->tokens[34]->type == PUNCTUATION);
 
         tokenizer_free(tokenizer);
         token_array_free(token_array);
