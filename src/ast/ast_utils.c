@@ -231,40 +231,35 @@ void ast_free_column_def(ColumnDefNode *column_def) {
         return;
     }
 
-    // Here constraints is a contiguous ConstraintsNode array, not ConstraintsNode **.
-    ast_free_column_constraints(column_def->constraints,column_def->num_constraints);
+    ast_free_constraints(column_def->constraints, column_def->num_constraints);
 
     free(column_def);
 }
 
-void ast_free_column_constraints(ConstraintsNode *constraints, uint32_t count) {
-    if (!constraints) {
+void ast_free_constraint(ConstraintNode *constraint) {
+    if (!constraint) {
         return;
     }
 
-    for (uint32_t i = 0; i < count; i++) {
-        ast_free_constraint_contents(&constraints[i]);
-    }
-
-    free(constraints);
+    ast_free_constraint_contents(constraint);
+    free(constraint);
 }
 
-void ast_free_constraints(ConstraintsNode **constraints, uint32_t count) {
+void ast_free_constraints(ConstraintNode **constraints, uint32_t count) {
     if (!constraints) {
         return;
     }
 
     for (uint32_t i = 0; i < count; i++) {
         if (constraints[i]) {
-            ast_free_constraint_contents(constraints[i]);
-            free(constraints[i]);
+            ast_free_constraint(constraints[i]);
         }
     }
 
     free(constraints);
 }
 
-void ast_free_constraint_contents(ConstraintsNode *constraint) {
+void ast_free_constraint_contents(ConstraintNode *constraint) {
     if (!constraint) {
         return;
     }
