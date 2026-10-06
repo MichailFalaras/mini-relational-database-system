@@ -188,12 +188,21 @@ typedef struct ast_constraints {
         DefaultConstraintNode default_value;
     } constraint_data;
 
-} ConstraintsNode;
+} ConstraintNode;
+
+// Data type arguments for CHAR(length), VARCHAR(length), NUMERIC(precision, scale)
+typedef struct type_node_args {
+    uint32_t length;
+    uint32_t precision;
+    uint32_t scale;
+} TypeNodeArgs;
 
 typedef struct ast_column_def {
     char column_name[64];
     DataType type;
-    ConstraintsNode *constraints;
+    TypeNodeArgs type_args;
+
+    ConstraintNode **constraints;
     uint32_t num_constraints;
 } ColumnDefNode;
 
@@ -205,7 +214,7 @@ typedef struct ast_columns {
 typedef struct ast_create_table {
     char table_name[64];
     ColumnsNode *columns;
-    ConstraintsNode **constraints;
+    ConstraintNode **constraints;
     uint32_t num_constraints;
 } CreateTableNode;
 
