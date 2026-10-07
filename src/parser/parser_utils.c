@@ -1289,6 +1289,117 @@ ASTNode *parse_create_table(Parser *parser) {
     return root;
 }
 
+/* Parse DROP TABLE query */
+ASTNode *parse_drop_table(Parser *parser) {
+    if (!parser || 
+        !parser->token_array || 
+        !parser->token_array->amount_tokens || 
+        parser->current_position >= parser->token_array->amount_tokens || 
+        !parser->token_array->tokens) {
+       return NULL;
+    }
+
+    // Parse DROP TABLE
+    Token *drop_table_token = get_current_token(parser);
+
+    if (!drop_table_token ||
+        drop_table_token->type != KEYWORD ||
+        strcasecmp(drop_table_token->token, "DROP TABLE")) {
+        printf("parse_drop_table: DROP TABLE is required");
+        return NULL;
+    }
+
+    consume_token(parser);
+
+    // Parse table name
+    Token *table_name = get_current_token(parser);
+
+    if (!table_name || table_name->type != IDENTIFIER) {
+        printf("parse_drop_table: table name is required");
+        return NULL;
+    }
+
+    ASTNode *root = (ASTNode *) calloc(1, sizeof(ASTNode));
+
+    if (!root) {
+        return NULL;
+    }
+
+    root->type = AST_DROP_TABLE;
+
+    strncpy(
+        root->node_contents.drop_table.table_name,
+        table_name->token,
+        sizeof(root->node_contents.drop_table.table_name) - 1
+    );
+
+    consume_token(parser);
+
+    return root;
+}
+
+/* Parse TRUNCATE TABLE query */
+ASTNode *parse_truncate_table(Parser *parser) {
+    if (!parser || 
+        !parser->token_array || 
+        !parser->token_array->amount_tokens || 
+        parser->current_position >= parser->token_array->amount_tokens || 
+        !parser->token_array->tokens) {
+       return NULL;
+    }
+
+    // Parse TRUNCATE TABLE
+    Token *truncate_table_token = get_current_token(parser);
+
+    if (!truncate_table_token ||
+        truncate_table_token->type != KEYWORD ||
+        strcasecmp(truncate_table_token->token, "TRUNCATE TABLE")) {
+        printf("parse_trucate_table: TRUNCATE TABLE is required");
+        return NULL;
+    }
+
+    consume_token(parser);
+
+    // Parse table name
+    Token *table_name = get_current_token(parser);
+
+    if (!table_name || table_name->type != IDENTIFIER) {
+        printf("parse_truncate_table: table name is required");
+        return NULL;
+    }
+
+    ASTNode *root = (ASTNode *) calloc(1, sizeof(ASTNode));
+
+    if (!root) {
+        return NULL;
+    }
+
+    root->type = AST_TRUNCATE_TABLE;
+
+    strncpy(
+        root->node_contents.truncate_table.table_name,
+        table_name->token,
+        sizeof(root->node_contents.truncate_table.table_name) - 1
+    );
+
+    consume_token(parser);
+
+    return root;
+}
+
+/* Parse TRUNCATE TABLE query */
+ASTNode *parse_alter_table(Parser *parser) {
+    if (!parser || 
+        !parser->token_array || 
+        !parser->token_array->amount_tokens || 
+        parser->current_position >= parser->token_array->amount_tokens || 
+        !parser->token_array->tokens) {
+       return NULL;
+    }
+
+
+}
+
 /* ---------- Parsing of Inner Query Components ---------- */
 
 /* Parse FROM clause */

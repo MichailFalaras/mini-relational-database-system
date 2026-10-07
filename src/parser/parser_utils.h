@@ -87,9 +87,9 @@ ASTNode *parse_create_table(Parser *parser);
 
 ASTNode *parse_drop_table(Parser *parser);
 
-ASTNode *parse_alter_table(Parser *parser);
-
 ASTNode *parse_truncate_table(Parser *parser);
+
+ASTNode *parse_alter_table(Parser *parser);
 
 ASTNode *parse_create_index(Parser *parser);
 
