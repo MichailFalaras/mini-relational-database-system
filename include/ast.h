@@ -235,18 +235,18 @@ typedef struct ast_alter_rename_table {
 } AlterRenameTableNode;
 
 typedef struct ast_alter_rename_col {
+    char old_col_name[64];
     char new_col_name[64];
 } AlterRenameColNode;
 
 typedef struct ast_alter_modify {
     char column_name[64];
     DataType new_type;
+    TypeNodeArgs type_args;
 } AlterModifyNode;
 
 typedef struct ast_alter_add_constraint {
-    char constraint_name[64];
-    ASTConstraintType new_type;
-    char column_name[64];
+    ConstraintNode *constraint;
 } AlterAddConstraintNode;
 
 typedef struct ast_alter_drop_constraint {
@@ -254,10 +254,11 @@ typedef struct ast_alter_drop_constraint {
 } AlterDropConstraintNode;
 
 typedef enum ast_alter_types {
-    AST_ALTER_ADD,
-    AST_ALTER_DROP,
-    AST_ALTER_RENAME,
-    AST_ALTER_MODIFY,
+    AST_ALTER_ADD_COLUMN,
+    AST_ALTER_DROP_COLUMN,
+    AST_ALTER_RENAME_TABLE,
+    AST_ALTER_RENAME_COLUMN,
+    AST_ALTER_MODIFY_COLUMN,
     AST_ALTER_ADD_CONSTRAINT,
     AST_ALTER_DROP_CONSTRAINT
 } ASTAlterType;
