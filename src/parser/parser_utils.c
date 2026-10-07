@@ -1564,6 +1564,146 @@ ASTNode *parse_alter_table(Parser *parser) {
     return root;
 }
 
+/* Parse CREATE INDEX */
+ASTNode *parse_create_index(Parser *parser) {
+    if (!parser || 
+        !parser->token_array || 
+        !parser->token_array->amount_tokens || 
+        parser->current_position >= parser->token_array->amount_tokens || 
+        !parser->token_array->tokens) {
+       return NULL;
+    }
+
+    // Parse CREATE INDEX
+    Token *create_index_token = get_current_token(parser);
+
+    if (!create_index_token ||
+        create_index_token->type != KEYWORD ||
+        strcasecmp(create_index_token->token, "CREATE INDEX")) {
+        printf("parse_create_index: CREATE INDEX is required.\n");
+        return NULL;
+    }
+
+    consume_token(parser);
+
+    // Parse index name
+    Token *current = get_current_token(parser);
+
+    if (!current || current->type != IDENTIFIER) {
+        printf("parse_create_index: Index name is required.\n");
+        return NULL;
+    }
+
+    ASTNode *root = (ASTNode *) calloc(1, sizeof(ASTNode));
+
+    if (!root) {
+        return NULL;
+    }
+
+    root->type = AST_CREATE_INDEX;
+
+    strncpy(
+        root->node_contents.create_index.index_name,
+        current->token,
+        sizeof(root->node_contents.create_index.index_name) - 1
+    );
+
+    consume_token(parser);
+
+    // Parse ON
+    current = get_current_token(parser);
+
+    if (!current ||
+        current->type != KEYWORD ||
+        strcasecmp(current->token, "ON")) {
+        printf("parse_create_index: ON is required after index name.\n");
+        ast_free_node(root);
+        return NULL;
+    }
+
+    consume_token(parser);
+
+    // Parse target table name
+    current = get_current_token(parser);
+
+    if (!current || current->type != IDENTIFIER) {
+        printf("parse_create_index: Table name is required after ON.\n");
+        ast_free_node(root);
+        return NULL;
+    }
+
+    strncpy(
+        root->node_contents.create_index.table_name,
+        current->token,
+        sizeof(root->node_contents.create_index.table_name) - 1
+    );
+
+    consume_token(parser);
+
+    // Parse indexed column list
+    if (!parse_constraint_column_list(
+            parser,
+            &root->node_contents.create_index.column_refs,
+            &root->node_contents.create_index.num_column_refs)) {
+        printf("parse_create_index: Invalid indexed column list.\n");
+        ast_free_node(root);
+        return NULL;
+    }
+
+    return root;
+
+}
+
+/* Parse DROP INDEX */
+ASTNode *parse_drop_index(Parser *parser) {
+    if (!parser || 
+        !parser->token_array || 
+        !parser->token_array->amount_tokens || 
+        parser->current_position >= parser->token_array->amount_tokens || 
+        !parser->token_array->tokens) {
+       return NULL;
+    }
+
+    // Parse DROP INDEX
+    Token *drop_index_token = get_current_token(parser);
+
+    if (!drop_index_token ||
+        drop_index_token->type != KEYWORD ||
+        strcasecmp(drop_index_token->token, "DROP INDEX")) {
+        printf("parse_drop_index: DROP INDEX is required.\n");
+        return NULL;
+    }
+
+    consume_token(parser);
+
+    // Parse index name
+    Token *current = get_current_token(parser);
+
+    if (!current || current->type != IDENTIFIER) {
+        printf("parse_drop_index: Index name is required.\n");
+        return NULL;
+    }
+    
+    ASTNode *root = (ASTNode *) calloc(1, sizeof(ASTNode));
+
+    if (!root) {
+        return NULL;
+    }
+
+    root->type = AST_DROP_INDEX;
+    
+    strncpy(
+        root->node_contents.drop_index.index_name,
+        current->token,
+        sizeof(root->node_contents.drop_index.index_name) - 1
+    );
+
+    consume_token(parser);
+
+    return root;
+}
+
+
 /* ---------- Parsing of Inner Query Components ---------- */
 
 /* Parse FROM clause */
