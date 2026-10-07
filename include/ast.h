@@ -297,7 +297,6 @@ typedef struct ast_create_index {
 
 typedef struct ast_drop_index {
     char index_name[64];
-    char table_name[64];
 } DropIndexNode;
 
 typedef struct abstract_syntax_tree_node {
