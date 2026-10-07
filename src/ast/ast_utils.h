@@ -66,6 +66,8 @@ void ast_free_constraints(ConstraintNode **constraints, uint32_t count);
 
 void ast_free_constraint_contents(ConstraintNode *constraint);
 
+void ast_free_alter_action_contents(AlterActionNode *action);
+
 void ast_free_alter_actions(AlterActionNode *actions, uint32_t num_actions);
 
 /* Internal helper that loops over Expressions and frees them */
