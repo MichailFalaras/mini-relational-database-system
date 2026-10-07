@@ -791,6 +791,56 @@ static int test_keyword_query() {
         token_array_free(token_array);
     }
 
+    /* ----- ALTER TABLE-RELATED KEYWORDS ----- */
+    {
+        char *query = strdup("ADD COLUMN RENAME TO MODIFY;");
+
+        Tokenizer *tokenizer = tokenizer_init(query);
+        ASSERT(tokenizer != NULL);
+
+        TokenArray *token_array = tokenize_query(tokenizer);
+        ASSERT(token_array->tokens != NULL);
+        ASSERT(token_array->amount_tokens == 6);
+
+        ASSERT(strcasecmp(token_array->tokens[0]->token, "ADD") == 0);
+        ASSERT(token_array->tokens[0]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[1]->token, "COLUMN") == 0);
+        ASSERT(token_array->tokens[1]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[2]->token, "RENAME") == 0);
+        ASSERT(token_array->tokens[2]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[3]->token, "TO") == 0);
+        ASSERT(token_array->tokens[3]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[4]->token, "MODIFY") == 0);
+        ASSERT(token_array->tokens[4]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[5]->token, ";") == 0);
+        ASSERT(token_array->tokens[5]->type == PUNCTUATION);
+
+        tokenizer_free(tokenizer);
+        token_array_free(token_array);
+    }
+
+    /* ----- DROP COLUMN ----- */
+    {
+        char *query = strdup("DROP COLUMN age;");
+
+        Tokenizer *tokenizer = tokenizer_init(query);
+        ASSERT(tokenizer != NULL);
+
+        TokenArray *token_array = tokenize_query(tokenizer);
+        ASSERT(token_array->tokens != NULL);
+        ASSERT(token_array->amount_tokens == 3);
+
+        ASSERT(strcasecmp(token_array->tokens[0]->token, "DROP COLUMN") == 0);
+        ASSERT(token_array->tokens[0]->type == KEYWORD);
+        ASSERT(strcasecmp(token_array->tokens[1]->token, "age") == 0);
+        ASSERT(token_array->tokens[1]->type == IDENTIFIER);
+        ASSERT(strcasecmp(token_array->tokens[2]->token, ";") == 0);
+        ASSERT(token_array->tokens[2]->type == PUNCTUATION);
+
+        tokenizer_free(tokenizer);
+        token_array_free(token_array);
+    }
+
     return 0;
 }
 

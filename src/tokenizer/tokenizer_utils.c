@@ -167,12 +167,14 @@ bool iskeyword(char *token, bool *double_token_keyword) {
 
     /* Double Token KEYWORDs. */
     if (!strcasecmp(token, "CREATE TABLE")
-        || !strcasecmp(token, "ALTER TABLE") 
-        || !strcasecmp(token, "TRUNCATE TABLE") 
-        || !strcasecmp(token, "DROP TABLE") 
-        || !strcasecmp(token, "CREATE INDEX") 
-        || !strcasecmp(token, "DROP INDEX") 
-        || !strcasecmp(token, "GROUP BY") 
+        || !strcasecmp(token, "ALTER TABLE")
+        || !strcasecmp(token, "TRUNCATE TABLE")
+        || !strcasecmp(token, "DROP TABLE")
+        || !strcasecmp(token, "DROP INDEX")
+        || !strcasecmp(token, "DROP COLUMN")
+        || !strcasecmp(token, "DROP CONSTRAINT")
+        || !strcasecmp(token, "CREATE INDEX")
+        || !strcasecmp(token, "GROUP BY")
         || !strcasecmp(token, "ORDER BY")) {
         return true;
     }
@@ -250,9 +252,17 @@ bool iskeyword(char *token, bool *double_token_keyword) {
         || !strcasecmp(token, "UNIQUE")
         || !strcasecmp(token, "CHECK")
         || !strcasecmp(token, "REFERENCES")
-        || !strcasecmp(token, "NOT")
-        || !strcasecmp(token, "NULL")
         || !strcasecmp(token, "DEFAULT")) {
+        *double_token_keyword = false;
+        return true;
+    }
+
+    // ALTER TABLE-related keywords
+    if (!strcasecmp(token, "ADD")
+        || !strcasecmp(token, "COLUMN")
+        || !strcasecmp(token, "RENAME")
+        || !strcasecmp(token, "TO")
+        || !strcasecmp(token, "MODIFY")) {
         *double_token_keyword = false;
         return true;
     }
