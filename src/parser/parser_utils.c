@@ -1387,7 +1387,7 @@ ASTNode *parse_truncate_table(Parser *parser) {
     return root;
 }
 
-/* Parse TRUNCATE TABLE query */
+/* Parse ALTER TABLE query */
 ASTNode *parse_alter_table(Parser *parser) {
     if (!parser || 
         !parser->token_array || 
@@ -1397,7 +1397,171 @@ ASTNode *parse_alter_table(Parser *parser) {
        return NULL;
     }
 
+    // Parse ALTER TABLE
+    Token *alter_table_token = get_current_token(parser);
 
+    if (!alter_table_token ||
+        alter_table_token->type != KEYWORD ||
+        strcasecmp(alter_table_token->token, "ALTER TABLE")) {
+        printf("parse_alter_table: ALTER TABLE is required.\n");
+        return NULL;
+    }
+
+    consume_token(parser);
+
+    // Parse Table name
+    Token *table_name = get_current_token(parser);
+
+    if (!table_name || table_name->type != IDENTIFIER) {
+        printf("parse_alter_table: Table name is required.\n");
+        return NULL;
+    }
+
+    ASTNode *root = (ASTNode *) calloc(1, sizeof(ASTNode));
+
+    if (!root) {
+        return NULL;
+    }
+
+    root->type = AST_ALTER_TABLE;
+
+    strncpy(
+        root->node_contents.alter_table.table_name,
+        table_name->token,
+        sizeof(root->node_contents.alter_table.table_name) - 1
+    );
+
+    consume_token(parser);
+
+    // Parse ALTER operations
+    while (true) {
+        Token *current = get_current_token(parser);
+
+        if (!current || current->type != KEYWORD) {
+            printf("parse_alter_table: Alteration operation is required.\n");
+            ast_free_node(root);
+            return NULL;
+        }
+
+        // Parse the appropriate Alteration Operation
+        AlterActionNode alter_action_node = {0};
+        bool success = false;
+
+        if (!strcasecmp(current->token, "ADD")) {
+            consume_token(parser);
+
+            current = get_current_token(parser);
+
+            if (!current || current->type != KEYWORD) {
+                printf("parse_alter_table: Expected keyword after ADD.\n");
+                ast_free_node(root);
+                return NULL;
+            }
+
+            // Parse ADD COLUMN
+            if (!strcasecmp(current->token, "COLUMN")) {
+                success = parse_alter_add_col(parser, &alter_action_node);
+            }
+            else if (!strcasecmp(current->token, "CONSTRAINT")) {
+                // Parse ADD CONSTRAINT
+                success = parse_alter_add_constraint(parser, &alter_action_node);
+            }
+            else {
+                printf("parse_alter_table: Invalid token after ADD.\n");
+                ast_free_node(root);
+                return NULL;
+            }
+        }
+        else if (!strcasecmp(current->token, "DROP COLUMN")) {
+            // Parse DROP COLUMN
+            success = parse_alter_drop_col(parser, &alter_action_node);
+        }
+        else if (!strcasecmp(current->token, "DROP CONSTRAINT")) {
+            // Parse DROP CONSTRAINT
+            success = parse_alter_drop_constraint(parser, &alter_action_node);
+        }
+        else if (!strcasecmp(current->token, "RENAME")) {
+            consume_token(parser);
+
+            current = get_current_token(parser);
+
+            if (!current || current->type != KEYWORD) {
+                printf("parse_alter_table: Expected keyword after RENAME.\n");
+                ast_free_node(root);
+                return NULL;
+            }
+
+            if (!strcasecmp(current->token, "COLUMN")) {
+                // Parse RENAME COLUMN
+                success = parse_alter_rename_col(parser, &alter_action_node);
+            }
+            else if (!strcasecmp(current->token, "TO")) {
+                // Parse RENAME TO for the table
+                success = parse_alter_rename_table(parser, &alter_action_node);
+            }
+            else {
+                printf("parse_alter_table: Invalid token after RENAME.\n");
+                ast_free_node(root);
+                return NULL;
+            }
+        }
+        else if (!strcasecmp(current->token, "MODIFY")) {
+            consume_token(parser);
+
+            // Parse MODIFY COLUMN
+            current = get_current_token(parser);
+
+            if (!current || current->type != KEYWORD || strcasecmp(current->token, "COLUMN")) {
+                printf("parse_alter_table: Expected COLUMN after MODIFY token.\n");
+                ast_free_node(root);
+                return NULL;
+            }
+
+            success = parse_alter_modify_col(parser, &alter_action_node);
+        }
+
+        if (!success) {
+            printf("parse_alter_table: Parsing of ALTER operation failed.\n");
+            ast_free_alter_action_contents(&alter_action_node);
+            ast_free_node(root);
+            return NULL;
+        }
+
+        AlterActionNode *new_actions = (AlterActionNode *) realloc(
+            root->node_contents.alter_table.actions,
+            (root->node_contents.alter_table.num_actions + 1) * sizeof(AlterActionNode)
+        );
+
+        if (!new_actions) {
+            ast_free_alter_action_contents(&alter_action_node);
+            ast_free_node(root);
+            return NULL;
+        }
+
+        root->node_contents.alter_table.actions = new_actions;
+        root->node_contents.alter_table.actions[
+            root->node_contents.alter_table.num_actions
+        ] = alter_action_node;
+        root->node_contents.alter_table.num_actions++;
+
+        current = get_current_token(parser);
+
+        // If no ',' follows the current token, we've parsed all alteration operations
+        if (!current || strcmp(current->token, ",")) {
+            break;
+        }
+
+        consume_token(parser);
+
+        // A new action must follow the ','
+        current = get_current_token(parser);
+        if (!current) {
+            ast_free_node(root);
+            return NULL;
+        }
+    }
+
+    return root;
 }
 
 /* ---------- Parsing of Inner Query Components ---------- */
@@ -2640,4 +2804,417 @@ bool parse_constraint_column_list(Parser *parser, ExpressionNode ***column_refs,
 
         consume_token(parser);
     }
+}
+
+/* Parse ADD COLUMN alter operation */
+bool parse_alter_add_col(Parser *parser, AlterActionNode *action) {
+    if (!parser || 
+        !action ||
+        !parser->token_array || 
+        !parser->token_array->amount_tokens || 
+        parser->current_position >= parser->token_array->amount_tokens || 
+        !parser->token_array->tokens) {
+       return false;
+    }
+
+    // Parse COLUMN
+    Token *current = get_current_token(parser);
+
+    if (!current || current->type != KEYWORD || strcasecmp(current->token, "COLUMN")) {
+        printf("parse_alter_add_col: Expected COLUMN after ADD.\n");
+        return false;
+    }
+
+    consume_token(parser);
+
+    action->type = AST_ALTER_ADD_COLUMN;
+
+    // Parse new column's definition
+    action->alter_contents.alter_add.column = parse_column_def(parser);
+    if (!action->alter_contents.alter_add.column) {
+        printf("parse_alter_add_col: Parsing of column definition failed.\n");
+        return false;
+    }
+
+    return true;
+}
+
+/* Parse DROP COLUMN alter operation */
+bool parse_alter_drop_col(Parser *parser, AlterActionNode *action) {
+    if (!parser ||
+        !action || 
+        !parser->token_array || 
+        !parser->token_array->amount_tokens || 
+        parser->current_position >= parser->token_array->amount_tokens || 
+        !parser->token_array->tokens) {
+       return false;
+    }
+
+    // Parse DROP COLUMN
+    Token *current = get_current_token(parser);
+
+    if (!current || current->type != KEYWORD || strcasecmp(current->token, "DROP COLUMN")) {
+        printf("parse_alter_drop_col: Expected DROP COLUMN.\n");
+        return false;
+    }
+
+    consume_token(parser);
+
+    action->type = AST_ALTER_DROP_COLUMN;
+
+    // Parse column name
+    current = get_current_token(parser);
+
+    if (!current || current->type != IDENTIFIER) {
+        printf("parse_alter_drop_col: Expected column name.\n");
+        return false;
+    }
+
+    strncpy(
+        action->alter_contents.alter_drop.column_name,
+        current->token,
+        sizeof(action->alter_contents.alter_drop.column_name) - 1
+    );
+
+    consume_token(parser);
+
+    return true;
+}
+
+/* Parse RENAME alter operation */
+bool parse_alter_rename_table(Parser *parser, AlterActionNode *action) {
+    if (!parser || 
+        !action ||
+        !parser->token_array || 
+        !parser->token_array->amount_tokens || 
+        parser->current_position >= parser->token_array->amount_tokens || 
+        !parser->token_array->tokens) {
+       return false;
+    }
+
+    // Parse TO
+    Token *current = get_current_token(parser);
+
+    if (!current || current->type != KEYWORD || strcasecmp(current->token, "TO")) {
+        printf("parse_alter_rename_table: Expected TO after RENAME.\n");
+        return false;
+    }
+
+    consume_token(parser);
+
+    // Parse new table name
+    current = get_current_token(parser);
+
+    if (!current || current->type != IDENTIFIER) {
+        printf("parse_alter_rename_table: Expected new table name.\n");
+        return false;
+    }
+
+    action->type = AST_ALTER_RENAME_TABLE;
+
+    strncpy(
+        action->alter_contents.alter_rename_table.new_table_name,
+        current->token,
+        sizeof(action->alter_contents.alter_rename_table.new_table_name) - 1
+    );
+
+    consume_token(parser);
+
+    return true;
+}
+
+/* Parse RENAME COLUMN alter operation */
+bool parse_alter_rename_col(Parser *parser, AlterActionNode *action) {
+    if (!parser || 
+        !action ||
+        !parser->token_array || 
+        !parser->token_array->amount_tokens || 
+        parser->current_position >= parser->token_array->amount_tokens || 
+        !parser->token_array->tokens) {
+       return false;
+    }
+
+    // Parse COLUMN
+    Token *current = get_current_token(parser);
+
+    if (!current || current->type != KEYWORD || strcasecmp(current->token, "COLUMN")) {
+        printf("parse_alter_rename_col: Expected COLUMN after RENAME.\n");
+        return false;
+    }
+
+    consume_token(parser);
+
+    action->type = AST_ALTER_RENAME_COLUMN;
+
+    // Parse old column name
+    current = get_current_token(parser);
+
+    if (!current || current->type != IDENTIFIER) {
+        printf("parse_alter_rename_col: Expected old column name.\n");
+        return false;
+    }
+
+    strncpy(
+        action->alter_contents.alter_rename_col.old_col_name,
+        current->token,
+        sizeof(action->alter_contents.alter_rename_col.old_col_name) - 1
+    );
+
+    consume_token(parser);
+
+    // Parse TO keyword
+    current = get_current_token(parser);
+
+    if (!current || current->type != KEYWORD || strcasecmp(current->token, "TO")) {
+        printf("parse_alter_rename_col: Expected TO after old column name.\n");
+        return false;
+    }
+
+    consume_token(parser);
+
+    // Parse new column name
+    current = get_current_token(parser);
+
+    if (!current || current->type != IDENTIFIER) {
+        printf("parse_alter_rename_col: Expected new column name.\n");
+        return false;
+    }
+
+    strncpy(
+        action->alter_contents.alter_rename_col.new_col_name,
+        current->token,
+        sizeof(action->alter_contents.alter_rename_col.new_col_name) - 1
+    );
+
+    consume_token(parser);
+
+    return true;
+}
+
+/* Parse MODIFY alter operation */
+bool parse_alter_modify_col(Parser *parser, AlterActionNode *action) {
+    if (!parser || 
+        !action ||
+        !parser->token_array || 
+        !parser->token_array->amount_tokens || 
+        parser->current_position >= parser->token_array->amount_tokens || 
+        !parser->token_array->tokens) {
+       return false;
+    }
+
+    // Parse COLUMN
+    Token *current = get_current_token(parser);
+
+    if (!current ||
+        current->type != KEYWORD ||
+        strcasecmp(current->token, "COLUMN")) {
+        printf("parse_alter_modify_col: Expected COLUMN after MODIFY.\n");
+        return false;
+    }
+
+    consume_token(parser);
+
+    // Parse column name
+    current = get_current_token(parser);
+
+    if (!current || current->type != IDENTIFIER) {
+        printf("parse_alter_modify_col: Expected column name.\n");
+        return false;
+    }
+
+    action->type = AST_ALTER_MODIFY_COLUMN;
+
+    strncpy(
+        action->alter_contents.alter_modify.column_name,
+        current->token,
+        sizeof(action->alter_contents.alter_modify.column_name) - 1
+    );
+
+    consume_token(parser);
+
+    // Parse column's new data type
+    current = get_current_token(parser);
+
+    if (!current || current->type != KEYWORD) {
+        printf("parse_alter_modify_col: Expected data type.\n");
+        return false;
+    }
+
+    DataType type;
+
+    if (!strcasecmp(current->token, "UNSIGNED")) {
+        consume_token(parser);
+
+        current = get_current_token(parser);
+
+        if (!current ||
+            current->type != KEYWORD ||
+            (strcasecmp(current->token, "INTEGER") &&
+             strcasecmp(current->token, "INT"))) {
+            printf("parse_alter_modify_col: Expected INTEGER after UNSIGNED.\n");
+            return false;
+        }
+
+        type = UNSIGNED_INTEGER;
+        consume_token(parser);
+    }
+    else {
+        type = token_str_to_data_type(current->token);
+
+        if (type == -1) {
+            printf("parse_alter_modify_col: Invalid data type.\n");
+            return false;
+        }
+
+        consume_token(parser);
+    }
+
+    action->alter_contents.alter_modify.new_type = type;
+
+    // Parse type parameters if data type is one of: CHAR(n), VARCHAR(n), NUMERIC(p,s)
+    if (type == CHAR || type == VARCHAR || type == NUMERIC) {
+        current = get_current_token(parser);
+
+        if (!current ||
+            current->type != PUNCTUATION ||
+            strcmp(current->token, "(")) {
+            printf("parse_alter_modify_col: Expected '(' after data type.\n");
+            return false;
+        }
+
+        consume_token(parser);
+
+        current = get_current_token(parser);
+
+        if (!current || current->type != NUMBER) {
+            printf("parse_alter_modify_col: Expected type parameter.\n");
+            return false;
+        }
+
+        if (type == CHAR || type == VARCHAR) {
+            action->alter_contents.alter_modify.type_args.length =
+                (uint32_t) strtoul(current->token, NULL, 10);
+
+            consume_token(parser);
+        }
+        else {
+            action->alter_contents.alter_modify.type_args.precision =
+                (uint32_t) strtoul(current->token, NULL, 10);
+
+            consume_token(parser);
+
+            current = get_current_token(parser);
+
+            if (!current ||
+                current->type != PUNCTUATION ||
+                strcmp(current->token, ",")) {
+                printf("parse_alter_modify_col: Expected ',' after precision.\n");
+                return false;
+            }
+
+            consume_token(parser);
+
+            current = get_current_token(parser);
+
+            if (!current || current->type != NUMBER) {
+                printf("parse_alter_modify_col: Expected scale.\n");
+                return false;
+            }
+
+            action->alter_contents.alter_modify.type_args.scale =
+                (uint32_t) strtoul(current->token, NULL, 10);
+
+            consume_token(parser);
+        }
+        current = get_current_token(parser);
+
+        if (!current ||
+            current->type != PUNCTUATION ||
+            strcmp(current->token, ")")) {
+            printf("parse_alter_modify_col: Expected ')'.\n");
+            return false;
+        }
+
+        consume_token(parser);
+    }
+
+    return true;
+}
+
+/* Parse ADD CONSTRAINT alter operation */
+bool parse_alter_add_constraint(Parser *parser, AlterActionNode *action) {
+    if (!parser || 
+        !action ||
+        !parser->token_array || 
+        !parser->token_array->amount_tokens || 
+        parser->current_position >= parser->token_array->amount_tokens || 
+        !parser->token_array->tokens) {
+       return false;
+    }
+
+    // Parse CONSTRAINT
+    Token *current = get_current_token(parser);
+
+    if (!current ||
+        current->type != KEYWORD ||
+        strcasecmp(current->token, "CONSTRAINT")) {
+        printf("parse_alter_add_constraint: Expected CONSTRAINT after ADD.\n");
+        return false;
+    }
+
+    // Parse constraint definition
+    ConstraintNode *constraint = parse_constraint(parser, NULL);
+
+    if (!constraint) {
+        printf("parse_alter_add_constraint: Invalid constraint definition.\n");
+        return false;
+    }
+
+    action->type = AST_ALTER_ADD_CONSTRAINT;
+    action->alter_contents.alter_add_constraint.constraint = constraint;
+    return true;
+}
+
+/* Parse DROP CONSTRAINT alter operation */
+bool parse_alter_drop_constraint(Parser *parser, AlterActionNode *action) {
+    if (!parser || 
+        !action ||
+        !parser->token_array || 
+        !parser->token_array->amount_tokens || 
+        parser->current_position >= parser->token_array->amount_tokens || 
+        !parser->token_array->tokens) {
+       return false;
+    }
+
+    // Parse DROP CONSTRAINT
+    Token *current = get_current_token(parser);
+
+    if (!current ||
+        current->type != KEYWORD ||
+        strcasecmp(current->token, "DROP CONSTRAINT")) {
+        printf("parse_alter_drop_constraint: Expected DROP CONSTRAINT.\n");
+        return false;
+    }
+
+    consume_token(parser);
+
+    // Parse constraint name
+    current = get_current_token(parser);
+
+    if (!current || current->type != IDENTIFIER) {
+        printf("parse_alter_drop_constraint: Expected constraint name.\n");
+        return false;
+    }
+
+    action->type = AST_ALTER_DROP_CONSTRAINT;
+
+    strncpy(
+        action->alter_contents.alter_drop_constraint.constraint_name,
+        current->token,
+        sizeof(action->alter_contents.alter_drop_constraint.constraint_name) - 1
+    );
+
+    consume_token(parser);
+
+    return true;
 }

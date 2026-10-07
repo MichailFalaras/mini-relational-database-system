@@ -127,4 +127,18 @@ bool parse_default_constraint(Parser *parser, ConstraintNode *constraint, const 
 
 bool parse_constraint_column_list(Parser *parser, ExpressionNode ***column_refs, uint32_t *num_columns);
 
+bool parse_alter_add_col(Parser *parser, AlterActionNode *action);
+
+bool parse_alter_drop_col(Parser *parser, AlterActionNode *action);
+
+bool parse_alter_rename_table(Parser *parser, AlterActionNode *action);
+
+bool parse_alter_rename_col(Parser *parser, AlterActionNode *action);
+
+bool parse_alter_modify_col(Parser *parser, AlterActionNode *action);
+
+bool parse_alter_add_constraint(Parser *parser, AlterActionNode *action);
+
+bool parse_alter_drop_constraint(Parser *parser, AlterActionNode *action);
+
 #endif
