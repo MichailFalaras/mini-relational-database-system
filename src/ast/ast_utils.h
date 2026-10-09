@@ -3,6 +3,33 @@
 
 #include <stdint.h>
 
+typedef struct ast_select SelectNode;
+typedef struct ast_insert InsertNode;
+typedef struct ast_update UpdateNode;
+typedef struct ast_delete DeleteNode;
+typedef struct ast_create_table CreateTableNode;
+typedef struct ast_alter_table AlterTableNode;
+typedef struct ast_create_index CreateIndexNode;
+typedef struct ast_projection ProjectionNode;
+typedef struct ast_from FromNode;
+typedef struct ast_where WhereNode;
+typedef struct ast_on OnNode;
+typedef struct ast_join JoinNode;
+typedef struct ast_group_by GroupByNode;
+typedef struct ast_having HavingNode;
+typedef struct ast_order_by OrderByNode;
+typedef struct ast_limit LimitNode;
+typedef struct ast_offset OffsetNode;
+typedef struct ast_into IntoNode;
+typedef struct ast_values ValuesNode;
+typedef struct ast_set SetNode;
+typedef struct ast_assignment AssignmentNode;
+typedef struct ast_columns ColumnsNode;
+typedef struct ast_column_def ColumnDefNode;
+typedef struct ast_constraints ConstraintsNode;
+typedef struct ast_alter_action AlterActionNode;
+
+
 /* ---------- Deallocation Helpers ---------- */
 
 /* Top-level Deallocation Helpers */

@@ -1,9 +1,23 @@
 #ifndef PARSER_UTILS_H_
 #define PARSER_UTILS_H_
 
+#include <stdbool.h>
+
+typedef struct value Value;
+typedef struct token_struct Token;
 typedef struct parser Parser;
-#include "../../include/ast.h"
-#include "../../include/expressions.h"
+typedef enum statement_type StatementType;
+
+typedef struct ast_from FromNode;
+typedef struct ast_where WhereNode;
+typedef struct ast_into IntoNode;
+typedef struct ast_values ValuesNode;
+typedef struct ast_set SetNode;
+typedef enum ast_node_type ASTNodeType;
+typedef struct abstract_syntax_tree_node ASTNode;
+
+typedef enum operator_type OperatorType;
+typedef struct expression_node ExpressionNode;
 
 /* ASTNodeType to StatementType. */
 StatementType ast_to_statement_type(ASTNodeType type);
@@ -57,7 +71,7 @@ ExpressionNode *parse_postfix_expression(Parser *parser, ExpressionNode **operan
 /* Parse literal expressions. */
 ExpressionNode *parse_literal_expression(Parser *parser);
 
-/* Identify INTEGER or NUMERIC literal. */
+/* Identify UNSIGNED INTEGER or NUMERIC literal. */
 Value *create_number_literal(Parser *parser);
 
 /* Identify if string is CHAR(n), DATE, TIMESTAMP or BOOL. */

@@ -2,9 +2,12 @@
 #define PARSER_H_
 
 #include <stdint.h>
-#include "tokenizer.h"
-#include "ast.h"
-#include "database.h"
+#include <stdbool.h>
+
+typedef struct abstract_syntax_tree_node ASTNode;
+typedef struct token_array TokenArray;
+typedef struct database Database;
+typedef struct expression_node ExpressionNode;
 
 typedef enum statement_type {
     STMT_CREATE_TABLE = 0,
@@ -49,7 +52,7 @@ ExpressionNode *parse_expression(Parser *parser);
 extern Statement *statement_init(ASTNode *root, StatementType type);
 
 /* Inside parse_query, last check of AST validity. */
-extern bool bind_statement(ASTNode *root, Database *db);
+// extern bool bind_statement(ASTNode *root, Database *db);
 
 /* Deallocate Parser component*/
 extern void parser_free(Parser *parser);

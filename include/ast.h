@@ -6,7 +6,6 @@
 
 typedef struct expression_node ExpressionNode;
 #include "data_types.h"
-#include "constraints.h"
 
 typedef enum ast_node_type {
     AST_SELECT,
