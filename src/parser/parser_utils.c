@@ -180,7 +180,7 @@ ExpressionNode *parse_or(Parser *parser) {
             return NULL;
         }
 
-        ExpressionNode *new_left = create_binary_expression(left_operand, OP_OR, right_operand);
+        ExpressionNode *new_left = expression_create_binary_tree(left_operand, OP_OR, right_operand);
         if (!new_left) {
             expression_node_free(left_operand);
             expression_node_free(right_operand);
@@ -218,7 +218,7 @@ ExpressionNode *parse_and(Parser *parser) {
             return NULL;
         }
 
-        ExpressionNode *new_left = create_binary_expression(left_operand, OP_AND, right_operand);
+        ExpressionNode *new_left = expression_create_binary_tree(left_operand, OP_AND, right_operand);
         if (!new_left) {
             expression_node_free(left_operand);
             expression_node_free(right_operand);
@@ -291,7 +291,7 @@ ExpressionNode *parse_comparison(Parser *parser) {
         return NULL;
     }
 
-    ExpressionNode *comparison_expr = create_binary_expression(left_operand, op, right_operand);
+    ExpressionNode *comparison_expr = expression_create_binary_tree(left_operand, op, right_operand);
     if (!comparison_expr) {
         expression_node_free(left_operand);
         expression_node_free(right_operand);
@@ -328,7 +328,7 @@ ExpressionNode *parse_addition(Parser *parser) {
             return NULL;
         }
 
-        ExpressionNode *new_left = create_binary_expression(left_operand, op, right_operand);
+        ExpressionNode *new_left = expression_create_binary_tree(left_operand, op, right_operand);
         if (!new_left) {
             expression_node_free(left_operand);
             expression_node_free(right_operand);
@@ -370,7 +370,7 @@ ExpressionNode *parse_multiplication(Parser *parser) {
             return NULL;
         }
 
-        ExpressionNode *new_left = create_binary_expression(left_operand, op, right_operand);
+        ExpressionNode *new_left = expression_create_binary_tree(left_operand, op, right_operand);
         if (!new_left) {
             expression_node_free(left_operand);
             expression_node_free(right_operand);
@@ -590,11 +590,12 @@ ExpressionNode *parse_postfix_expression(Parser *parser, ExpressionNode **operan
             is_expr->expression_data.is_not_null_expr.operand = *operand;
         }
 
+        *operand = NULL;
+
         return is_expr;
     }
 
     if (curr_token->type == KEYWORD && !strcasecmp(curr_token->token, "IN")) {
-
         ExpressionNode *in_expr = expression_node_create(EXPR_IN);
         if (!in_expr) {
             expression_node_free(*operand);
@@ -615,7 +616,7 @@ ExpressionNode *parse_postfix_expression(Parser *parser, ExpressionNode **operan
 
         /* Require another expression immediately.
          * Used to reject lists like (1, 2,).  */
-        while (strcmp(curr_token->token, ",") == 0) {
+        do {
             consume_token(parser);
 
             uint32_t option_count = ++in_expr->expression_data.in_expr.option_count; 
@@ -636,7 +637,7 @@ ExpressionNode *parse_postfix_expression(Parser *parser, ExpressionNode **operan
             }
 
             curr_token = get_current_token(parser);
-        }
+        } while (strcmp(curr_token->token, ",") == 0);
 
         curr_token = get_current_token(parser);
         if (strcmp(curr_token->token, ")") != 0) {
@@ -751,7 +752,7 @@ ExpressionNode *parse_literal_expression(Parser *parser) {
     return literal_expr;
 }
 
-/* Identify INTEGER or NUMERIC literal. 
+/* Identify UNSIGNED INTEGER or NUMERIC literal. 
  *
  * (NOTE: INTEGER/NUMERIC sign is parsed through parse_unary). */
 Value *create_number_literal(Parser *parser) {
@@ -801,7 +802,7 @@ Value *create_number_literal(Parser *parser) {
         return value_create(NUMERIC, &numeric_val);
     }
 
-    return value_create(INTEGER, &number);
+    return value_create(UNSIGNED_INTEGER, &number);
 }
 
 /* Identify if string is CHAR(n), DATE, TIMESTAMP or BOOL. */
@@ -842,10 +843,11 @@ Value *create_string_literal(Parser *parser) {
      * is intentionally strict so ordinary strings containing digits are not
      * silently converted to DATE/TIMESTAMP. */
     int year, month, day, hour, minute, second;
-    char trailing;
 
-    if (sscanf(token_string, "'%4d-%2d-%2d %2d:%2d:%2d'%c",
-               &year, &month, &day, &hour, &minute, &second, &trailing) == 6) {
+    int chars_read = 0;
+    if (sscanf(token_string, "'%4d-%2d-%2d %2d:%2d:%2d'%n",
+               &year, &month, &day, &hour, &minute, &second, &chars_read) == 6
+        && chars_read == strlen(token_string)) {
         struct tm tm_value = {0};
         tm_value.tm_year = year - 1900;
         tm_value.tm_mon = month - 1;
@@ -864,7 +866,9 @@ Value *create_string_literal(Parser *parser) {
         }
     }
 
-    if (sscanf(token_string, "'%4d-%2d-%2d'%c", &year, &month, &day, &trailing) == 3) {
+    chars_read = 0;
+    if (sscanf(token_string, "'%4d-%2d-%2d'%n", &year, &month, &day, &chars_read) == 3
+        && chars_read == strlen(token_string)) {
         struct tm tm_value = {0};
         tm_value.tm_year = year - 1900;
         tm_value.tm_mon = month - 1;
@@ -880,7 +884,8 @@ Value *create_string_literal(Parser *parser) {
     }
 
     size_t content_len = token_len - 2;
-    char *content = (char *) malloc(content_len + 1);
+
+    char *content = malloc(content_len + 1);
     if (!content) {
         return NULL;
     }
@@ -889,10 +894,11 @@ Value *create_string_literal(Parser *parser) {
     content[content_len] = '\0';
 
     char_n_t char_n = {0};
-    char_n.n = (uint32_t) content_len;
+    char_n.n = (uint32_t)content_len;
     char_n.string = content;
 
     Value *char_value = value_create(CHAR, &char_n);
+
     free(content);
     return char_value;
 }
