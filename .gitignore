@@ -57,3 +57,9 @@ dkms.conf
 # Directories
 .vscode
 build/*
+
+# Node.js backend
+/server/node_modules/
+/server/.env
+/server/.env.*
+!/server/.env.example
