@@ -1,10 +1,30 @@
 #ifndef PARSER_UTILS_H_
 #define PARSER_UTILS_H_
 
+
+#include <stdint.h>
+#include <stdbool.h>
+
 typedef enum data_types DataType;
+typedef struct value Value;
+typedef struct token_struct Token;
 typedef struct parser Parser;
-#include "../../include/ast.h"
-#include "../../include/expressions.h"
+typedef enum statement_type StatementType;
+
+typedef struct ast_from FromNode;
+typedef struct ast_where WhereNode;
+typedef struct ast_into IntoNode;
+typedef struct ast_values ValuesNode;
+typedef struct ast_set SetNode;
+typedef struct ast_columns ColumnsNode;
+typedef struct ast_column_def ColumnDefNode;
+typedef struct ast_constraint ConstraintNode;
+typedef struct ast_alter_action AlterActionNode;
+typedef enum ast_node_type ASTNodeType;
+typedef struct abstract_syntax_tree_node ASTNode;
+
+typedef enum operator_type OperatorType;
+typedef struct expression_node ExpressionNode;
 
 /* ASTNodeType to StatementType. */
 StatementType ast_to_statement_type(ASTNodeType type);

@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "../../include/database.h"
 #include "../../include/tokenizer.h"
 #include "../../include/parser.h"
 #include "parser_utils.h"
@@ -46,10 +47,10 @@ Statement *parse_query(Parser *parser, Database *db) {
         return NULL;
     }
     
-    if (!bind_statement(root, db)) {
+    /*if (!bind_statement(root, db)) {
         ast_free_node(root);
         return NULL;
-    }
+    }*/
     
     StatementType type = ast_to_statement_type(root->type);
 
@@ -81,7 +82,7 @@ ASTNode *parse(Parser *parser) {
     /* Identify top-level keyword. */
     char *token_str = parser->token_array->tokens[parser->current_position]->token;
     if (!strcasecmp(token_str, "SELECT")) {
-        root = parse_select(parser);
+        //root = parse_select(parser);
 
     } else if (!strcasecmp(token_str, "UPDATE")) {
         root = parse_update(parser);

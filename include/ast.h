@@ -1,12 +1,9 @@
 #ifndef AST_H_
 #define AST_H_
 
-#include <stdint.h>
-#include <stdbool.h>
+#include "data_types.h"
 
 typedef struct expression_node ExpressionNode;
-#include "data_types.h"
-#include "constraints.h"
 
 typedef enum ast_node_type {
     AST_SELECT,
@@ -175,7 +172,7 @@ typedef struct ast_default_constraint {
     ExpressionNode *default_expr;
 } DefaultConstraintNode;
 
-typedef struct ast_constraints {
+typedef struct ast_constraint {
     char constraint_name[64];
     ASTConstraintType type;
 

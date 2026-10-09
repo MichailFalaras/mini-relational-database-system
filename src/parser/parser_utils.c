@@ -254,7 +254,7 @@ ExpressionNode *parse_or(Parser *parser) {
             return NULL;
         }
 
-        ExpressionNode *new_left = create_binary_expression(left_operand, OP_OR, right_operand);
+        ExpressionNode *new_left = expression_create_binary_tree(left_operand, OP_OR, right_operand);
         if (!new_left) {
             expression_node_free(left_operand);
             expression_node_free(right_operand);
@@ -292,7 +292,7 @@ ExpressionNode *parse_and(Parser *parser) {
             return NULL;
         }
 
-        ExpressionNode *new_left = create_binary_expression(left_operand, OP_AND, right_operand);
+        ExpressionNode *new_left = expression_create_binary_tree(left_operand, OP_AND, right_operand);
         if (!new_left) {
             expression_node_free(left_operand);
             expression_node_free(right_operand);
@@ -365,7 +365,7 @@ ExpressionNode *parse_comparison(Parser *parser) {
         return NULL;
     }
 
-    ExpressionNode *comparison_expr = create_binary_expression(left_operand, op, right_operand);
+    ExpressionNode *comparison_expr = expression_create_binary_tree(left_operand, op, right_operand);
     if (!comparison_expr) {
         expression_node_free(left_operand);
         expression_node_free(right_operand);
@@ -402,7 +402,7 @@ ExpressionNode *parse_addition(Parser *parser) {
             return NULL;
         }
 
-        ExpressionNode *new_left = create_binary_expression(left_operand, op, right_operand);
+        ExpressionNode *new_left = expression_create_binary_tree(left_operand, op, right_operand);
         if (!new_left) {
             expression_node_free(left_operand);
             expression_node_free(right_operand);
@@ -444,7 +444,7 @@ ExpressionNode *parse_multiplication(Parser *parser) {
             return NULL;
         }
 
-        ExpressionNode *new_left = create_binary_expression(left_operand, op, right_operand);
+        ExpressionNode *new_left = expression_create_binary_tree(left_operand, op, right_operand);
         if (!new_left) {
             expression_node_free(left_operand);
             expression_node_free(right_operand);
@@ -802,6 +802,10 @@ ExpressionNode *parse_literal_expression(Parser *parser) {
         literal = create_string_literal(parser);
         
     } else if (curr_token->type == KEYWORD) {
+        if (!strcasecmp(curr_token->token, "NULL")) {
+            literal_expr->expression_data.literal_value.literal = NULL;
+            return literal_expr;
+        }
 
         if (strcasecmp(curr_token->token, "TRUE") != 0
             && strcasecmp(curr_token->token, "FALSE") != 0) {
@@ -989,7 +993,7 @@ ASTNode *parse_update(Parser *parser) {
     if (!update_token ||
         update_token->type != KEYWORD ||
         strcasecmp(update_token->token, "UPDATE")) {
-        printf("parse_update: UPDATE keyword doesn't exist.");
+        printf("parse_update: UPDATE keyword doesn't exist.\n");
         return NULL;
     }
 
@@ -999,7 +1003,7 @@ ASTNode *parse_update(Parser *parser) {
     Token *table_token = get_current_token(parser);
 
     if (!table_token || table_token->type != IDENTIFIER) {
-        printf("parse_update: Table identifier name doesn't exist after UPDATE.");
+        printf("parse_update: Table identifier name doesn't exist after UPDATE.\n");
         return NULL;
     }
 
@@ -1023,7 +1027,7 @@ ASTNode *parse_update(Parser *parser) {
     // Parse SET clause
     root->node_contents.update.set = parse_set(parser);
     if (!root->node_contents.update.set) {
-        printf("parse_update: AST SET node is NULL");
+        printf("parse_update: AST SET node is NULL\n");
         ast_free_node(root);
         return NULL;
     }
@@ -1035,7 +1039,7 @@ ASTNode *parse_update(Parser *parser) {
         root->node_contents.update.where = parse_where(parser);
 
         if (!root->node_contents.update.where) {
-            printf("parse_update: Invalid WHERE clause.");
+            printf("parse_update: Invalid WHERE clause.\n");
             ast_free_node(root);
             return NULL;
         }
@@ -1060,7 +1064,7 @@ ASTNode *parse_insert(Parser *parser) {
     if (!insert_token || 
         insert_token->type != KEYWORD || 
         strcasecmp(insert_token->token, "INSERT")) {
-        printf("parse_insert: INSERT keyword doesn't exist.");
+        printf("parse_insert: INSERT keyword doesn't exist.\n");
         return NULL;
     }
 
@@ -1077,7 +1081,7 @@ ASTNode *parse_insert(Parser *parser) {
     // Parse INTO clause
     root->node_contents.insert.into = parse_into(parser);
     if (!root->node_contents.insert.into) {
-        printf("parse_insert: AST INTO node is NULL");
+        printf("parse_insert: AST INTO node is NULL\n");
         ast_free_node(root);
         return NULL;
     }
@@ -1085,7 +1089,7 @@ ASTNode *parse_insert(Parser *parser) {
     // Parse VALUES clause
     root->node_contents.insert.values = parse_values(parser);
     if (!root->node_contents.insert.values) {
-        printf("parse_insert: AST VALUES node is NULL");
+        printf("parse_insert: AST VALUES node is NULL\n");
         ast_free_node(root);
         return NULL;
     }
@@ -1108,7 +1112,7 @@ ASTNode *parse_delete(Parser *parser) {
     if (!delete_token ||
         delete_token->type != KEYWORD ||
         strcasecmp(delete_token->token, "DELETE")) {
-        printf("parse_delete: DELETE keyword doesn't exist.");
+        printf("parse_delete: DELETE keyword doesn't exist.\n");
         return NULL;
     }
 
@@ -1124,14 +1128,14 @@ ASTNode *parse_delete(Parser *parser) {
 
     root->node_contents.delete.from = parse_from(parser);
     if (!root->node_contents.delete.from) {
-        printf("parse_delete: AST FROM node is NULL");
+        printf("parse_delete: AST FROM node is NULL\n");
         ast_free_node(root);
         return NULL;
     }
 
     // A DELETE FROM statement should only have one table reference
     if (root->node_contents.delete.from->num_expressions != 1) {
-        printf("parse_delete: DELETE requires exactly one target table.");
+        printf("parse_delete: DELETE requires exactly one target table.\n");
         ast_free_node(root);
         return NULL;
     }
@@ -1143,7 +1147,7 @@ ASTNode *parse_delete(Parser *parser) {
         root->node_contents.delete.where = parse_where(parser);
 
         if (!root->node_contents.delete.where) {
-            printf("parse_delete: Invalid WHERE clause.");
+            printf("parse_delete: Invalid WHERE clause.\n");
             ast_free_node(root);
             return NULL;
         }
@@ -1168,7 +1172,7 @@ ASTNode *parse_create_table(Parser *parser) {
     if (!create_table_token ||
         create_table_token->type != KEYWORD ||
         strcasecmp(create_table_token->token, "CREATE TABLE")) {
-        printf("parse_create_table: CREATE TABLE keywords don't exist.");
+        printf("parse_create_table: CREATE TABLE keywords don't exist.\n");
         return NULL;
     }
 
@@ -1178,7 +1182,7 @@ ASTNode *parse_create_table(Parser *parser) {
     Token *table_token = get_current_token(parser);
 
     if (!table_token || table_token->type != IDENTIFIER) {
-        printf("parse_create_table: Table identifier name doesn't exist after CREATE TABLE.");
+        printf("parse_create_table: Table identifier name doesn't exist after CREATE TABLE.\n");
         return NULL;
     }
 
@@ -1188,7 +1192,7 @@ ASTNode *parse_create_table(Parser *parser) {
     Token *current_token = get_current_token(parser);
 
     if (!current_token || strcmp(current_token->token, "(")) {
-        printf("parse_create_table: Opening '(' is missing.");
+        printf("parse_create_table: Opening '(' is missing.\n");
         return NULL; 
     }
 
@@ -1212,7 +1216,7 @@ ASTNode *parse_create_table(Parser *parser) {
     // Parse column definitions
     root->node_contents.create_table.columns = parse_columns(parser);
     if (!root->node_contents.create_table.columns) {
-        printf("parse_create_table: Invalid column definitions");
+        printf("parse_create_table: Invalid column definitions\n");
         ast_free_node(root);
         return NULL;
     }
@@ -1279,7 +1283,7 @@ ASTNode *parse_create_table(Parser *parser) {
     current = get_current_token(parser);
 
     if (!current || strcmp(current->token, ")")) {
-        printf("parse_create_table: Expected ')'.");
+        printf("parse_create_table: Expected ')'.\n");
         ast_free_node(root);
         return NULL;
     }
@@ -1305,7 +1309,7 @@ ASTNode *parse_drop_table(Parser *parser) {
     if (!drop_table_token ||
         drop_table_token->type != KEYWORD ||
         strcasecmp(drop_table_token->token, "DROP TABLE")) {
-        printf("parse_drop_table: DROP TABLE is required");
+        printf("parse_drop_table: DROP TABLE is required\n");
         return NULL;
     }
 
@@ -1315,7 +1319,7 @@ ASTNode *parse_drop_table(Parser *parser) {
     Token *table_name = get_current_token(parser);
 
     if (!table_name || table_name->type != IDENTIFIER) {
-        printf("parse_drop_table: table name is required");
+        printf("parse_drop_table: table name is required\n");
         return NULL;
     }
 
@@ -1354,7 +1358,7 @@ ASTNode *parse_truncate_table(Parser *parser) {
     if (!truncate_table_token ||
         truncate_table_token->type != KEYWORD ||
         strcasecmp(truncate_table_token->token, "TRUNCATE TABLE")) {
-        printf("parse_trucate_table: TRUNCATE TABLE is required");
+        printf("parse_trucate_table: TRUNCATE TABLE is required\n");
         return NULL;
     }
 
@@ -1364,7 +1368,7 @@ ASTNode *parse_truncate_table(Parser *parser) {
     Token *table_name = get_current_token(parser);
 
     if (!table_name || table_name->type != IDENTIFIER) {
-        printf("parse_truncate_table: table name is required");
+        printf("parse_truncate_table: table name is required\n");
         return NULL;
     }
 
@@ -1722,7 +1726,7 @@ FromNode *parse_from(Parser *parser) {
     if (!from_token ||
         from_token->type != KEYWORD ||
         strcasecmp(from_token->token, "FROM")) {
-        printf("parse_from: FROM token is NULL.");
+        printf("parse_from: FROM token is NULL.\n");
         return NULL;
     }
 
@@ -1739,7 +1743,7 @@ FromNode *parse_from(Parser *parser) {
         Token *table_token = get_current_token(parser);
 
         if (!table_token || table_token->type != IDENTIFIER) {
-            printf("parse_from: Expected table identifier.");
+            printf("parse_from: Expected table identifier.\n");
             ast_free_from(from);
             return NULL;
         }
@@ -1848,7 +1852,7 @@ IntoNode *parse_into(Parser *parser) {
     if (!into_token ||
         into_token->type != KEYWORD ||
         strcasecmp(into_token->token, "INTO")) {
-        printf("parse_into: INTO keyword doesn't exist.");
+        printf("parse_into: INTO keyword doesn't exist.\n");
         return NULL;
     }
     
@@ -1858,7 +1862,7 @@ IntoNode *parse_into(Parser *parser) {
     Token *table_token = get_current_token(parser);
 
     if (!table_token || table_token->type != IDENTIFIER) {
-        printf("parse_into: Table identifier name doesn't exist after INTO.");
+        printf("parse_into: Table identifier name doesn't exist after INTO.\n");
         return NULL;
     }
 
@@ -1893,7 +1897,7 @@ IntoNode *parse_into(Parser *parser) {
         Token *column_token = get_current_token(parser);
 
         if (!column_token || column_token->type != IDENTIFIER) {
-            printf("parse_into: Expected column identifier.");
+            printf("parse_into: Expected column identifier.\n");
             ast_free_into(into);
             return NULL;
         }
@@ -1946,7 +1950,7 @@ IntoNode *parse_into(Parser *parser) {
 
         // Otherwise, a comma is required after a column name
         if (strcmp(current->token, ",")) {
-            printf("parse_into: expected ',' or ')'.");
+            printf("parse_into: expected ',' or ')'.\n");
             ast_free_into(into);
             return NULL;
         }
@@ -1973,7 +1977,7 @@ ValuesNode *parse_values(Parser *parser) {
     if (!values_token ||
         values_token->type != KEYWORD ||
         strcasecmp(values_token->token, "VALUES")) {
-        printf("parse_values: VALUES keyword doesn't exist.");
+        printf("parse_values: VALUES keyword doesn't exist.\n");
         return NULL;
     }
     
@@ -1983,7 +1987,7 @@ ValuesNode *parse_values(Parser *parser) {
 
     // If there's no opening "(" that lists the values expressions, we have invalid syntax 
     if (!current || strcmp(current->token, "(")) {
-        printf("parse_values: Expected '('.");
+        printf("parse_values: Expected '('.\n");
         return NULL;
     }    
 
@@ -1999,7 +2003,7 @@ ValuesNode *parse_values(Parser *parser) {
     current = get_current_token(parser);
 
     if (!current || !strcmp(current->token, ")")) {
-        printf("parse_values: Expected at least one value expression.");
+        printf("parse_values: Expected at least one value expression.\n");
         ast_free_values(values);
         return NULL;
     }
@@ -2009,7 +2013,7 @@ ValuesNode *parse_values(Parser *parser) {
         ExpressionNode *expression = parse_expression(parser);
 
         if (!expression) {
-            printf("parse_values: Invalid value expression.");
+            printf("parse_values: Invalid value expression.\n");
             ast_free_values(values);
             return NULL;
         }
@@ -2032,7 +2036,7 @@ ValuesNode *parse_values(Parser *parser) {
         current = get_current_token(parser);
 
         if (!current) {
-            printf("parse_values: Unexpected end of VALUES clause.");
+            printf("parse_values: Unexpected end of VALUES clause.\n");
             ast_free_values(values);
             return NULL;
         }
@@ -2045,7 +2049,7 @@ ValuesNode *parse_values(Parser *parser) {
 
         // Otherwise, a comma must follow the latest parsed expression
         if(strcmp(current->token, ",")) {
-            printf("parse_values: Expected ',' or ')'.");
+            printf("parse_values: Expected ',' or ')'.\n");
             ast_free_values(values);
             return NULL;
         }
@@ -2072,7 +2076,7 @@ SetNode *parse_set(Parser *parser) {
     if (!set_token ||
         set_token->type != KEYWORD ||
         strcasecmp(set_token->token, "SET")) {
-        printf("parse_set: SET token is NULL.");
+        printf("parse_set: SET token is NULL.\n");
         return NULL;
     }
 
@@ -2090,7 +2094,7 @@ SetNode *parse_set(Parser *parser) {
         Token *column_token = get_current_token(parser);
 
         if (!column_token || column_token->type != IDENTIFIER) {
-            printf("parse_set: Expected column identifier.");
+            printf("parse_set: Expected column identifier.\n");
             ast_free_set(set);
             return NULL;
         }
@@ -2107,7 +2111,7 @@ SetNode *parse_set(Parser *parser) {
         if (!equals_token ||
             equals_token->type != OPERATOR ||
             strcmp(equals_token->token, "=")) {
-            printf("parse_set: Expected '=' after column identifier.");
+            printf("parse_set: Expected '=' after column identifier.\n");
             ast_free_set(set);
             return NULL;
         }
@@ -2118,7 +2122,7 @@ SetNode *parse_set(Parser *parser) {
         assignment.value = parse_expression(parser);
 
         if (!assignment.value) {
-            printf("parse_set: Invalid assignment expression.");
+            printf("parse_set: Invalid assignment expression.\n");
             ast_free_set(set);
             return NULL;
         }
@@ -2378,7 +2382,7 @@ ColumnDefNode *parse_column_def(Parser *parser) {
             return NULL;
         }
 
-        Token *current = get_current_token(parser);
+        current = get_current_token(parser);
 
         if (!current || current->type != PUNCTUATION || strcmp(current->token, ")")) {
             printf("parse_column_def: Expected ) after type parameter");
