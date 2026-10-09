@@ -11,7 +11,8 @@ BIN_DIR := bin
 TESTS_DIR := tests
 
 # Convert list of src files to object files
-SRC := $(wildcard $(SRC_DIR)/btree/*.c) \
+SRC := $(wildcard $(SRC_DIR)/ast/*.c) \
+		$(wildcard $(SRC_DIR)/btree/*.c) \
 		$(wildcard $(SRC_DIR)/constraints/*.c) \
 		$(wildcard $(SRC_DIR)/catalog/*.c) \
 		$(wildcard $(SRC_DIR)/database/*.c) \
@@ -20,11 +21,12 @@ SRC := $(wildcard $(SRC_DIR)/btree/*.c) \
 		$(wildcard $(SRC_DIR)/expressions/*.c) \
 		$(wildcard $(SRC_DIR)/index/*.c) \
 		$(wildcard $(SRC_DIR)/pager/*.c) \
+		$(wildcard $(SRC_DIR)/parser/*.c) \
 		$(wildcard $(SRC_DIR)/row/*.c) \
 		$(wildcard $(SRC_DIR)/schema/*.c) \
 		$(wildcard $(SRC_DIR)/serialize/*.c) \
 		$(wildcard $(SRC_DIR)/table/*.c) \
-		$(wildcard $(SRC_DIR)/tokenizer/*.c)
+		$(wildcard $(SRC_DIR)/tokenizer/*.c) \
 
 OBJ := $(SRC:$(SRC_DIR)/%.c=$(BUILD_DIR)/%.o)
 TESTS := $(wildcard $(TESTS_DIR)/*.c)
