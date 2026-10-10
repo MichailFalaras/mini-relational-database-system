@@ -29,7 +29,6 @@ typedef struct ast_column_def ColumnDefNode;
 typedef struct ast_constraints ConstraintsNode;
 typedef struct ast_alter_action AlterActionNode;
 
-
 /* ---------- Deallocation Helpers ---------- */
 
 /* Top-level Deallocation Helpers */
@@ -87,11 +86,13 @@ void ast_free_columns(ColumnsNode *columns);
 
 void ast_free_column_def(ColumnDefNode *column_def);
 
-void ast_free_column_constraints(ConstraintsNode *constraints, uint32_t count);
+void ast_free_constraint(ConstraintNode *constraint);
 
-void ast_free_constraints(ConstraintsNode **constraints, uint32_t count);
+void ast_free_constraints(ConstraintNode **constraints, uint32_t count);
 
-void ast_free_constraint_contents(ConstraintsNode *constraint);
+void ast_free_constraint_contents(ConstraintNode *constraint);
+
+void ast_free_alter_action_contents(AlterActionNode *action);
 
 void ast_free_alter_actions(AlterActionNode *actions, uint32_t num_actions);
 

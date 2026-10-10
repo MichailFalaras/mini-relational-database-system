@@ -78,7 +78,7 @@
     box-shadow: none;
 }
 
-#active-db-signal.connected {
+#active-db-signal.open {
     background-color: #16A34A;
     box-shadow: 0 0 5px rgba(22,163,74,0.5);
 }

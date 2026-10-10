@@ -1,176 +1,165 @@
 import { useState } from "react";
-import { X, Eye, EyeOff, AlertCircle, Loader2 } from "lucide-react";
+import { X, AlertCircle, Loader2, Download } from "lucide-react";
 import "./../styles/create-database-modal.css";
 
 
 function CreateDatabaseModal({ onCreate, onCancel }) {
-	const [form, setForm] = useState({
-		databaseName: "",
-		username: "",
-		password: "",
-		confirmPassword: ""
-	});
-	const [showPassword, setShowPassword] = useState(false);
+	const [name, setName] = useState("");
+	const [location, setLocation] = useState("");
 	const [error, setError] = useState("");
-	const [connecting, setConnecting] = useState(false);
+	const [creating, setCreating] = useState(false);
 
+	const cleanName = name.trim().replace(/\s+/g, "_").toLowerCase();
 
-	async function handleCreateDatabase(event) {
+	function handleNameChange(event) {
+		setName(event.target.value);
+		setError("");
+	}
+
+	function handleBrowse() {
+		if (!cleanName) {
+			setError("Enter a database name first.");
+			return;
+		}
+
+		setError("");
+
+		// TODO: Open native save-location picker.
+	}
+
+	async function handleSubmit(event) {
 		event.preventDefault();
+
 		setError("");
 		
-		if (!form?.databaseName?.trim()) { 
+		if (!cleanName) { 
 			setError("Database name is required."); 
 			return; 
 		}
 
-		if (!form?.username?.trim()) { 
-			setError("Username is required."); 
-			return; 
+		if (!/^[a-z_][a-z0-9_]*$/.test(cleanName)) {
+			setError("Use only lowercase letters, digits, and underscores.");
+			return;
 		}
 
-		if (!form?.password?.trim()) { 
-			setError("Password is required."); 
-			return; 
-		}
-
-		if (form?.password?.length < 8) { 
-			setError("Password must be at least 8 characters."); 
-			return; 
-		}
-
-		if (!form?.confirmPassword.trim()) { 
-			setError("Confirmation password is required."); 
-			return; 
-		}
-		
-		if (form?.password !== form?.confirmPassword) { 
-			setError("Passwords don't match."); 
-			return; 
-		}
-
-		setConnecting(true);
+		setCreating(true);
 		
 		try {
-			await onConnect({
-				databaseName: form.databaseName.trim(),
-				username: form.username.trim(),
-				password: form.password.trim()
+			await onCreate({ 
+				databaseName: cleanName,
+				location
 			});
+		} catch (error) {
+			setError(error instanceof Error ? error.message : "Failed to create database.");
 		} finally {
-			setConnecting(false);
+			setCreating(false);
 		}
 	}
 
 
 	return (
-		<div id="create-modal-backdrop">
+		<div id="create-database-modal-backdrop">
 			<div id="create-database-modal">
-				
-				{/* Modal Header */}
-				<div id="create-modal-header">
+
+				{/* Header */}
+				<div id="create-database-modal-header">
 					<div>
-						<h2>New Connection</h2>
-						<p>Configure a new database connection</p>
+						<h2>New Database</h2>
+						<p>Create a new local MiniDB database file</p>
 					</div>
-					<button 
-						id="close-create-modal"
+
+					<button
+						id="close-create-database-modal"
+						type="button"
 						onClick={onCancel}
 					>
-						<X style={{ width: "1rem", height: "1rem" }} />
+						<X style={{ width: "1rem", height: "1rem" }}/>
 					</button>
 				</div>
 
-				{/* New Database Form Creation */}
-				<form id="create-modal-form" onSubmit={handleCreateDatabase}>
-					<div>
-						<label className="form-label">Database Name</label>
-						<input 
-							type="text"
-							className="form-input"
-							value={form?.databaseName}
-							onChange={(event) => 
-								setForm((prev) => ({
-									...prev,
-									databaseName: event.target.value
-								}))
-							}
-						/>
-					</div>
-					<div>
-						<label className="form-label">Username</label>
-						<input 
-							type="text"
-							className="form-input"
-							value={form?.username}
-							onChange={(event) => 
-								setForm((prev) => ({
-									...prev,
-									username: event.target.value
-								}))
-							}
-						/>
-					</div>
-					<div>
-						<label className="form-label">Password</label>
-						<div style={{ position: "relative"}}>
+				<form id="create-database-form" onSubmit={handleSubmit}>
 
-							<input 
-								type={showPassword ? "text" : "password"}
-								className="form-input"
-								style={{ paddingRight: "36px" }}
-								value={form?.password}
-								onChange={(event) => 
-									setForm((prev) => ({
-										...prev,
-										password: event.target.value
-									}))
-								}
+					{/* Database Name */}
+					<div className="create-database-field">
+						<label
+							className="create-database-label"
+							htmlFor="new-database-name"
+						>
+							Database Name
+						</label>
+
+						<input
+							id="new-database-name"
+							value={name}
+							onChange={handleNameChange}
+							autoFocus
+							placeholder="my_new_database"
+						/>
+					</div>
+
+					{/* Save Location */}
+					<div className="create-database-field">
+						<label className="create-database-label">
+							Save Location
+						</label>
+
+						<button
+							id="database-location-picker"
+							type="button"
+							onClick={handleBrowse}
+							className={location ? "has-location" : ""}
+						>
+							<Download style={{
+								width: "0.875rem", 
+								height: "0.875rem", 
+								flexShrink: "0", 
+								color: "#9CA3AF"
+								}}
 							/>
-							<button 
-								type="button"
-								id="show-password-btn"
-								onClick={() => setShowPassword((prev) => !prev)}
-							>
-								{showPassword 
-									? <EyeOff style={{width: "0.875rem", height: "0.875rem"}}/> 
-									: <Eye style={{width: "0.875rem", height: "0.875rem"}}/>
-								}
-							</button>
-						</div>
-					</div>
-					<div>
-						<label className="form-label">Confirm Password</label>
-						<input 
-							type="password"
-							className="form-input"
-							value={form?.confirmPassword}
-							onChange={(event) => 
-								setForm((prev) => ({
-									...prev,
-									confirmPassword: event.target.value
-								}))
-							}
-						/>
+							
+							<span id="database-location-text">
+								{location || "Choose save location…"}
+							</span>
+						</button>
+
+						{!location && cleanName && (
+							<p id="database-default-location-description">
+								Will default to{" "}
+								<span>{cleanName}.db</span>{" "}
+								in the working directory
+							</p>
+						)}
 					</div>
 
+					{/* Error */}
 					{error && (
-						<div id="create-form-error">
-							<AlertCircle style={{width: "0.875rem", height: "0.875rem", flexShrink: "0", color: "#DC2626"}} />
+						<div id="create-database-error">
+							<AlertCircle style={{
+									width: "0.875rem",
+									height: "0.875rem",
+									flexShrink: "0",
+									color: "#DC2626"
+								}}
+							/>
 							<span>{error}</span>
 						</div>
 					)}
 
-					{/* Action Buttons*/}
-					<div id="create-form-btns">
-						<button id="cancel-btn" type="button" onClick={onCancel}>
+					{/* Actions */}
+					<div id="create-database-actions">
+						<button id="cancel-create-database-btn" type="button" onClick={onCancel}>
 							Cancel
 						</button>
-						<button id="create-btn" type="submit">
-							{connecting
-								? <><Loader2 className="connect-loader"/> Connecting...</>
-								: "Connect →"
-							}
+
+						<button id="create-database-btn" type="submit">
+							{creating ? (
+								<>
+									<Loader2 className="loader-icon"/>
+									Creating...
+								</>
+							) : (
+								"Create →"
+							)}
 						</button>
 					</div>
 				</form>

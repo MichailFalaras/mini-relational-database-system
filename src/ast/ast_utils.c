@@ -231,40 +231,35 @@ void ast_free_column_def(ColumnDefNode *column_def) {
         return;
     }
 
-    // Here constraints is a contiguous ConstraintsNode array, not ConstraintsNode **.
-    ast_free_column_constraints(column_def->constraints,column_def->num_constraints);
+    ast_free_constraints(column_def->constraints, column_def->num_constraints);
 
     free(column_def);
 }
 
-void ast_free_column_constraints(ConstraintsNode *constraints, uint32_t count) {
-    if (!constraints) {
+void ast_free_constraint(ConstraintNode *constraint) {
+    if (!constraint) {
         return;
     }
 
-    for (uint32_t i = 0; i < count; i++) {
-        ast_free_constraint_contents(&constraints[i]);
-    }
-
-    free(constraints);
+    ast_free_constraint_contents(constraint);
+    free(constraint);
 }
 
-void ast_free_constraints(ConstraintsNode **constraints, uint32_t count) {
+void ast_free_constraints(ConstraintNode **constraints, uint32_t count) {
     if (!constraints) {
         return;
     }
 
     for (uint32_t i = 0; i < count; i++) {
         if (constraints[i]) {
-            ast_free_constraint_contents(constraints[i]);
-            free(constraints[i]);
+            ast_free_constraint(constraints[i]);
         }
     }
 
     free(constraints);
 }
 
-void ast_free_constraint_contents(ConstraintsNode *constraint) {
+void ast_free_constraint_contents(ConstraintNode *constraint) {
     if (!constraint) {
         return;
     }
@@ -310,24 +305,38 @@ void ast_free_constraint_contents(ConstraintsNode *constraint) {
     }
 }
 
+void ast_free_alter_action_contents(AlterActionNode *action) {
+    if (!action) {
+        return;
+    }
+
+    switch (action->type) {
+        case AST_ALTER_ADD_COLUMN:
+            ast_free_column_def(action->alter_contents.alter_add.column);
+            break;
+
+        case AST_ALTER_ADD_CONSTRAINT:
+            ast_free_constraint(
+                action->alter_contents.alter_add_constraint.constraint
+            );
+            break;
+
+        case AST_ALTER_DROP_COLUMN:
+        case AST_ALTER_RENAME_TABLE:
+        case AST_ALTER_RENAME_COLUMN:
+        case AST_ALTER_MODIFY_COLUMN:
+        case AST_ALTER_DROP_CONSTRAINT:
+            break;
+    }
+}
+
 void ast_free_alter_actions(AlterActionNode *actions, uint32_t num_actions) {
     if (!actions) {
         return;
     }
 
     for (uint32_t i = 0; i < num_actions; i++) {
-        switch (actions[i].type) {
-            case AST_ALTER_ADD:
-                ast_free_column_def(actions[i].alter_contents.alter_add.column);
-                break;
-
-            case AST_ALTER_DROP:
-            case AST_ALTER_RENAME:
-            case AST_ALTER_MODIFY:
-            case AST_ALTER_ADD_CONSTRAINT:
-            case AST_ALTER_DROP_CONSTRAINT:
-                break;
-        }
+        ast_free_alter_action_contents(&actions[i]);
     }
 
     free(actions);

@@ -115,14 +115,14 @@
     overflow: auto;
 }
 
-table {
+#results-table-select table {
     min-width: 100%;
     border-collapse: collapse;
     font-family: 'JetBrains Mono', monospace;
     font-size: 12px;
 }
 
-thead {
+#results-table-select thead {
     position: sticky;
     top: 0;
     z-index: 10;
@@ -150,6 +150,14 @@ thead {
     text-transform: uppercase;
     letter-spacing: 0.06em;
     color: #6B7280;
+}
+
+#results-table-no-rows {
+    padding: 2rem 1rem;
+    text-align: center;
+    font-family: Inter, sans-serif;
+    font-size: 0.875rem;
+    color: #9CA3AF;
 }
 
 .table-row {

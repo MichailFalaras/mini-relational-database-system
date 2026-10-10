@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "../../include/database.h"
 #include "../../include/tokenizer.h"
 #include "../../include/parser.h"
 #include "parser_utils.h"
