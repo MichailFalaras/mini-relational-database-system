@@ -1,12 +1,9 @@
 #ifndef AST_H_
 #define AST_H_
 
-#include <stdint.h>
-#include <stdbool.h>
+#include "data_types.h"
 
 typedef struct expression_node ExpressionNode;
-#include "data_types.h"
-#include "constraints.h"
 
 typedef enum ast_node_type {
     AST_SELECT,
@@ -175,7 +172,7 @@ typedef struct ast_default_constraint {
     ExpressionNode *default_expr;
 } DefaultConstraintNode;
 
-typedef struct ast_constraints {
+typedef struct ast_constraint {
     char constraint_name[64];
     ASTConstraintType type;
 
@@ -188,12 +185,21 @@ typedef struct ast_constraints {
         DefaultConstraintNode default_value;
     } constraint_data;
 
-} ConstraintsNode;
+} ConstraintNode;
+
+// Data type arguments for CHAR(length), VARCHAR(length), NUMERIC(precision, scale)
+typedef struct type_node_args {
+    uint32_t length;
+    uint32_t precision;
+    uint32_t scale;
+} TypeNodeArgs;
 
 typedef struct ast_column_def {
     char column_name[64];
     DataType type;
-    ConstraintsNode *constraints;
+    TypeNodeArgs type_args;
+
+    ConstraintNode **constraints;
     uint32_t num_constraints;
 } ColumnDefNode;
 
@@ -205,7 +211,7 @@ typedef struct ast_columns {
 typedef struct ast_create_table {
     char table_name[64];
     ColumnsNode *columns;
-    ConstraintsNode **constraints;
+    ConstraintNode **constraints;
     uint32_t num_constraints;
 } CreateTableNode;
 
@@ -226,18 +232,18 @@ typedef struct ast_alter_rename_table {
 } AlterRenameTableNode;
 
 typedef struct ast_alter_rename_col {
+    char old_col_name[64];
     char new_col_name[64];
 } AlterRenameColNode;
 
 typedef struct ast_alter_modify {
     char column_name[64];
     DataType new_type;
+    TypeNodeArgs type_args;
 } AlterModifyNode;
 
 typedef struct ast_alter_add_constraint {
-    char constraint_name[64];
-    ASTConstraintType new_type;
-    char column_name[64];
+    ConstraintNode *constraint;
 } AlterAddConstraintNode;
 
 typedef struct ast_alter_drop_constraint {
@@ -245,10 +251,11 @@ typedef struct ast_alter_drop_constraint {
 } AlterDropConstraintNode;
 
 typedef enum ast_alter_types {
-    AST_ALTER_ADD,
-    AST_ALTER_DROP,
-    AST_ALTER_RENAME,
-    AST_ALTER_MODIFY,
+    AST_ALTER_ADD_COLUMN,
+    AST_ALTER_DROP_COLUMN,
+    AST_ALTER_RENAME_TABLE,
+    AST_ALTER_RENAME_COLUMN,
+    AST_ALTER_MODIFY_COLUMN,
     AST_ALTER_ADD_CONSTRAINT,
     AST_ALTER_DROP_CONSTRAINT
 } ASTAlterType;
@@ -287,7 +294,6 @@ typedef struct ast_create_index {
 
 typedef struct ast_drop_index {
     char index_name[64];
-    char table_name[64];
 } DropIndexNode;
 
 typedef struct abstract_syntax_tree_node {

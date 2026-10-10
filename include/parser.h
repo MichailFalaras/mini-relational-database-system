@@ -2,9 +2,12 @@
 #define PARSER_H_
 
 #include <stdint.h>
-#include "tokenizer.h"
-#include "ast.h"
-#include "database.h"
+#include <stdbool.h>
+
+typedef struct abstract_syntax_tree_node ASTNode;
+typedef struct token_array TokenArray;
+typedef struct database Database;
+typedef struct expression_node ExpressionNode;
 
 typedef enum statement_type {
     STMT_CREATE_TABLE = 0,

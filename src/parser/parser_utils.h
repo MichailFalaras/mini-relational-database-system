@@ -1,9 +1,30 @@
 #ifndef PARSER_UTILS_H_
 #define PARSER_UTILS_H_
 
+
+#include <stdint.h>
+#include <stdbool.h>
+
+typedef enum data_types DataType;
+typedef struct value Value;
+typedef struct token_struct Token;
 typedef struct parser Parser;
-#include "../../include/ast.h"
-#include "../../include/expressions.h"
+typedef enum statement_type StatementType;
+
+typedef struct ast_from FromNode;
+typedef struct ast_where WhereNode;
+typedef struct ast_into IntoNode;
+typedef struct ast_values ValuesNode;
+typedef struct ast_set SetNode;
+typedef struct ast_columns ColumnsNode;
+typedef struct ast_column_def ColumnDefNode;
+typedef struct ast_constraint ConstraintNode;
+typedef struct ast_alter_action AlterActionNode;
+typedef enum ast_node_type ASTNodeType;
+typedef struct abstract_syntax_tree_node ASTNode;
+
+typedef enum operator_type OperatorType;
+typedef struct expression_node ExpressionNode;
 
 /* ASTNodeType to StatementType. */
 StatementType ast_to_statement_type(ASTNodeType type);
@@ -11,11 +32,20 @@ StatementType ast_to_statement_type(ASTNodeType type);
 /* Token string to OperatorType. */
 OperatorType token_str_to_operator_type(char *token_str);
 
+/* Token string to DataType */
+DataType token_str_to_data_type(char *token_str);
+
 /* Check if Token string is a specific OperatorType. */
 bool is_token_operator(char *token_str, OperatorType type);
 
 /* Check if Token string is specifically a comparison operator. */
 bool is_token_comparison_operator(char *token_str);
+
+/* Check if current token is the start of a column-level constraint */
+bool is_column_constraint_start(Token *token);
+
+/* Check if current token is the start of a table-level constraint */
+bool is_table_constraint_start(Token *token);
 
 /* Validate that there is a token for Parser's current position in the TokenArray.
  * Then return Token* .*/
@@ -77,9 +107,9 @@ ASTNode *parse_create_table(Parser *parser);
 
 ASTNode *parse_drop_table(Parser *parser);
 
-ASTNode *parse_alter_table(Parser *parser);
-
 ASTNode *parse_truncate_table(Parser *parser);
+
+ASTNode *parse_alter_table(Parser *parser);
 
 ASTNode *parse_create_index(Parser *parser);
 
@@ -96,5 +126,39 @@ IntoNode *parse_into(Parser *parser);
 ValuesNode *parse_values(Parser *parser);
 
 SetNode *parse_set(Parser *parser);
+
+ColumnsNode *parse_columns(Parser *parser);
+
+ColumnDefNode *parse_column_def(Parser *parser);
+
+ConstraintNode *parse_constraint(Parser *parser, const char *column_name);
+
+bool parse_primary_key_constraint(Parser *parser, ConstraintNode *constraint, const char *column_name);
+
+bool parse_unique_constraint(Parser *parser, ConstraintNode *constraint, const char *column_name);
+
+bool parse_not_null_constraint(Parser *parser, ConstraintNode *constraint, const char *column_name);
+
+bool parse_foreign_key_constraint(Parser *parser, ConstraintNode *constraint, const char *column_name);
+
+bool parse_check_constraint(Parser *parser, ConstraintNode *constraint);
+
+bool parse_default_constraint(Parser *parser, ConstraintNode *constraint, const char *column_name);
+
+bool parse_constraint_column_list(Parser *parser, ExpressionNode ***column_refs, uint32_t *num_columns);
+
+bool parse_alter_add_col(Parser *parser, AlterActionNode *action);
+
+bool parse_alter_drop_col(Parser *parser, AlterActionNode *action);
+
+bool parse_alter_rename_table(Parser *parser, AlterActionNode *action);
+
+bool parse_alter_rename_col(Parser *parser, AlterActionNode *action);
+
+bool parse_alter_modify_col(Parser *parser, AlterActionNode *action);
+
+bool parse_alter_add_constraint(Parser *parser, AlterActionNode *action);
+
+bool parse_alter_drop_constraint(Parser *parser, AlterActionNode *action);
 
 #endif

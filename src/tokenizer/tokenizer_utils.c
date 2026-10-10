@@ -167,12 +167,14 @@ bool iskeyword(char *token, bool *double_token_keyword) {
 
     /* Double Token KEYWORDs. */
     if (!strcasecmp(token, "CREATE TABLE")
-        || !strcasecmp(token, "ALTER TABLE") 
-        || !strcasecmp(token, "TRUNCATE TABLE") 
-        || !strcasecmp(token, "DROP TABLE") 
-        || !strcasecmp(token, "CREATE INDEX") 
-        || !strcasecmp(token, "DROP INDEX") 
-        || !strcasecmp(token, "GROUP BY") 
+        || !strcasecmp(token, "ALTER TABLE")
+        || !strcasecmp(token, "TRUNCATE TABLE")
+        || !strcasecmp(token, "DROP TABLE")
+        || !strcasecmp(token, "DROP INDEX")
+        || !strcasecmp(token, "DROP COLUMN")
+        || !strcasecmp(token, "DROP CONSTRAINT")
+        || !strcasecmp(token, "CREATE INDEX")
+        || !strcasecmp(token, "GROUP BY")
         || !strcasecmp(token, "ORDER BY")) {
         return true;
     }
@@ -219,6 +221,48 @@ bool iskeyword(char *token, bool *double_token_keyword) {
         || !strcasecmp(token, "NULL")
         || !strcasecmp(token, "IN")
         || !strcasecmp(token, "BETWEEN")) {
+        *double_token_keyword = false;
+        return true;
+    }
+
+    // SQL Data Types
+    if (!strcasecmp(token, "INTEGER")
+        || !strcasecmp(token, "INT")
+        || !strcasecmp(token, "UNSIGNED")
+        || !strcasecmp(token, "NUMERIC")
+        || !strcasecmp(token, "FLOAT")
+        || !strcasecmp(token, "DOUBLE")
+        || !strcasecmp(token, "CHAR")
+        || !strcasecmp(token, "VARCHAR")
+        || !strcasecmp(token, "TEXT")
+        || !strcasecmp(token, "DATE")
+        || !strcasecmp(token, "TIMESTAMP")
+        || !strcasecmp(token, "BLOB")
+        || !strcasecmp(token, "JSONB")
+        || !strcasecmp(token, "BOOL")) {
+        *double_token_keyword = false;
+        return true;
+    }
+
+    // Constraint-related keywords
+    if (!strcasecmp(token, "CONSTRAINT")
+        || !strcasecmp(token, "PRIMARY")
+        || !strcasecmp(token, "FOREIGN")
+        || !strcasecmp(token, "KEY")
+        || !strcasecmp(token, "UNIQUE")
+        || !strcasecmp(token, "CHECK")
+        || !strcasecmp(token, "REFERENCES")
+        || !strcasecmp(token, "DEFAULT")) {
+        *double_token_keyword = false;
+        return true;
+    }
+
+    // ALTER TABLE-related keywords
+    if (!strcasecmp(token, "ADD")
+        || !strcasecmp(token, "COLUMN")
+        || !strcasecmp(token, "RENAME")
+        || !strcasecmp(token, "TO")
+        || !strcasecmp(token, "MODIFY")) {
         *double_token_keyword = false;
         return true;
     }
