@@ -7,7 +7,7 @@
 #include "parser_utils.h"
 #include "../../include/expressions.h"
 #include "../../include/ast.h"
-
+#include "../../include/database.h"
 
 /* Allocate and initialize Parser component. */
 Parser *parser_init(TokenArray *token_array) {
@@ -47,10 +47,12 @@ Statement *parse_query(Parser *parser, Database *db) {
         return NULL;
     }
     
+    #if 0
     if (!bind_statement(root, db)) {
         ast_free_node(root);
         return NULL;
     }
+    #endif
     
     StatementType type = ast_to_statement_type(root->type);
 
@@ -182,6 +184,8 @@ Statement *statement_init(ASTNode *root, StatementType type) {
 
     return statement;
 }
+
+// bool bind_statement(ASTNode *root, Database *db);
 
 /* Deallocate Parser component*/
 void parser_free(Parser *parser) {

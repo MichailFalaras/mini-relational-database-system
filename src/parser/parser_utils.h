@@ -87,7 +87,7 @@ ExpressionNode *parse_postfix_expression(Parser *parser, ExpressionNode **operan
 /* Parse literal expressions. */
 ExpressionNode *parse_literal_expression(Parser *parser);
 
-/* Identify INTEGER or NUMERIC literal. */
+/* Identify UNSIGNED INTEGER or NUMERIC literal. */
 Value *create_number_literal(Parser *parser);
 
 /* Identify if string is CHAR(n), DATE, TIMESTAMP or BOOL. */
