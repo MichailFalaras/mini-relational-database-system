@@ -2280,6 +2280,162 @@ static int test_parsing_or_expressions() {
     return 0;
 }
 
+static int test_parsing_expressions() {
+
+    /* ----- COMPLETE MIXED-PRECEDENCE EXPRESSION ----- */
+    {
+        char *query = strdup("placeholder NOT age + 1 >= 18 AND active = TRUE OR score * 2 > 100;");
+        Tokenizer *tokenizer = tokenizer_init(query);
+        if (!tokenizer) { return -1; }
+        TokenArray *token_array = tokenize_query(tokenizer);
+        if (!token_array) { return -1; }
+        Parser *parser = parser_init(token_array);
+        if (!parser) { return -1; }
+        consume_token(parser);
+
+        ExpressionNode *expr = parse_expression(parser);
+        ASSERT(expr != NULL);
+        ASSERT(expr->type == EXPR_BINARY);
+        ASSERT(expr->expression_data.binary_expr.op == OP_OR);
+
+        ExpressionNode *left = expr->expression_data.binary_expr.left_operand;
+        ExpressionNode *right = expr->expression_data.binary_expr.right_operand;
+
+        ASSERT(left->type == EXPR_BINARY);
+        ASSERT(left->expression_data.binary_expr.op == OP_AND);
+        ASSERT(left->expression_data.binary_expr.left_operand->type == EXPR_UNARY);
+        ASSERT(left->expression_data.binary_expr.left_operand->expression_data.unary_expr.op == OP_NOT);
+        ASSERT(left->expression_data.binary_expr.left_operand->expression_data.unary_expr.operand->type == EXPR_BINARY);
+        ASSERT(left->expression_data.binary_expr.left_operand->expression_data.unary_expr.operand->expression_data.binary_expr.op == OP_GTE);
+        ASSERT(left->expression_data.binary_expr.right_operand->type == EXPR_BINARY);
+        ASSERT(left->expression_data.binary_expr.right_operand->expression_data.binary_expr.op == OP_EQ);
+
+        ASSERT(right->type == EXPR_BINARY);
+        ASSERT(right->expression_data.binary_expr.op == OP_GT);
+        ASSERT(right->expression_data.binary_expr.left_operand->type == EXPR_BINARY);
+        ASSERT(right->expression_data.binary_expr.left_operand->expression_data.binary_expr.op == OP_MUL);
+        ASSERT(strcmp(get_current_token(parser)->token, ";") == 0);
+
+        expression_node_free(expr);
+        tokenizer_free(tokenizer);
+        parser_free(parser);
+    }
+
+    /* ----- POSTFIX + LOGICAL PRECEDENCE IN FULL EXPRESSION ----- */
+    {
+        char *query = strdup("placeholder department IS NOT NULL AND salary BETWEEN 1000 AND 2000 OR active = TRUE;");
+        Tokenizer *tokenizer = tokenizer_init(query);
+        if (!tokenizer) { return -1; }
+        TokenArray *token_array = tokenize_query(tokenizer);
+        if (!token_array) { return -1; }
+        Parser *parser = parser_init(token_array);
+        if (!parser) { return -1; }
+        consume_token(parser);
+
+        ExpressionNode *expr = parse_expression(parser);
+        ASSERT(expr != NULL);
+        ASSERT(expr->type == EXPR_BINARY);
+        ASSERT(expr->expression_data.binary_expr.op == OP_OR);
+        ASSERT(expr->expression_data.binary_expr.left_operand->type == EXPR_BINARY);
+        ASSERT(expr->expression_data.binary_expr.left_operand->expression_data.binary_expr.op == OP_AND);
+        ASSERT(expr->expression_data.binary_expr.left_operand->expression_data.binary_expr.left_operand->type == EXPR_IS_NOT_NULL);
+        ASSERT(expr->expression_data.binary_expr.left_operand->expression_data.binary_expr.right_operand->type == EXPR_BETWEEN);
+        ASSERT(expr->expression_data.binary_expr.right_operand->type == EXPR_BINARY);
+        ASSERT(expr->expression_data.binary_expr.right_operand->expression_data.binary_expr.op == OP_EQ);
+
+        expression_node_free(expr);
+        tokenizer_free(tokenizer);
+        parser_free(parser);
+    }
+
+    /* ----- EXPRESSION MUST STOP AT FROM ----- */
+    {
+        char *query = strdup("placeholder a + b * 2 FROM table;");
+        Tokenizer *tokenizer = tokenizer_init(query);
+        if (!tokenizer) { return -1; }
+        TokenArray *token_array = tokenize_query(tokenizer);
+        if (!token_array) { return -1; }
+        Parser *parser = parser_init(token_array);
+        if (!parser) { return -1; }
+        consume_token(parser);
+
+        ExpressionNode *expr = parse_expression(parser);
+        ASSERT(expr != NULL);
+        ASSERT(expr->type == EXPR_BINARY);
+        ASSERT(expr->expression_data.binary_expr.op == OP_ADD);
+        ASSERT(strcmp(get_current_token(parser)->token, "FROM") == 0);
+
+        expression_node_free(expr);
+        tokenizer_free(tokenizer);
+        parser_free(parser);
+    }
+
+    /* ----- EXPRESSION MUST STOP AT ORDER BY ----- */
+    {
+        char *query = strdup("placeholder score >= 10 ORDER BY score;");
+        Tokenizer *tokenizer = tokenizer_init(query);
+        if (!tokenizer) { return -1; }
+        TokenArray *token_array = tokenize_query(tokenizer);
+        if (!token_array) { return -1; }
+        Parser *parser = parser_init(token_array);
+        if (!parser) { return -1; }
+        consume_token(parser);
+
+        ExpressionNode *expr = parse_expression(parser);
+        ASSERT(expr != NULL);
+        ASSERT(expr->type == EXPR_BINARY);
+        ASSERT(expr->expression_data.binary_expr.op == OP_GTE);
+        ASSERT(strcmp(get_current_token(parser)->token, "ORDER BY") == 0);
+
+        expression_node_free(expr);
+        tokenizer_free(tokenizer);
+        parser_free(parser);
+    }
+
+    /* ----- EXPRESSION MUST STOP AT COMMA ----- */
+    {
+        char *query = strdup("placeholder a + 1, b + 2;");
+        Tokenizer *tokenizer = tokenizer_init(query);
+        if (!tokenizer) { return -1; }
+        TokenArray *token_array = tokenize_query(tokenizer);
+        if (!token_array) { return -1; }
+        Parser *parser = parser_init(token_array);
+        if (!parser) { return -1; }
+        consume_token(parser);
+
+        ExpressionNode *expr = parse_expression(parser);
+        ASSERT(expr != NULL);
+        ASSERT(strcmp(get_current_token(parser)->token, ",") == 0);
+
+        expression_node_free(expr);
+        tokenizer_free(tokenizer);
+        parser_free(parser);
+    }
+
+    /* ----- EXPRESSION MUST STOP AT CLOSING PARENTHESIS ----- */
+    {
+        char *query = strdup("placeholder a + 1) FROM table;");
+        Tokenizer *tokenizer = tokenizer_init(query);
+        if (!tokenizer) { return -1; }
+        TokenArray *token_array = tokenize_query(tokenizer);
+        if (!token_array) { return -1; }
+        Parser *parser = parser_init(token_array);
+        if (!parser) { return -1; }
+        consume_token(parser);
+
+        ExpressionNode *expr = parse_expression(parser);
+        ASSERT(expr != NULL);
+        ASSERT(strcmp(get_current_token(parser)->token, ")") == 0);
+
+        expression_node_free(expr);
+        tokenizer_free(tokenizer);
+        parser_free(parser);
+    }
+
+    return 0;
+}
+
+
 /* ---------- Logging Helper ---------- */
 
 void generate_output(int result, int test_num, char *test_desc) {
@@ -2315,6 +2471,8 @@ int main(int argc, char *argv[]) {
     generate_output(result, 9, "test_parsing_and_expressions");
     result = test_parsing_or_expressions();
     generate_output(result, 10, "test_parsing_or_expressions");
+    result = test_parsing_expressions();
+    generate_output(result, 11, "test_parsing_expressions");
 
     printf("> TESTS RAN SUCCESSFULLY\n");
     return 0;
