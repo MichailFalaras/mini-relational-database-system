@@ -26,7 +26,7 @@ SRC := $(wildcard $(SRC_DIR)/ast/*.c) \
 		$(wildcard $(SRC_DIR)/schema/*.c) \
 		$(wildcard $(SRC_DIR)/serialize/*.c) \
 		$(wildcard $(SRC_DIR)/table/*.c) \
-		$(wildcard $(SRC_DIR)/tokenizer/*.c) \
+		$(wildcard $(SRC_DIR)/tokenizer/*.c)
 
 OBJ := $(SRC:$(SRC_DIR)/%.c=$(BUILD_DIR)/%.o)
 TESTS := $(wildcard $(TESTS_DIR)/*.c)
