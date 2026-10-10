@@ -52,7 +52,7 @@ ExpressionNode *parse_expression(Parser *parser);
 extern Statement *statement_init(ASTNode *root, StatementType type);
 
 /* Inside parse_query, last check of AST validity. */
-// extern bool bind_statement(ASTNode *root, Database *db);
+extern bool bind_statement(ASTNode *root, Database *db);
 
 /* Deallocate Parser component*/
 extern void parser_free(Parser *parser);
