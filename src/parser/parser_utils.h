@@ -11,8 +11,16 @@ typedef struct token_struct Token;
 typedef struct parser Parser;
 typedef enum statement_type StatementType;
 
+typedef struct ast_projection ProjectionNode;
 typedef struct ast_from FromNode;
+typedef struct ast_join JoinNode;
+typedef struct ast_on OnNode;
 typedef struct ast_where WhereNode;
+typedef struct ast_group_by GroupByNode;
+typedef struct ast_having HavingNode;
+typedef struct ast_order_by OrderByNode;
+typedef struct ast_limit LimitNode;
+typedef struct ast_offset OffsetNode;
 typedef struct ast_into IntoNode;
 typedef struct ast_values ValuesNode;
 typedef struct ast_set SetNode;
@@ -24,6 +32,7 @@ typedef enum ast_node_type ASTNodeType;
 typedef struct abstract_syntax_tree_node ASTNode;
 
 typedef enum operator_type OperatorType;
+typedef enum join_type JoinType;
 typedef struct expression_node ExpressionNode;
 
 /* ASTNodeType to StatementType. */
@@ -34,6 +43,9 @@ OperatorType token_str_to_operator_type(char *token_str);
 
 /* Token string to DataType */
 DataType token_str_to_data_type(char *token_str);
+
+/* Token string to JoinType */
+JoinType token_str_to_join_type(char *token_str);
 
 /* Check if Token string is a specific OperatorType. */
 bool is_token_operator(char *token_str, OperatorType type);
@@ -117,9 +129,25 @@ ASTNode *parse_drop_index(Parser *parser);
 
 /* ---------- Parsing of Inner Query Components ---------- */
 
+JoinNode **parse_joins(Parser *parser, uint32_t *num_joins);
+
+OnNode *parse_on(Parser *parser);
+
+ProjectionNode *parse_projection(Parser *parser);
+
 FromNode *parse_from(Parser *parser);
 
 WhereNode *parse_where(Parser *parser);
+
+GroupByNode *parse_group_by(Parser *parser);
+
+HavingNode *parse_having(Parser *parser);
+
+OrderByNode *parse_order_by(Parser *parser);
+
+LimitNode *parse_limit(Parser *parser);
+
+OffsetNode *parse_offset(Parser *parser);
 
 IntoNode *parse_into(Parser *parser);
 
