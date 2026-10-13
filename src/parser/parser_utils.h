@@ -32,7 +32,7 @@ typedef enum ast_node_type ASTNodeType;
 typedef struct abstract_syntax_tree_node ASTNode;
 
 typedef enum operator_type OperatorType;
-typedef enum join_type JoinType;
+typedef enum ast_join_types JoinType;
 typedef struct expression_node ExpressionNode;
 
 /* ASTNodeType to StatementType. */
