@@ -137,6 +137,29 @@ DataType token_str_to_data_type(char *token_str) {
     return -1;
 }
 
+
+/* Token string to JoinType */
+JoinType token_str_to_join_type(char *token_str) {
+    if (!token_str) {
+        return -1;
+    }
+
+    if (!strcasecmp(token_str, "INNER")) {
+        return INNER;
+    }
+    else if (!strcasecmp(token_str, "LEFT")) {
+        return LEFT;
+    }
+    else if (!strcasecmp(token_str, "RIGHT")) {
+        return RIGHT;
+    }
+    else if (!strcasecmp(token_str, "OUTER")) {
+        return OUTER;
+    }
+
+    return -1;
+}
+
 /* Check if Token string is a specific OperatorType. */
 bool is_token_operator(char *token_str, OperatorType type) {
     if (!token_str || type >= OP_ERROR) {
@@ -983,6 +1006,149 @@ Value *create_string_literal(Parser *parser) {
 
 /* ---------- Parsing of the available Query Types ---------- */
 
+/* Parse SELECT query */
+ASTNode *parse_select(Parser *parser) {
+    if (!parser || 
+        !parser->token_array || 
+        !parser->token_array->amount_tokens || 
+        parser->current_position >= parser->token_array->amount_tokens || 
+        !parser->token_array->tokens) {
+       return NULL;
+    }
+
+    // Parse SELECT token
+    Token *select_token = get_current_token(parser);
+
+    if (!select_token ||
+        select_token->type != KEYWORD ||
+        strcasecmp(select_token->token, "SELECT")) {
+        printf("parse_select: SELECT keyword doesn't exist.\n");
+        return NULL;
+    }
+
+    consume_token(parser);
+
+    ASTNode *root = (ASTNode *) calloc(1, sizeof(ASTNode));
+
+    if (!root) {
+        return NULL;
+    }
+
+    root->type = AST_SELECT;
+
+    // Parse Column Projection list
+    root->node_contents.select.projection = parse_projection(parser);
+    if (!root->node_contents.select.projection) {
+        printf("parse_select: AST Projection node is NULL.\n");
+        ast_free_node(root);
+        return NULL;
+    }
+
+    // Parse FROM clause
+    root->node_contents.select.from = parse_from(parser);
+    if (!root->node_contents.select.from) {
+        printf("parse_select: AST From node is NULL.\n");
+        ast_free_node(root);
+        return NULL;
+    }
+
+    // Parse optional multiple JOIN clauses (current token is JOIN or a JOIN type)
+    Token *current = get_current_token(parser);
+
+    if (current && current->type == KEYWORD && 
+        (!strcasecmp(current->token, "JOIN") || !strcasecmp(current->token, "INNER") ||
+        !strcasecmp(current->token, "LEFT") || !strcasecmp(current->token, "RIGHT") ||
+        !strcasecmp(current->token, "OUTER"))) {
+
+        root->node_contents.select.joins = parse_joins(parser, &root->node_contents.select.num_joins);
+        if (!root->node_contents.select.joins) {
+            printf("parse_select: AST Joins node is NULL.\n");
+            ast_free_node(root);
+            return NULL;
+        }
+    }
+
+    // Parse optional WHERE clause
+    current = get_current_token(parser);
+
+    if (current && current->type == KEYWORD && !strcasecmp(current->token, "WHERE")) {
+        root->node_contents.select.where = parse_where(parser);
+
+        if (!root->node_contents.select.where) {
+            printf("parse_select: Invalid WHERE clause.\n");
+            ast_free_node(root);
+            return NULL;
+        }
+    }
+
+    // Parse optional GROUP BY clause
+    current = get_current_token(parser);
+
+    if (current && current->type == KEYWORD && !strcasecmp(current->token, "GROUP BY")) {
+        root->node_contents.select.group_by = parse_group_by(parser);
+
+        if (!root->node_contents.select.group_by) {
+            printf("parse_select: Invalid GROUP BY clause.\n");
+            ast_free_node(root);
+            return NULL;
+        }
+    }
+
+    // Parse optional HAVING clause
+    current = get_current_token(parser);
+
+    if (current && current->type == KEYWORD && !strcasecmp(current->token, "HAVING")) {
+        root->node_contents.select.having = parse_having(parser);
+
+        if (!root->node_contents.select.having) {
+            printf("parse_select: Invalid HAVING clause.\n");
+            ast_free_node(root);
+            return NULL;
+        }
+    }
+
+    // Parse optional ORDER BY clause
+    current = get_current_token(parser);
+
+    if (current && current->type == KEYWORD && !strcasecmp(current->token, "ORDER BY")) {
+        root->node_contents.select.order_by = parse_order_by(parser);
+
+        if (!root->node_contents.select.order_by) {
+            printf("parse_select: Invalid ORDER BY clause.\n");
+            ast_free_node(root);
+            return NULL;
+        }
+    }
+
+    // Parse optional LIMIT clause
+    current = get_current_token(parser);
+
+    if (current && current->type == KEYWORD && !strcasecmp(current->token, "LIMIT")) {
+        root->node_contents.select.limit = parse_limit(parser);
+
+        if (!root->node_contents.select.limit) {
+            printf("parse_select: Invalid LIMIT clause.\n");
+            ast_free_node(root);
+            return NULL;
+        }
+    }
+
+    // Parse optional OFFSET clause
+    current = get_current_token(parser);
+
+    if (current && current->type == KEYWORD && !strcasecmp(current->token, "OFFSET")) {
+        root->node_contents.select.offset = parse_offset(parser);
+
+        if (!root->node_contents.select.offset) {
+            printf("parse_select: Invalid OFFSET clause.\n");
+            ast_free_node(root);
+            return NULL;
+        }
+    }
+
+    return root;
+}
+
 /* Parse UPDATE query */
 ASTNode *parse_update(Parser *parser) {
     if (!parser || 
@@ -1716,6 +1882,219 @@ ASTNode *parse_drop_index(Parser *parser) {
 
 /* ---------- Parsing of Inner Query Components ---------- */
 
+/* Parse Columns list (Projection operation) after the SELECT keyword */
+ProjectionNode *parse_projection(Parser *parser) {
+    if (!parser || 
+        !parser->token_array || 
+        !parser->token_array->amount_tokens || 
+        parser->current_position >= parser->token_array->amount_tokens || 
+        !parser->token_array->tokens) {
+       return NULL;
+    }
+
+    ProjectionNode *projection = (ProjectionNode *) calloc(1, sizeof(ProjectionNode));
+
+    if (!projection) {
+        return NULL;
+    }
+
+    // Parse Column Expressions in the Projection list
+    while (true) {
+        ExpressionNode *column_expression = parse_expression(parser);
+
+        if (!column_expression) {
+            ast_free_projection(projection);
+            return NULL;
+        }
+
+        ExpressionNode **new_expressions = realloc(
+            projection->expressions,
+            (projection->num_expressions + 1) * sizeof(ExpressionNode *)
+        );
+
+        if (!new_expressions) {
+            expression_node_free(column_expression);
+            ast_free_projection(projection);
+            return NULL;
+        }
+
+        projection->expressions = new_expressions;
+        projection->expressions[projection->num_expressions] = column_expression;
+        projection->num_expressions++;
+
+        Token *current = get_current_token(parser);
+
+        // Continue to the next iteration if the next token is a comma ','
+        if (current && current->type == PUNCTUATION && !strcmp(current->token, ",")) {
+            consume_token(parser);
+            continue;
+        }
+
+        // Exit the loop if the next token is the FROM keyword
+        if (current && current->type == KEYWORD && !strcasecmp(current->token, "FROM")) {
+            break;
+        }
+
+        printf("parse_projection: Expected ',' or FROM.\n");
+        ast_free_projection(projection);
+        return NULL;
+    }
+
+    return projection;
+}
+
+/* Parse potentially multiple JOIN clauses */
+JoinNode **parse_joins(Parser *parser, uint32_t *num_joins) {
+    if (!parser || 
+        !parser->token_array || 
+        !parser->token_array->amount_tokens || 
+        parser->current_position >= parser->token_array->amount_tokens || 
+        !parser->token_array->tokens) {
+       return NULL;
+    }
+
+    if (!num_joins) {
+        return NULL;
+    }
+
+    JoinNode **joins = (JoinNode **) calloc(1, sizeof(JoinNode *));
+    
+    if (!joins) {
+        return NULL;
+    }
+
+    // Parse multiple JOIN clauses
+    while (true) {
+        JoinType join_type = INNER;
+
+        Token *current = get_current_token(parser);
+
+        if (!current || current->type != KEYWORD) {
+            ast_free_joins(joins, *num_joins);
+            return NULL;
+        }
+
+        // Parse optional join type keyword (INNER, LEFT, RIGHT, OUTER)
+        if (!strcasecmp(current->token, "INNER") || !strcasecmp(current->token, "LEFT") ||
+            !strcasecmp(current->token, "RIGHT") || !strcasecmp(current->token, "OUTER")) {
+            consume_token(parser);
+            join_type = token_str_to_join_type(current->token);
+            current = get_current_token(parser);
+        }
+            
+        // Parse mandatory JOIN keyword
+        if (!current || current->type != KEYWORD || strcasecmp(current->token, "JOIN")) {
+            ast_free_joins(joins, *num_joins);
+            return NULL;
+        }
+
+        consume_token(parser);
+
+        // Allocate extra space for a JoinNode pointer
+        JoinNode **new_joins = (JoinNode **) realloc(joins, (*num_joins + 1) * sizeof(JoinNode *));
+
+        if (!new_joins) {
+            ast_free_joins(joins, *num_joins);
+            return NULL;
+        }
+
+        joins = new_joins;
+
+        // Create new JoinNode
+        JoinNode *new_join = (JoinNode *) calloc(1, sizeof(JoinNode));
+
+        if (!new_join) {
+            ast_free_joins(joins, *num_joins);
+            return NULL;
+        }
+        
+        // Parse secondary table name
+        current = get_current_token(parser);
+
+        if (!current || current->type != IDENTIFIER) {
+            ast_free_join(new_join);
+            ast_free_joins(joins, *num_joins);
+            return NULL;
+        }
+
+        strncpy(
+            new_join->secondary_table_name,
+            current->token,
+            sizeof(new_join->secondary_table_name) - 1
+        );
+
+        consume_token(parser);
+
+        new_join->join_type = join_type;
+
+        new_join->on = parse_on(parser);
+        if (!new_join->on) {
+            ast_free_join(new_join);
+            ast_free_joins(joins, *num_joins);
+            return NULL;
+        }
+
+        // Append new JOIN to array of JoinNode pointers
+        joins[*num_joins] = new_join;
+        (*num_joins)++;
+
+        // Multiple JOIN's are separated in lines, so if they're more than 1,
+        // the next line must begin with 1 of the following keywords
+        current = get_current_token(parser);
+
+        if (current && current->type == KEYWORD &&
+            (!strcasecmp(current->token, "JOIN") ||
+            !strcasecmp(current->token, "INNER") ||
+            !strcasecmp(current->token, "LEFT") ||
+            !strcasecmp(current->token, "RIGHT") ||
+            !strcasecmp(current->token, "OUTER"))) {
+            continue;
+        }
+
+        break;
+    }
+
+    return joins;
+}
+
+/* Parse ON clause */
+OnNode *parse_on(Parser *parser) {
+    if (!parser || 
+        !parser->token_array || 
+        !parser->token_array->amount_tokens || 
+        parser->current_position >= parser->token_array->amount_tokens || 
+        !parser->token_array->tokens) {
+       return NULL;
+    }
+
+    // Parse ON keyword
+    Token *on_token = get_current_token(parser);
+
+    if (!on_token ||
+        on_token->type != KEYWORD ||
+        strcasecmp(on_token->token, "ON")) {
+        printf("parse_on: ON token is NULL.\n");
+        return NULL;
+    }
+
+    consume_token(parser);
+
+    OnNode *on = (OnNode *) calloc(1, sizeof(OnNode));
+
+    if (!on) {
+        return NULL;
+    }
+
+    on->expression = parse_expression(parser);
+
+    if (!on->expression) {
+        ast_free_on(on);
+        return NULL;
+    }
+
+    return on;
+}
+
 /* Parse FROM clause */
 FromNode *parse_from(Parser *parser) {
     if (!parser || 
@@ -1754,7 +2133,7 @@ FromNode *parse_from(Parser *parser) {
             return NULL;
         }
 
-        ExpressionNode *table = expression_node_create(EXPR_COLUMN_REF);
+        ExpressionNode *table = expression_node_create(EXPR_TABLE_REF);
 
         if (!table) {
             ast_free_from(from);
@@ -1762,9 +2141,9 @@ FromNode *parse_from(Parser *parser) {
         }
 
         strncpy(
-            table->expression_data.column_value.column_name,
+            table->expression_data.table_value.table_name,
             table_token->token,
-            sizeof(table->expression_data.column_value.column_name) - 1
+            sizeof(table->expression_data.table_value.table_name) - 1
         );
 
         consume_token(parser);
@@ -1840,6 +2219,287 @@ WhereNode *parse_where(Parser *parser) {
     }
 
     return where;
+}
+
+GroupByNode *parse_group_by(Parser *parser) {
+    if (!parser || 
+        !parser->token_array || 
+        !parser->token_array->amount_tokens || 
+        parser->current_position >= parser->token_array->amount_tokens || 
+        !parser->token_array->tokens) {
+       return NULL;
+    }
+
+    // Parse GROUP token
+    Token *group_by_token = get_current_token(parser);
+
+    if (!group_by_token ||
+        group_by_token->type != KEYWORD ||
+        strcasecmp(group_by_token->token, "GROUP BY")) {
+        printf("parse_group_by: GROUP BY keyword doesn't exist.\n");
+        return NULL;
+    }
+    
+    consume_token(parser);
+
+    GroupByNode *group_by = (GroupByNode *) calloc(1, sizeof(GroupByNode));
+
+    if (!group_by) {
+        return NULL;
+    }
+
+    // Parse potentially multiple group by expressions
+    while (true) {
+        ExpressionNode *group_expression = parse_expression(parser);
+
+        if (!group_expression) {
+            ast_free_group_by(group_by);
+            return NULL;
+        }
+
+        ExpressionNode **new_expressions = (ExpressionNode **) realloc(
+            group_by->column_refs,
+            (group_by->num_column_refs + 1) * sizeof(ExpressionNode *)
+        );
+
+        if (!new_expressions) {
+            expression_node_free(group_expression);
+            ast_free_group_by(group_by);
+            return NULL;
+        }
+
+        group_by->column_refs = new_expressions;
+        group_by->column_refs[group_by->num_column_refs] = group_expression;
+        group_by->num_column_refs++;
+
+        Token *current = get_current_token(parser);
+
+        // If the next token is a comma ',' continue to the next iteration
+        if (current && current->type == PUNCTUATION && !strcmp(current->token, ",")) {
+            consume_token(parser);
+            continue;
+        }
+
+        break;
+    }
+
+    return group_by;
+}
+
+/* Parse HAVING node */
+HavingNode *parse_having(Parser *parser) {
+    if (!parser || 
+        !parser->token_array || 
+        !parser->token_array->amount_tokens || 
+        parser->current_position >= parser->token_array->amount_tokens || 
+        !parser->token_array->tokens) {
+       return NULL;
+    }
+
+    // Parse HAVING keyword
+    Token *having_token = get_current_token(parser);
+
+    if (!having_token ||
+        having_token->type != KEYWORD ||
+        strcasecmp(having_token->token, "HAVING")) {
+        printf("parse_having: HAVING keyword doesn't exist.\n");
+        return NULL;
+    }
+    
+    consume_token(parser);
+
+    HavingNode *having = (HavingNode *) calloc(1, sizeof(HavingNode));
+
+    if (!having) {
+        return NULL;
+    }
+
+    having->expression = parse_expression(parser);
+
+    if (!having->expression) {
+        ast_free_having(having);
+        return NULL;
+    }
+
+    return having;
+}
+
+OrderByNode *parse_order_by(Parser *parser) {
+    if (!parser || 
+        !parser->token_array || 
+        !parser->token_array->amount_tokens || 
+        parser->current_position >= parser->token_array->amount_tokens || 
+        !parser->token_array->tokens) {
+       return NULL;
+    }
+
+    // Parse ORDER BY token
+    Token *order_by_token = get_current_token(parser);
+
+    if (!order_by_token ||
+        order_by_token->type != KEYWORD ||
+        strcasecmp(order_by_token->token, "ORDER BY")) {
+        printf("parse_order_by: ORDER BY keyword doesn't exist.\n");
+        return NULL;
+    }
+    
+    consume_token(parser);
+
+    OrderByNode *order_by = (OrderByNode *) calloc(1, sizeof(OrderByNode));
+
+    if (!order_by) {
+        return NULL;
+    }
+
+    // Parse ORDER BY expressions
+    while(true) {
+        // Parse Column reference Expression
+        ExpressionNode *column_ref_expression = parse_expression(parser);
+
+        if (!column_ref_expression) {
+            ast_free_order_by(order_by);
+            return NULL;
+        }
+
+        ExpressionNode **new_expressions = realloc(
+            order_by->column_refs,
+            (order_by->num_column_refs + 1) * sizeof(*new_expressions)
+        );
+
+        if (!new_expressions) {
+            expression_node_free(column_ref_expression);
+            ast_free_order_by(order_by);
+            return NULL;
+        }
+
+        order_by->column_refs = new_expressions;
+
+        OrderByType *new_types = realloc(
+            order_by->types,
+            (order_by->num_column_refs + 1) * sizeof(*new_types)
+        );
+
+        if (!new_types) {
+            expression_node_free(column_ref_expression);
+            ast_free_order_by(order_by);
+            return NULL;
+        }
+
+        order_by->types = new_types;
+
+        OrderByType order_type = ASC;
+        Token *current = get_current_token(parser);
+
+        if (current && current->type == KEYWORD) {
+
+            if (!strcasecmp(current->token, "ASC")) {
+                consume_token(parser);
+            } 
+            else if (!strcasecmp(current->token, "DESC")) {
+                order_type = DESC;
+                consume_token(parser);
+            }
+        }
+
+        /* Transfer ownership only after both allocations succeed. */
+        order_by->column_refs[order_by->num_column_refs] = column_ref_expression;
+        order_by->types[order_by->num_column_refs] = order_type;
+        order_by->num_column_refs++;
+
+        current = get_current_token(parser);
+
+        // Continue to the next iteration if current token is a comma ','
+        if (current && current->type == PUNCTUATION && !strcmp(current->token, ",")) {
+            consume_token(parser);
+            continue;
+        }
+
+        break;
+    }
+
+    return order_by;
+}
+
+/* Parse LIMIT clause */
+LimitNode *parse_limit(Parser *parser) {
+    if (!parser || 
+        !parser->token_array || 
+        !parser->token_array->amount_tokens || 
+        parser->current_position >= parser->token_array->amount_tokens || 
+        !parser->token_array->tokens) {
+       return NULL;
+    }
+
+    // Parse LIMIT keyword
+    Token *limit_token = get_current_token(parser);
+
+    if (!limit_token ||
+        limit_token->type != KEYWORD ||
+        strcasecmp(limit_token->token, "LIMIT")) {
+        printf("parse_limit: LIMIT keyword doesn't exist.\n");
+        return NULL;
+    }
+    
+    consume_token(parser);
+
+    LimitNode *limit = (LimitNode *) calloc(1, sizeof(LimitNode));
+
+    if (!limit) {
+        return NULL;
+    }
+
+    Token *current = get_current_token(parser);
+
+    if (!current || current->type != NUMBER) {
+        ast_free_limit(limit);
+        return NULL;
+    }
+
+    limit->limit = (uint32_t) strtoul(current->token, NULL, 10);
+
+    consume_token(parser);
+    return limit;
+}
+
+/* Parse OFFSET clause */
+OffsetNode *parse_offset(Parser *parser) {
+    if (!parser || 
+        !parser->token_array || 
+        !parser->token_array->amount_tokens || 
+        parser->current_position >= parser->token_array->amount_tokens || 
+        !parser->token_array->tokens) {
+       return NULL;
+    }
+
+    // Parse OFFSET keyword
+    Token *offset_token = get_current_token(parser);
+
+    if (!offset_token ||
+        offset_token->type != KEYWORD ||
+        strcasecmp(offset_token->token, "OFFSET")) {
+        printf("parse_offset: OFFSET keyword doesn't exist.\n");
+        return NULL;
+    }
+    
+    consume_token(parser);
+
+    OffsetNode *offset = (OffsetNode *) calloc(1, sizeof(OffsetNode));
+
+    if (!offset) {
+        return NULL;
+    }
+
+    Token *current = get_current_token(parser);
+
+    if (!current || current->type != NUMBER) {
+        ast_free_offset(offset);
+        return NULL;
+    }
+
+    offset->offset = (uint32_t) strtoul(current->token, NULL, 10);
+
+    consume_token(parser);
+    return offset;
 }
 
 /* Parse INTO clause in INSERT INTO */

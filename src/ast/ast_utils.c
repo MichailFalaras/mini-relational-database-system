@@ -158,7 +158,7 @@ void ast_free_order_by(OrderByNode *order_by) {
     }
 
     ast_free_expression_array(order_by->column_refs, order_by->num_column_refs);
-    free(order_by->type);
+    free(order_by->types);
     free(order_by);
 }
 
