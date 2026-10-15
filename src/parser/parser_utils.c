@@ -10,6 +10,8 @@
 #include "../../include/ast.h"
 #include "../ast/ast_utils.h"
 #include "../../include/data_types.h"
+#include "../../include/database.h"
+#include "../../include/table.h"
 
 /* ASTNodeType to StatementType. */
 StatementType ast_to_statement_type(ASTNodeType type) {
@@ -56,7 +58,7 @@ OperatorType token_str_to_operator_type(char *token_str) {
         return OP_ERROR;
     }
 
-    if (!strcasecmp(token_str, "=")) {
+    if (!strcmp(token_str, "=")) {
         return OP_EQ;
     } else if (!strcmp(token_str, "!=") || !strcmp(token_str, "<>")) {
         return OP_NEQ;
@@ -4027,4 +4029,146 @@ bool parse_alter_drop_constraint(Parser *parser, AlterActionNode *action) {
     consume_token(parser);
 
     return true;
+}
+
+/* ---------- Binding of each ASTNodeType ---------- */
+
+bool bind_select(ASTNode *root, Database *db) {
+    if (!root || root->type != AST_SELECT) {
+        return false;
+    }
+
+    if (!db || !db->catalog || !db->pager) {
+        return false;
+    }
+
+    /* Bind FROM. */
+    if (!bind_from(root->node_contents.select.from, db)) {
+        return false;
+    }
+
+    /* Bind WHERE. */
+    if (!bind_where(root->node_contents.select.where, db)) {
+        return false;
+    }
+    
+    return true;
+}
+
+bool bind_from(FromNode *from, Database *db) {
+    if (!from || !from->expressions) {
+        return false;
+    }
+
+    if (!db || !db->catalog || !db->pager) {
+        return false;
+    }
+
+    if (!from->num_expressions) {
+        return false;
+    }
+
+    for (uint32_t i = 0; i < from->num_expressions; i++) {
+        if (!from->expressions[i]) {
+            return false;
+        }
+
+        if (from->expressions[i]->type != EXPR_TABLE_REF) {
+            return false;
+        }
+
+        if (from->expressions[i]->expression_data.table_value.table_name[0] == '\0') {
+            return false;
+        }
+
+        char *table_name = from->expressions[i]->expression_data.table_value.table_name;
+        if (!database_has_table(db, table_name)) {
+            return false;
+        }
+        
+    }
+
+    return true;
+}
+
+bool bind_where(WhereNode *where, Database *db) {
+    if (!where || !where->expression) {
+        return false;
+    }
+
+    if (!db || !db->catalog || !db->pager) {
+        return false;
+    }
+
+    /* (NOTE: Function not written yet) */
+    /* (NOTE: Column refs used in expressions need to be checked too)*/
+    if (!expression_validation(where->expression)) {
+        return false;
+    }
+
+    return true;
+}
+
+bool bind_into(IntoNode *into, Database *db) {
+    if (!into || !into->column_refs
+        || !into->num_column_refs
+        || into->table_name[0] == '\0') {
+        return false;
+    }
+
+    if (!db || !db->catalog || !db->pager) {
+        return false;
+    }
+
+    for (uint32_t i = 0; i < into->num_column_refs; i++) {
+        if (!into->column_refs[i]) {
+            return false;
+        }
+
+        if (!into->column_refs[i]->type != EXPR_COLUMN_REF) {
+            return false;
+        }
+
+        if (into->column_refs[i]->expression_data.column_value.column_name[0] == '\0'
+            //|| into->column_refs[i]->expression_data.column_value.column_index == -1
+            /*|| into->column_refs[i]->expression_data.column_value.relation_index == -1*/) {
+            return false;
+        }
+
+        char *table_name = into->table_name;
+        char *column_name = into->column_refs[i]->expression_data.column_value.column_name;
+        Table *table = database_find_table(db, table_name);
+        if (!table) {
+            return false;
+        }
+
+        int32_t col_idx = schema_find_column_index(table->table_schema, column_name);
+        if (col_idx == -1) {
+            return false;
+        }
+
+        // Return information that might be needed for later operations
+        // just to save time.
+        into->column_refs[i]->expression_data.column_value.column_index = col_idx;
+    }
+
+    return true;
+}
+
+bool bind_values(ValuesNode *values, Database *db) {
+    if (!values || !values->values
+        || !values->num_values) {
+        return false;
+    }
+
+    if (!db || !db->catalog || !db->pager) {
+        return false;
+    }
+
+    for (uint32_t i =  0; i < values->num_values; i++) {
+        if (!values->values[i]) {
+            return false;
+        }
+
+    }
 }
