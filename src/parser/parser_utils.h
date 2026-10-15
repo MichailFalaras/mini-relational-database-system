@@ -35,6 +35,12 @@ typedef enum operator_type OperatorType;
 typedef enum ast_join_types JoinType;
 typedef struct expression_node ExpressionNode;
 
+typedef enum postfix_parse_status {
+    POSTFIX_PARSE_ERROR = -1,
+    POSTFIX_PARSE_NONE = 0,
+    POSTFIX_PARSE_SUCCESS = 1
+} PostfixParseStatus;
+
 /* ASTNodeType to StatementType. */
 StatementType ast_to_statement_type(ASTNodeType type);
 
@@ -94,7 +100,7 @@ ExpressionNode *parse_primary_expression(Parser *parser);
 
 /* Parse postfix expressions like: IS NULL / IS NOT NULL / IN / BETWEEN
  * that require their own unique parsing. */
-ExpressionNode *parse_postfix_expression(Parser *parser, ExpressionNode **operand);
+PostfixParseStatus parse_postfix_expression(Parser *parser, ExpressionNode **operand);
 
 /* Parse literal expressions. */
 ExpressionNode *parse_literal_expression(Parser *parser);

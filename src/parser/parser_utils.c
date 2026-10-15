@@ -529,13 +529,18 @@ ExpressionNode *parse_unary(Parser *parser) {
 ExpressionNode *parse_primary_expression(Parser *parser) {
     if (!parser || !parser->token_array 
         || !parser->token_array->amount_tokens
-        || !parser->token_array->tokens
-        || !parser->current_position) {
+        || !parser->token_array->tokens) {
         return NULL;
     }
+
     ExpressionNode *expr = NULL;
 
     Token *curr_token = get_current_token(parser);
+
+    if (!curr_token) {
+        return NULL;
+    }
+
     if (!strcmp(curr_token->token, "(")) {
         consume_token(parser);
 
@@ -545,13 +550,25 @@ ExpressionNode *parse_primary_expression(Parser *parser) {
         }
 
         curr_token = get_current_token(parser);
-        if (!curr_token || strcmp(curr_token->token, ")") != 0) {
+
+        if (!curr_token || curr_token->type != PUNCTUATION || strcmp(curr_token->token, ")")) {
             expression_node_free(parentheses_expr);
             return NULL;
         }
 
+        consume_token(parser);
+
         expr = parentheses_expr;
-        goto parse_postfix_expression;
+        
+        // Parse postfix expression KEYWORDs that come right after parentheses/identifiers
+        PostfixParseStatus status = parse_postfix_expression(parser, &expr);
+
+        if (status == POSTFIX_PARSE_ERROR) {
+            expression_node_free(expr);
+            return NULL;
+        }
+
+        return expr;
     }
 
     if (curr_token->type == IDENTIFIER) {
@@ -577,15 +594,18 @@ ExpressionNode *parse_primary_expression(Parser *parser) {
             
             curr_token = get_current_token(parser);
             
-            if (curr_token->type != PUNCTUATION || strcmp(curr_token->token, "(") != 0) {
+            if (!curr_token || curr_token->type != PUNCTUATION || strcmp(curr_token->token, "(") != 0) {
                 expression_node_free(aggregate_funct_expr);
                 return NULL;
             }
+
             consume_token(parser);
 
             curr_token = get_current_token(parser);
-            if (aggregate_funct_expr->expression_data.aggregate_func_expr.type == EXPR_AGGREGATE_COUNT
-                && curr_token->type == OPERATOR && !strcmp(curr_token->token, "*")) {
+            if (aggregate_funct_expr->expression_data.aggregate_func_expr.type == EXPR_AGGREGATE_COUNT &&
+                curr_token && 
+                curr_token->type == OPERATOR && 
+                !strcmp(curr_token->token, "*")) {
                 aggregate_funct_expr->expression_data.aggregate_func_expr.wildcard = true;
 
                 consume_token(parser);
@@ -600,45 +620,106 @@ ExpressionNode *parse_primary_expression(Parser *parser) {
             }
 
             curr_token = get_current_token(parser);
-            if (curr_token->type != PUNCTUATION || strcmp(curr_token->token, ")") != 0) {
+
+            if (!curr_token || curr_token->type != PUNCTUATION || strcmp(curr_token->token, ")") != 0) {
                 expression_node_free(aggregate_funct_expr);
                 return NULL;
             }
+
             consume_token(parser);
-            
-            return aggregate_funct_expr;
+
+
+            expr = aggregate_funct_expr;
+
+            // Parse postfix expression KEYWORDs that come right after parentheses/identifiers
+            PostfixParseStatus status = parse_postfix_expression(parser, &expr);
+
+            if (status == POSTFIX_PARSE_ERROR) {
+                expression_node_free(expr);
+                return NULL;
+            }
+
+            return expr;
         }
 
+        // If the token is not an aggregate function, then it's definitely one of:
+        // i) An unqualified column reference, e.g., "salary"
+        // ii) A table-qualified column reference, e.g., "employees.salary"
+        // iii) An alias-qualified column reference, e.g., "emp.salary"
+
         ExpressionNode *identifier_expr = expression_node_create(EXPR_COLUMN_REF);
+
         if (!identifier_expr) {
             return NULL;
         }
 
-        strncpy(identifier_expr->expression_data.column_value.column_name,
-                curr_token->token, 64);
+        // Initialize unresolved binding indexes
+        identifier_expr->expression_data.column_value.relation_index = -1;
+        identifier_expr->expression_data.column_value.column_index = -1;
+
+        // Save the first identifier without knowing if it's a table name/alias or a column name
+        strncpy(identifier_expr->expression_data.column_value.column_name, curr_token->token, 64);
         identifier_expr->expression_data.column_value.column_name[63] = '\0';
 
+        consume_token(parser);
+
+        curr_token = get_current_token(parser);
+
+        // If a '.' follows the 1st identifier, it's actually a table name/alias
+        // and has to be copied to the correct field
+        if (curr_token && curr_token->type == PUNCTUATION && !strcmp(curr_token->token, ".")) {
+            strncpy(
+                identifier_expr->expression_data.column_value.table_name, 
+                identifier_expr->expression_data.column_value.column_name, 
+                64
+            );
+
+            consume_token(parser);
+
+            curr_token = get_current_token(parser);
+
+            if (!curr_token || curr_token->type != IDENTIFIER) {
+                expression_node_free(identifier_expr);
+                return NULL;
+            }
+
+            // Save the actual column name to the appropriate expression field
+            strncpy(identifier_expr->expression_data.column_value.column_name, curr_token->token, 64);
+            identifier_expr->expression_data.column_value.column_name[63] = '\0';
+
+            consume_token(parser);
+        }
+
         expr = identifier_expr;
-        goto parse_postfix_expression;
+
+        // Parse postfix expression KEYWORDs that come right after parentheses/identifiers
+        PostfixParseStatus status = parse_postfix_expression(parser, &expr);
+
+        if (status == POSTFIX_PARSE_ERROR) {
+            expression_node_free(expr);
+            return NULL;
+        }
+
+        return expr;
     }
 
     ExpressionNode *literal_expr = parse_literal_expression(parser);
+
     if (!literal_expr) {
         return NULL;
     }
+
     consume_token(parser);
 
     expr = literal_expr;
-    return expr;
 
-    /* Parse postfix expression KEYWORDs that come right after parentheses/identifiers. */
-parse_postfix_expression: 
-    consume_token(parser);
-    ExpressionNode *postfix_expr = parse_postfix_expression(parser, &expr);
-    if (postfix_expr != NULL) {
-        expr = postfix_expr;
+    PostfixParseStatus status = parse_postfix_expression(parser, &expr);
+
+    if (status == POSTFIX_PARSE_ERROR) {
+        expression_node_free(expr);
+        return NULL;
     }
-    
+
     return expr;
 }
 
@@ -646,41 +727,51 @@ parse_postfix_expression:
  * that require their own unique parsing. 
  *
  * Pass parenthesized expression or identifier as operand for complete parsing. */
-ExpressionNode *parse_postfix_expression(Parser *parser, ExpressionNode **operand) {
-    if (!parser || !parser->token_array 
-        || !parser->token_array->amount_tokens
-        || !parser->token_array->tokens
-        || !parser->current_position) {
-        return NULL;
+PostfixParseStatus parse_postfix_expression(Parser *parser, ExpressionNode **operand) {
+    if (!parser || 
+        !parser->token_array || 
+        !parser->token_array->amount_tokens || 
+        !parser->token_array->tokens ||
+        !operand ||
+        !*operand) {
+        return POSTFIX_PARSE_ERROR;
     }
 
     Token *curr_token = get_current_token(parser);
+
+    if (!curr_token) {
+        return POSTFIX_PARSE_NONE;
+    }
 
     /* Create IS NULL/IS NOT NULL expression node that contains the identifier. */
     if (curr_token->type == KEYWORD && !strcasecmp(curr_token->token, "IS")) {
         ExpressionType expr_type = EXPR_IS_NULL;
 
         consume_token(parser);
+
         curr_token = get_current_token(parser);
-        if (curr_token->type == KEYWORD && !strcasecmp(curr_token->token, "NOT")) {
+
+        if (curr_token && curr_token->type == KEYWORD && !strcasecmp(curr_token->token, "NOT")) {
+            expr_type = EXPR_IS_NOT_NULL;
+
             consume_token(parser);
             curr_token = get_current_token(parser);
-
-            expr_type = EXPR_IS_NOT_NULL;
         } 
 
-        if (curr_token->type != KEYWORD || strcasecmp(curr_token->token, "NULL") != 0) {
+        if (!curr_token || curr_token->type != KEYWORD || strcasecmp(curr_token->token, "NULL")) {
             expression_node_free(*operand);
             *operand = NULL;
-            return NULL;
+            return POSTFIX_PARSE_ERROR;
         }
+
         consume_token(parser);
 
         ExpressionNode *is_expr = expression_node_create(expr_type);
+       
         if (!is_expr) {
             expression_node_free(*operand);
             *operand = NULL;
-            return NULL;
+            return POSTFIX_PARSE_ERROR;
         }
 
         if (expr_type == EXPR_IS_NULL) {
@@ -689,120 +780,137 @@ ExpressionNode *parse_postfix_expression(Parser *parser, ExpressionNode **operan
             is_expr->expression_data.is_not_null_expr.operand = *operand;
         }
 
-        *operand = NULL;
+        *operand = is_expr;
 
-        return is_expr;
+        return POSTFIX_PARSE_SUCCESS;
     }
 
     if (curr_token->type == KEYWORD && !strcasecmp(curr_token->token, "IN")) {
         ExpressionNode *in_expr = expression_node_create(EXPR_IN);
+        
         if (!in_expr) {
             expression_node_free(*operand);
             *operand = NULL;
-            return NULL;
+            return POSTFIX_PARSE_ERROR;
         }
-
-        consume_token(parser);
-        curr_token = get_current_token(parser);
 
         in_expr->expression_data.in_expr.operand = *operand;
         *operand = NULL;
-        if (strcmp(curr_token->token, "(") != 0) {
-            expression_node_free(in_expr);
-            *operand = NULL;
-            return NULL;
-        }
 
-        /* Require another expression immediately.
-         * Used to reject lists like (1, 2,).  */
-        do {
-            consume_token(parser);
-
-            uint32_t option_count = ++in_expr->expression_data.in_expr.option_count; 
-            ExpressionNode **new_set_options = (ExpressionNode **) realloc(in_expr->expression_data.in_expr.set_options,
-                                                                    option_count*sizeof(ExpressionNode *));
-            if (!new_set_options) {
-                expression_node_free(in_expr);
-                *operand = NULL;
-                return NULL;
-            }
-            in_expr->expression_data.in_expr.set_options = new_set_options;
-
-            in_expr->expression_data.in_expr.set_options[option_count-1] = parse_expression(parser);
-            if (!in_expr->expression_data.in_expr.set_options[option_count-1]) {
-                expression_node_free(in_expr);
-                *operand = NULL;
-                return NULL;
-            }
-
-            curr_token = get_current_token(parser);
-        } while (strcmp(curr_token->token, ",") == 0);
-
+        consume_token(parser);
+        
         curr_token = get_current_token(parser);
-        if (strcmp(curr_token->token, ")") != 0) {
+        
+        if (!curr_token || curr_token->type != PUNCTUATION || strcmp(curr_token->token, "(")) {
             expression_node_free(in_expr);
-            *operand = NULL;
-            return NULL;
-        }
-
-        /* If empty list is given in queries like:
-         * number in ()
-         *
-         * It should be rejected. */
-        if (in_expr->expression_data.in_expr.option_count == 0) {
-            expression_node_free(in_expr);
-            *operand = NULL;
-            return NULL;
+            return POSTFIX_PARSE_ERROR;
         }
 
         consume_token(parser);
-        curr_token = get_current_token(parser);
 
+        // Require at least one expression inside the parentheses
+        while (true) {
+            ExpressionNode *option = parse_expression(parser);
 
-        return in_expr;
+            if (!option) {
+                expression_node_free(in_expr);
+                return POSTFIX_PARSE_ERROR;
+            }
+
+            uint32_t option_count = in_expr->expression_data.in_expr.option_count + 1;
+
+            ExpressionNode **new_set_options = realloc(
+                in_expr->expression_data.in_expr.set_options,
+                option_count * sizeof(ExpressionNode *)
+            );
+
+            if (!new_set_options) {
+                expression_node_free(option);
+                expression_node_free(in_expr);
+                return POSTFIX_PARSE_ERROR;
+            }
+
+            in_expr->expression_data.in_expr.set_options = new_set_options;
+
+            in_expr->expression_data.in_expr.set_options[option_count - 1] = option;
+            in_expr->expression_data.in_expr.option_count = option_count;
+
+            curr_token = get_current_token(parser);
+
+            if (!curr_token) {
+                expression_node_free(in_expr);
+                return POSTFIX_PARSE_ERROR;
+            }
+
+            // Continue parsing if a comma follows
+            if (curr_token->type == PUNCTUATION && strcmp(curr_token->token, ",") == 0) {
+                consume_token(parser);
+                continue;
+            }
+
+            break;
+        }
+
+        if (!curr_token || curr_token->type != PUNCTUATION || strcmp(curr_token->token, ")")) {
+            expression_node_free(in_expr);
+            return POSTFIX_PARSE_ERROR;
+        }
+
+        consume_token(parser);
+
+        *operand = in_expr;
+
+        return POSTFIX_PARSE_SUCCESS;
     }
-    
-    if (curr_token->type == KEYWORD && !strcasecmp(curr_token->token, "BETWEEN")) {
 
+    /* Parse BETWEEN lower AND upper */
+    if (curr_token->type == KEYWORD && !strcasecmp(curr_token->token, "BETWEEN")) {
         ExpressionNode *between_expr = expression_node_create(EXPR_BETWEEN);
+
         if (!between_expr) {
             expression_node_free(*operand);
             *operand = NULL;
-            return NULL;
+            return POSTFIX_PARSE_ERROR;
         }
-        consume_token(parser);
 
+        // Transfer ownership of the original operand
         between_expr->expression_data.between_expr.operand = *operand;
         *operand = NULL;
 
-        /* Parse lower and upper limit separately to avoid chaining ANDs. */
+        consume_token(parser);
+
+        // Parse lower bound
         between_expr->expression_data.between_expr.lower = parse_not(parser);
+
         if (!between_expr->expression_data.between_expr.lower) {
             expression_node_free(between_expr);
-            *operand = NULL;
-            return NULL;
+            return POSTFIX_PARSE_ERROR;
         }
 
         curr_token = get_current_token(parser);
-        if (!curr_token || curr_token->type != KEYWORD
-            || strcasecmp(curr_token->token, "AND") != 0) {
+
+        if (!curr_token || curr_token->type != KEYWORD || strcasecmp(curr_token->token, "AND") != 0) {
+
             expression_node_free(between_expr);
-            *operand = NULL;
-            return NULL;
+            return POSTFIX_PARSE_ERROR;
         }
+
         consume_token(parser);
 
+        // Parse upper bound
         between_expr->expression_data.between_expr.upper = parse_not(parser);
+
         if (!between_expr->expression_data.between_expr.upper) {
             expression_node_free(between_expr);
-            *operand = NULL;
-            return NULL;
+            return POSTFIX_PARSE_ERROR;
         }
 
-        return between_expr;
+        *operand = between_expr;
+
+        return POSTFIX_PARSE_SUCCESS;
     }
 
-    return NULL;
+    return POSTFIX_PARSE_NONE;
 }
 
 /* Parse literal expressions. */
