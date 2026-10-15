@@ -55,6 +55,7 @@ typedef struct literal {
 
 /* Column name reference in the expression */
 typedef struct column_ref {
+    char table_name[64];
     char column_name[64];
 
     int32_t relation_index;
