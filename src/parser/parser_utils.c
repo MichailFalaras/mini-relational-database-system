@@ -915,7 +915,7 @@ PostfixParseStatus parse_postfix_expression(Parser *parser, ExpressionNode **ope
 
 /* Parse literal expressions. */
 ExpressionNode *parse_literal_expression(Parser *parser) {
-    if (!parser || !parser->token_array 
+    if (!parser || !parser->token_array
         || !parser->token_array->amount_tokens
         || !parser->token_array->tokens
         || !parser->current_position) {
@@ -923,30 +923,39 @@ ExpressionNode *parse_literal_expression(Parser *parser) {
     }
 
     Token *curr_token = get_current_token(parser);
+    if (!curr_token) {
+        return NULL;
+    }
+
     ExpressionNode *literal_expr = expression_node_create(EXPR_LITERAL);
     if (!literal_expr) {
         return NULL;
     }
 
+    Literal *literal_data = &literal_expr->expression_data.literal_value;
+
+    literal_data->literal = NULL;
+    literal_data->is_untyped_null = false;
+
     Value *literal = NULL;
+
     if (curr_token->type == NUMBER) {
         literal = create_number_literal(parser);
 
     } else if (curr_token->type == STRING) {
         literal = create_string_literal(parser);
-        
+
     } else if (curr_token->type == KEYWORD) {
         if (!strcasecmp(curr_token->token, "NULL")) {
-            literal_expr->expression_data.literal_value.literal = NULL;
+            literal_data->is_untyped_null = true;
             return literal_expr;
         }
 
-        if (strcasecmp(curr_token->token, "TRUE") != 0
-            && strcasecmp(curr_token->token, "FALSE") != 0) {
+        if (strcasecmp(curr_token->token, "TRUE") && strcasecmp(curr_token->token, "FALSE")) {
             expression_node_free(literal_expr);
             return NULL;
         }
-        
+
         literal = create_string_literal(parser);
 
     } else {
@@ -959,7 +968,8 @@ ExpressionNode *parse_literal_expression(Parser *parser) {
         return NULL;
     }
 
-    literal_expr->expression_data.literal_value.literal = literal;
+    literal_data->literal = literal;
+
     return literal_expr;
 }
 
@@ -4137,146 +4147,4 @@ bool parse_alter_drop_constraint(Parser *parser, AlterActionNode *action) {
     consume_token(parser);
 
     return true;
-}
-
-/* ---------- Binding of each ASTNodeType ---------- */
-
-bool bind_select(ASTNode *root, Database *db) {
-    if (!root || root->type != AST_SELECT) {
-        return false;
-    }
-
-    if (!db || !db->catalog || !db->pager) {
-        return false;
-    }
-
-    /* Bind FROM. */
-    if (!bind_from(root->node_contents.select.from, db)) {
-        return false;
-    }
-
-    /* Bind WHERE. */
-    if (!bind_where(root->node_contents.select.where, db)) {
-        return false;
-    }
-    
-    return true;
-}
-
-bool bind_from(FromNode *from, Database *db) {
-    if (!from || !from->expressions) {
-        return false;
-    }
-
-    if (!db || !db->catalog || !db->pager) {
-        return false;
-    }
-
-    if (!from->num_expressions) {
-        return false;
-    }
-
-    for (uint32_t i = 0; i < from->num_expressions; i++) {
-        if (!from->expressions[i]) {
-            return false;
-        }
-
-        if (from->expressions[i]->type != EXPR_TABLE_REF) {
-            return false;
-        }
-
-        if (from->expressions[i]->expression_data.table_value.table_name[0] == '\0') {
-            return false;
-        }
-
-        char *table_name = from->expressions[i]->expression_data.table_value.table_name;
-        if (!database_has_table(db, table_name)) {
-            return false;
-        }
-        
-    }
-
-    return true;
-}
-
-bool bind_where(WhereNode *where, Database *db) {
-    if (!where || !where->expression) {
-        return false;
-    }
-
-    if (!db || !db->catalog || !db->pager) {
-        return false;
-    }
-
-    /* (NOTE: Function not written yet) */
-    /* (NOTE: Column refs used in expressions need to be checked too)*/
-    if (!expression_validation(where->expression)) {
-        return false;
-    }
-
-    return true;
-}
-
-bool bind_into(IntoNode *into, Database *db) {
-    if (!into || !into->column_refs
-        || !into->num_column_refs
-        || into->table_name[0] == '\0') {
-        return false;
-    }
-
-    if (!db || !db->catalog || !db->pager) {
-        return false;
-    }
-
-    for (uint32_t i = 0; i < into->num_column_refs; i++) {
-        if (!into->column_refs[i]) {
-            return false;
-        }
-
-        if (!into->column_refs[i]->type != EXPR_COLUMN_REF) {
-            return false;
-        }
-
-        if (into->column_refs[i]->expression_data.column_value.column_name[0] == '\0'
-            //|| into->column_refs[i]->expression_data.column_value.column_index == -1
-            /*|| into->column_refs[i]->expression_data.column_value.relation_index == -1*/) {
-            return false;
-        }
-
-        char *table_name = into->table_name;
-        char *column_name = into->column_refs[i]->expression_data.column_value.column_name;
-        Table *table = database_find_table(db, table_name);
-        if (!table) {
-            return false;
-        }
-
-        int32_t col_idx = schema_find_column_index(table->table_schema, column_name);
-        if (col_idx == -1) {
-            return false;
-        }
-
-        // Return information that might be needed for later operations
-        // just to save time.
-        into->column_refs[i]->expression_data.column_value.column_index = col_idx;
-    }
-
-    return true;
-}
-
-bool bind_values(ValuesNode *values, Database *db) {
-    if (!values || !values->values
-        || !values->num_values) {
-        return false;
-    }
-
-    if (!db || !db->catalog || !db->pager) {
-        return false;
-    }
-
-    for (uint32_t i =  0; i < values->num_values; i++) {
-        if (!values->values[i]) {
-            return false;
-        }
-
-    }
 }

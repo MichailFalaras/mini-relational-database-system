@@ -51,6 +51,7 @@ typedef enum operator_type {
 /* Literal value in expression, e.g., integer, float, string */
 typedef struct literal {
     Value *literal;
+    bool is_untyped_null;
 } Literal;
 
 /* Column name reference in the expression */
