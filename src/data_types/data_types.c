@@ -7,6 +7,10 @@
 
 /* Allocate Value struct */
 Value *value_alloc(DataType type) {
+    if (type < INTEGER || type > JSONB) {
+        return NULL;
+    }
+
     Value *new_value = (Value *) calloc(1, sizeof(Value));
     
     if (!new_value) {
