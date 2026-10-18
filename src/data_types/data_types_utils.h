@@ -28,7 +28,12 @@ int compare_bool(const bool left, const bool right);
 
 // Data type compatibility Utilities
 bool is_numeric_type(DataType type);
+bool is_integer_type(DataType type);
 bool is_text_type(DataType type);
+
+bool are_equality_compatible(DataType left, DataType right);
+bool are_ordering_compatible(DataType left, DataType right);
+bool supports_ordering(DataType type);
 
 // Data type conversion utils
 bool convert_to_unsigned_integer(Value *value);

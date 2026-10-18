@@ -349,6 +349,47 @@ bool is_text_type(DataType type) {
     return false;
 }
 
+bool is_integer_type(DataType type) {
+    return type == INTEGER || type == UNSIGNED_INTEGER;
+}
+
+bool are_equality_compatible(DataType left, DataType right) {
+    if (is_numeric_type(left) && is_numeric_type(right)) {
+        return left == right;
+    }
+
+    if (is_text_type(left) && is_text_type(right)) {
+        return true;
+    }
+
+    return (left == BOOL && right == BOOL) ||
+           (left == DATE && right == DATE) ||
+           (left == TIMESTAMP && right == TIMESTAMP);
+}
+
+bool supports_ordering(DataType type) {
+    return is_numeric_type(type) ||
+           is_text_type(type) ||
+           type == DATE ||
+           type == TIMESTAMP;
+}
+
+bool are_ordering_compatible(DataType left, DataType right) {
+    if (!supports_ordering(left) || !supports_ordering(right)) {
+        return false;
+    }
+
+    if (is_numeric_type(left) && is_numeric_type(right)) {
+        return left == right;
+    }
+
+    if (is_text_type(left) && is_text_type(right)) {
+        return true;
+    }
+
+    return left == right;
+}
+
 
 // Data type conversion utils
 
