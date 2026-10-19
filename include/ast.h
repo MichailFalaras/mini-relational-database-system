@@ -18,13 +18,19 @@ typedef enum ast_node_type {
     AST_DROP_INDEX,
 } ASTNodeType;
 
+typedef struct ast_as {
+    char alias[64];
+} AsNode;
+
 typedef struct ast_projection {
     ExpressionNode **expressions;
+    AsNode *aliases;
     uint32_t num_expressions;
 } ProjectionNode;
 
 typedef struct ast_from {
     ExpressionNode **expressions;
+    AsNode *aliases;
     uint32_t num_expressions;
 } FromNode;
 
@@ -65,6 +71,7 @@ typedef struct ast_on {
 
 typedef struct ast_join {
     char secondary_table_name[64];
+    AsNode alias;
     JoinType join_type;
     OnNode *on;
 } JoinNode;
