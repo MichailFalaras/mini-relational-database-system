@@ -106,12 +106,19 @@ int test_parse_select_basic() {
         select->projection->expressions[1]->expression_data.column_value.column_name,
         "name"
     ) == 0);
+    
+    ASSERT(select->projection->aliases != NULL);
+    ASSERT(strcmp(select->projection->aliases[0].alias, "") == 0);
+    ASSERT(strcmp(select->projection->aliases[1].alias, "") == 0);
 
     ASSERT(select->from != NULL);
     ASSERT(select->from->num_expressions == 1);
     ASSERT(select->from->expressions != NULL);
     ASSERT(select->from->expressions[0] != NULL);
     ASSERT(select->from->expressions[0]->type == EXPR_TABLE_REF);
+
+    ASSERT(select->from->aliases != NULL);
+    ASSERT(strcmp(select->from->aliases[0].alias, "") == 0);
 
     ASSERT(select->where == NULL);
     ASSERT(select->group_by == NULL);
@@ -194,6 +201,10 @@ int test_parse_select_multiple_tables() {
     ASSERT(select->from->expressions[0]->type == EXPR_TABLE_REF);
     ASSERT(select->from->expressions[1]->type == EXPR_TABLE_REF);
 
+    ASSERT(select->from->aliases != NULL);
+    ASSERT(strcmp(select->from->aliases[0].alias, "") == 0);
+    ASSERT(strcmp(select->from->aliases[1].alias, "") == 0);
+
     free_test_parser(parser, root);
     return 0;
 
@@ -234,6 +245,8 @@ int test_parse_select_inner_join() {
     ASSERT(join->on->expression->type == EXPR_BINARY);
     ASSERT(join->on->expression->expression_data.binary_expr.op == OP_EQ);
 
+    ASSERT(strcmp(join->alias.alias, "") == 0);
+    
     free_test_parser(parser, root);
     return 0;
 
@@ -442,6 +455,144 @@ int test_parse_select_qualified_columns() {
     );
     ASSERT(select->projection->expressions[1]->expression_data.column_value.relation_index == -1);
     ASSERT(select->projection->expressions[1]->expression_data.column_value.column_index == -1);
+
+    free_test_parser(parser, root);
+    return 0;
+
+cleanup:
+    free_test_parser(parser, root);
+    return 1;
+}
+
+int test_parse_select_projection_aliases() {
+    TestToken tokens[] = {
+        {"SELECT", KEYWORD},
+        {"id", IDENTIFIER}, {"AS", KEYWORD}, {"user_id", IDENTIFIER},
+        {",", PUNCTUATION}, {"name", IDENTIFIER},
+        {"FROM", KEYWORD}, {"users", IDENTIFIER},
+        {";", PUNCTUATION}
+    };
+
+    Parser *parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASTNode *root = parser ? parse(parser) : NULL;
+
+    ASSERT(parser != NULL);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_SELECT);
+
+    SelectNode *select = &root->node_contents.select;
+
+    ASSERT(select->projection != NULL);
+    ASSERT(select->projection->num_expressions == 2);
+    ASSERT(select->projection->expressions != NULL);
+    ASSERT(select->projection->aliases != NULL);
+
+    ASSERT(select->projection->expressions[0]->type == EXPR_COLUMN_REF);
+    ASSERT(select->projection->expressions[1]->type == EXPR_COLUMN_REF);
+
+    ASSERT(strcmp(
+        select->projection->expressions[0]->expression_data.column_value.column_name,
+        "id"
+    ) == 0);
+
+    ASSERT(strcmp(
+        select->projection->expressions[1]->expression_data.column_value.column_name,
+        "name"
+    ) == 0);
+
+    ASSERT(strcmp(select->projection->aliases[0].alias, "user_id") == 0);
+    ASSERT(strcmp(select->projection->aliases[1].alias, "") == 0);
+
+    free_test_parser(parser, root);
+    return 0;
+
+cleanup:
+    free_test_parser(parser, root);
+    return 1;
+}
+
+int test_parse_select_from_aliases() {
+    TestToken tokens[] = {
+        {"SELECT", KEYWORD}, {"id", IDENTIFIER},
+        {"FROM", KEYWORD},
+        {"users", IDENTIFIER}, {"AS", KEYWORD}, {"u", IDENTIFIER},
+        {",", PUNCTUATION},
+        {"orders", IDENTIFIER}, {"AS", KEYWORD}, {"o", IDENTIFIER},
+        {";", PUNCTUATION}
+    };
+
+    Parser *parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASTNode *root = parser ? parse(parser) : NULL;
+
+    ASSERT(parser != NULL);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_SELECT);
+
+    SelectNode *select = &root->node_contents.select;
+
+    ASSERT(select->from != NULL);
+    ASSERT(select->from->num_expressions == 2);
+    ASSERT(select->from->expressions != NULL);
+    ASSERT(select->from->aliases != NULL);
+
+    ASSERT(select->from->expressions[0]->type == EXPR_TABLE_REF);
+    ASSERT(select->from->expressions[1]->type == EXPR_TABLE_REF);
+
+    ASSERT(strcmp(
+        select->from->expressions[0]->expression_data.table_value.table_name,
+        "users"
+    ) == 0);
+
+    ASSERT(strcmp(
+        select->from->expressions[1]->expression_data.table_value.table_name,
+        "orders"
+    ) == 0);
+
+    ASSERT(strcmp(select->from->aliases[0].alias, "u") == 0);
+    ASSERT(strcmp(select->from->aliases[1].alias, "o") == 0);
+
+    free_test_parser(parser, root);
+    return 0;
+
+cleanup:
+    free_test_parser(parser, root);
+    return 1;
+}
+
+int test_parse_select_join_alias() {
+    TestToken tokens[] = {
+        {"SELECT", KEYWORD}, {"id", IDENTIFIER},
+        {"FROM", KEYWORD}, {"users", IDENTIFIER},
+        {"INNER", KEYWORD}, {"JOIN", KEYWORD},
+        {"orders", IDENTIFIER}, {"AS", KEYWORD}, {"o", IDENTIFIER},
+        {"ON", KEYWORD}, {"id", IDENTIFIER},
+        {"=", OPERATOR}, {"user_id", IDENTIFIER},
+        {";", PUNCTUATION}
+    };
+
+    Parser *parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASTNode *root = parser ? parse(parser) : NULL;
+
+    ASSERT(parser != NULL);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_SELECT);
+
+    SelectNode *select = &root->node_contents.select;
+
+    ASSERT(select->num_joins == 1);
+    ASSERT(select->joins != NULL);
+    ASSERT(select->joins[0] != NULL);
+
+    JoinNode *join = select->joins[0];
+
+    ASSERT(join->join_type == INNER);
+    ASSERT(strcmp(join->secondary_table_name, "orders") == 0);
+    ASSERT(strcmp(join->alias.alias, "o") == 0);
+
+    ASSERT(join->on != NULL);
+    ASSERT(join->on->expression != NULL);
+    ASSERT(join->on->expression->type == EXPR_BINARY);
+    ASSERT(join->on->expression->expression_data.binary_expr.op == OP_EQ);
 
     free_test_parser(parser, root);
     return 0;
@@ -1174,6 +1325,28 @@ cleanup:
     return 1;
 }
 
+int test_invalid_select_missing_alias() {
+    TestToken tokens[] = {
+        {"SELECT", KEYWORD},
+        {"id", IDENTIFIER}, {"AS", KEYWORD},
+        {"FROM", KEYWORD}, {"users", IDENTIFIER},
+        {";", PUNCTUATION}
+    };
+
+    Parser *parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASTNode *root = parser ? parse(parser) : NULL;
+
+    ASSERT(parser != NULL);
+    ASSERT(root == NULL);
+
+    free_test_parser(parser, root);
+    return 0;
+
+cleanup:
+    free_test_parser(parser, root);
+    return 1;
+}
+
 int test_invalid_insert_missing_into() {
     TestToken tokens[] = {
         {"INSERT", KEYWORD}, {"users", IDENTIFIER}, {"VALUES", KEYWORD},
@@ -1601,99 +1774,107 @@ int main(int argc, char *argv[]) {
     generate_output(result, 7, "test_parse_select_limit_offset");
     result = test_parse_select_qualified_columns();
     generate_output(result, 8, "test_parse_select_qualified_columns");
+    result = test_parse_select_projection_aliases();
+    generate_output(result, 9, "test_parse_select_projection_aliases");
+    result = test_parse_select_from_aliases();
+    generate_output(result, 10, "test_parse_select_from_aliases");
+    result = test_parse_select_join_alias();
+    generate_output(result, 11, "test_parse_select_join_alias");
 
     /* ---------- parse_insert unit tests ---------- */
     result = test_parse_insert_with_columns();
-    generate_output(result, 9, "test_parse_insert_with_columns");
+    generate_output(result, 12, "test_parse_insert_with_columns");
     result = test_parse_insert_without_columns();
-    generate_output(result, 10, "test_parse_insert_without_columns");
+    generate_output(result, 13, "test_parse_insert_without_columns");
     result = test_parse_insert_with_expression();
-    generate_output(result, 11, "test_parse_insert_with_expression");
+    generate_output(result, 14, "test_parse_insert_with_expression");
     result = test_parse_insert_multiple_values();
-    generate_output(result, 12, "test_parse_insert_multiple_values");
+    generate_output(result, 15, "test_parse_insert_multiple_values");
     result = test_parse_insert_null_values();
-    generate_output(result, 13, "test_parse_insert_null_values");
+    generate_output(result, 16, "test_parse_insert_null_values");
 
     /* ---------- parse_update unit tests ---------- */
     result = test_parse_update_single_assignment();
-    generate_output(result, 14, "test_parse_update_single_assignment");
+    generate_output(result, 17, "test_parse_update_single_assignment");
     result = test_parse_update_multiple_assignments();
-    generate_output(result, 15, "test_parse_update_multiple_assignments");
+    generate_output(result, 18, "test_parse_update_multiple_assignments");
     result = test_parse_update_arithmetic_assignment();
-    generate_output(result, 16, "test_parse_update_arithmetic_assignment");
+    generate_output(result, 19, "test_parse_update_arithmetic_assignment");
     result = test_parse_update_complex_where();
-    generate_output(result, 17, "test_parse_update_complex_where");
+    generate_output(result, 20, "test_parse_update_complex_where");
 
     /* ---------- parse_delete unit tests ---------- */
     result = test_parse_delete_without_where();
-    generate_output(result, 18, "test_parse_delete_without_where");
+    generate_output(result, 21, "test_parse_delete_without_where");
     result = test_parse_delete_with_where();
-    generate_output(result, 19, "test_parse_delete_with_where");
+    generate_output(result, 22, "test_parse_delete_with_where");
     result = test_parse_delete_complex_where();
-    generate_output(result, 20, "test_parse_delete_complex_where");
+    generate_output(result, 23, "test_parse_delete_complex_where");
 
     /* ---------- Invalid DML test cases ---------- */
     result = test_invalid_select_missing_projection();
-    generate_output(result, 21, "test_invalid_select_missing_projection");
+    generate_output(result, 24, "test_invalid_select_missing_projection");
     result = test_invalid_select_missing_from();
-    generate_output(result, 22, "test_invalid_select_missing_from");
+    generate_output(result, 25, "test_invalid_select_missing_from");
     result = test_invalid_select_missing_table();
-    generate_output(result, 23, "test_invalid_select_missing_table");
+    generate_output(result, 26, "test_invalid_select_missing_table");
     result = test_invalid_select_trailing_projection_comma();
-    generate_output(result, 24, "test_invalid_select_trailing_projection_comma");
+    generate_output(result, 27, "test_invalid_select_trailing_projection_comma");
     result = test_invalid_select_missing_join_table();
-    generate_output(result, 25, "test_invalid_select_missing_join_table");
+    generate_output(result, 28, "test_invalid_select_missing_join_table");
     result = test_invalid_select_missing_on();
-    generate_output(result, 26, "test_invalid_select_missing_on");
+    generate_output(result, 29, "test_invalid_select_missing_on");
     result = test_invalid_select_empty_where();
-    generate_output(result, 27, "test_invalid_select_empty_where");
+    generate_output(result, 30, "test_invalid_select_empty_where");
     result = test_invalid_select_empty_order_by();
-    generate_output(result, 28, "test_invalid_select_empty_order_by");
+    generate_output(result, 31, "test_invalid_select_empty_order_by");
     result = test_invalid_select_missing_limit_value();
-    generate_output(result, 29, "test_invalid_select_missing_limit_value");
+    generate_output(result, 32, "test_invalid_select_missing_limit_value");
     result = test_invalid_select_missing_semicolon();
-    generate_output(result, 30, "test_invalid_select_missing_semicolon");
+    generate_output(result, 33, "test_invalid_select_missing_semicolon");
     result = test_invalid_select_missing_column_after_dot();
-    generate_output(result, 31, "test_invalid_select_missing_column_after_dot");
+    generate_output(result, 34, "test_invalid_select_missing_column_after_dot");
+    result = test_invalid_select_missing_alias();
+    generate_output(result, 35, "test_invalid_select_missing_alias");
 
     result = test_invalid_insert_missing_into();
-    generate_output(result, 32, "test_invalid_insert_missing_into");
+    generate_output(result, 36, "test_invalid_insert_missing_into");
     result = test_invalid_insert_missing_values();
-    generate_output(result, 33, "test_invalid_insert_missing_values");
+    generate_output(result, 37, "test_invalid_insert_missing_values");
     result = test_invalid_insert_empty_values();
-    generate_output(result, 34, "test_invalid_insert_empty_values");
+    generate_output(result, 38, "test_invalid_insert_empty_values");
     result = test_invalid_insert_missing_table();
-    generate_output(result, 35, "test_invalid_insert_missing_table");
+    generate_output(result, 39, "test_invalid_insert_missing_table");
     result = test_invalid_insert_missing_parentheses();
-    generate_output(result, 36, "test_invalid_insert_missing_parentheses");
+    generate_output(result, 40, "test_invalid_insert_missing_parentheses");
     result = test_invalid_insert_trailing_comma();
-    generate_output(result, 37, "test_invalid_insert_trailing_comma");
+    generate_output(result, 41, "test_invalid_insert_trailing_comma");
     result = test_invalid_insert_missing_column_parenthesis();
-    generate_output(result, 38, "test_invalid_insert_missing_column_parenthesis");
+    generate_output(result, 42, "test_invalid_insert_missing_column_parenthesis");
 
     result = test_invalid_update_missing_set();
-    generate_output(result, 39, "test_invalid_update_missing_set");
+    generate_output(result, 43, "test_invalid_update_missing_set");
     result = test_invalid_update_missing_assignment_value();
-    generate_output(result, 40, "test_invalid_update_missing_assignment_value");
+    generate_output(result, 44, "test_invalid_update_missing_assignment_value");
     result = test_invalid_update_missing_table();
-    generate_output(result, 41, "test_invalid_update_missing_table");
+    generate_output(result, 45, "test_invalid_update_missing_table");
     result = test_invalid_update_missing_equals();
-    generate_output(result, 42, "test_invalid_update_missing_equals");
+    generate_output(result, 46, "test_invalid_update_missing_equals");
     result = test_invalid_update_trailing_comma();
-    generate_output(result, 43, "test_invalid_update_trailing_comma");
+    generate_output(result, 47, "test_invalid_update_trailing_comma");
     result = test_invalid_update_empty_where();
-    generate_output(result, 44, "test_invalid_update_empty_where");
+    generate_output(result, 48, "test_invalid_update_empty_where");
     
     result = test_invalid_delete_missing_from();
-    generate_output(result, 45, "test_invalid_delete_missing_from");
+    generate_output(result, 49, "test_invalid_delete_missing_from");
     result = test_invalid_delete_multiple_tables();
-    generate_output(result, 46, "test_invalid_delete_multiple_tables");
+    generate_output(result, 50, "test_invalid_delete_multiple_tables");
     result = test_invalid_delete_missing_table();
-    generate_output(result, 47, "test_invalid_delete_missing_table");
+    generate_output(result, 51, "test_invalid_delete_missing_table");
     result = test_invalid_delete_empty_where();
-    generate_output(result, 48, "test_invalid_delete_empty_where");
+    generate_output(result, 52, "test_invalid_delete_empty_where");
     result = test_invalid_dml_missing_semicolon();
-    generate_output(result, 49, "test_invalid_dml_missing_semicolon");
+    generate_output(result, 53, "test_invalid_dml_missing_semicolon");
 
     return 0;
 }
