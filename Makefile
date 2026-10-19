@@ -24,6 +24,7 @@ SRC := $(wildcard $(SRC_DIR)/ast/*.c) \
 		$(wildcard $(SRC_DIR)/parser/*.c) \
 		$(wildcard $(SRC_DIR)/row/*.c) \
 		$(wildcard $(SRC_DIR)/schema/*.c) \
+		$(wildcard $(SRC_DIR)/semantic_binder/*.c) \
 		$(wildcard $(SRC_DIR)/serialize/*.c) \
 		$(wildcard $(SRC_DIR)/table/*.c) \
 		$(wildcard $(SRC_DIR)/tokenizer/*.c)
