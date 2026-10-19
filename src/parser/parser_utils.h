@@ -13,6 +13,7 @@ typedef enum statement_type StatementType;
 
 typedef struct ast_projection ProjectionNode;
 typedef struct ast_from FromNode;
+typedef struct ast_as AsNode;
 typedef struct ast_join JoinNode;
 typedef struct ast_on OnNode;
 typedef struct ast_where WhereNode;
@@ -142,6 +143,8 @@ OnNode *parse_on(Parser *parser);
 ProjectionNode *parse_projection(Parser *parser);
 
 FromNode *parse_from(Parser *parser);
+
+AsNode *parse_as(Parser *parser);
 
 WhereNode *parse_where(Parser *parser);
 

@@ -2004,21 +2004,20 @@ ASTNode *parse_drop_index(Parser *parser) {
 
 /* Parse Columns list (Projection operation) after the SELECT keyword */
 ProjectionNode *parse_projection(Parser *parser) {
-    if (!parser || 
-        !parser->token_array || 
-        !parser->token_array->amount_tokens || 
-        parser->current_position >= parser->token_array->amount_tokens || 
+    if (!parser ||
+        !parser->token_array ||
+        !parser->token_array->amount_tokens ||
+        parser->current_position >= parser->token_array->amount_tokens ||
         !parser->token_array->tokens) {
-       return NULL;
+        return NULL;
     }
 
-    ProjectionNode *projection = (ProjectionNode *) calloc(1, sizeof(ProjectionNode));
+    ProjectionNode *projection = calloc(1, sizeof(ProjectionNode));
 
     if (!projection) {
         return NULL;
     }
 
-    // Parse Column Expressions in the Projection list
     while (true) {
         ExpressionNode *column_expression = parse_expression(parser);
 
@@ -2039,18 +2038,51 @@ ProjectionNode *parse_projection(Parser *parser) {
         }
 
         projection->expressions = new_expressions;
-        projection->expressions[projection->num_expressions] = column_expression;
+
+        AsNode *new_aliases = realloc(
+            projection->aliases,
+            (projection->num_expressions + 1) * sizeof(AsNode)
+        );
+
+        if (!new_aliases) {
+            expression_node_free(column_expression);
+            ast_free_projection(projection);
+            return NULL;
+        }
+
+        projection->aliases = new_aliases;
+
+        uint32_t index = projection->num_expressions;
+
+        projection->expressions[index] = column_expression;
+        projection->aliases[index] = (AsNode) {0};
         projection->num_expressions++;
 
         Token *current = get_current_token(parser);
 
-        // Continue to the next iteration if the next token is a comma ','
+        // Parse optional expression alias.
+        if (current && current->type == KEYWORD && !strcasecmp(current->token, "AS")) {
+
+            AsNode *alias = parse_as(parser);
+
+            if (!alias) {
+                ast_free_projection(projection);
+                return NULL;
+            }
+
+            projection->aliases[index] = *alias;
+            free(alias);
+        }
+
+        current = get_current_token(parser);
+
+        // Continue if another projection expression follows.
         if (current && current->type == PUNCTUATION && !strcmp(current->token, ",")) {
             consume_token(parser);
             continue;
         }
 
-        // Exit the loop if the next token is the FROM keyword
+        // Leave FROM for the parent parser.
         if (current && current->type == KEYWORD && !strcasecmp(current->token, "FROM")) {
             break;
         }
@@ -2128,7 +2160,7 @@ JoinNode **parse_joins(Parser *parser, uint32_t *num_joins) {
             return NULL;
         }
         
-        // Parse secondary table name
+        // Parse secondary table name.
         current = get_current_token(parser);
 
         if (!current || current->type != IDENTIFIER) {
@@ -2145,9 +2177,26 @@ JoinNode **parse_joins(Parser *parser, uint32_t *num_joins) {
 
         consume_token(parser);
 
+        // Parse optional JOIN table alias.
+        current = get_current_token(parser);
+
+        if (current && current->type == KEYWORD && !strcasecmp(current->token, "AS")) {
+            AsNode *alias = parse_as(parser);
+
+            if (!alias) {
+                ast_free_join(new_join);
+                ast_free_joins(joins, *num_joins);
+                return NULL;
+            }
+
+            new_join->alias = *alias;
+            free(alias);
+        }
+
         new_join->join_type = join_type;
 
         new_join->on = parse_on(parser);
+
         if (!new_join->on) {
             ast_free_join(new_join);
             ast_free_joins(joins, *num_joins);
@@ -2268,7 +2317,7 @@ FromNode *parse_from(Parser *parser) {
 
         consume_token(parser);
 
-        ExpressionNode **new_expressions = (ExpressionNode **) realloc(
+        ExpressionNode **new_expressions = realloc(
             from->expressions,
             (from->num_expressions + 1) * sizeof(ExpressionNode *)
         );
@@ -2280,19 +2329,47 @@ FromNode *parse_from(Parser *parser) {
         }
 
         from->expressions = new_expressions;
-        from->expressions[from->num_expressions] = table;
-        from->num_expressions++;
 
-        Token *current = get_current_token(parser);  
-        
-        if (!current) {
+        AsNode *new_aliases = realloc(
+            from->aliases,
+            (from->num_expressions + 1) * sizeof(AsNode)
+        );
+
+        if (!new_aliases) {
+            expression_node_free(table);
             ast_free_from(from);
             return NULL;
         }
 
-        // Checking for a ',' that separates table references
-        // If there is no ',', leave the current token untouched for the parent parser to handle
-        if (strcmp(current->token, ",")) {
+        from->aliases = new_aliases;
+
+        uint32_t index = from->num_expressions;
+
+        from->expressions[index] = table;
+        from->aliases[index] = (AsNode) {0};
+        from->num_expressions++;
+
+        Token *current = get_current_token(parser);
+
+        if (current && current->type == KEYWORD && !strcasecmp(current->token, "AS")) {
+
+            AsNode *alias = parse_as(parser);
+
+            if (!alias) {
+                ast_free_from(from);
+                return NULL;
+            }
+
+            from->aliases[index] = *alias;
+            free(alias);
+        }
+
+        // Refresh current token after optional AS parsing.
+        current = get_current_token(parser);
+
+        if (!current ||
+            current->type != PUNCTUATION ||
+            strcmp(current->token, ",")) {
             break;
         }
 
@@ -2300,6 +2377,52 @@ FromNode *parse_from(Parser *parser) {
     }
 
     return from;
+}
+
+/* Parse AS clause */
+AsNode *parse_as(Parser *parser) {
+    if (!parser || 
+        !parser->token_array || 
+        !parser->token_array->amount_tokens || 
+        parser->current_position >= parser->token_array->amount_tokens || 
+        !parser->token_array->tokens) {
+       return NULL;
+    }
+
+    // Parse AS token
+    Token *as_token = get_current_token(parser);
+
+    if (!as_token || as_token->type != KEYWORD || strcasecmp(as_token->token, "AS")) {
+        printf("parse_as: AS token is NULL.");
+        return NULL;
+    }
+
+    consume_token(parser);
+
+    AsNode *as = (AsNode *) calloc(1, sizeof(AsNode));
+    
+    if (!as) {
+        return NULL;
+    }
+
+    Token *alias_token = get_current_token(parser);
+
+    if (!alias_token || alias_token->type != IDENTIFIER) {
+        printf("parse_as: Expected table identifier.\n");
+        free(as);
+        return NULL;
+    }
+
+    if (strlen(alias_token->token) >= sizeof(as->alias)) {
+        free(as);
+        return NULL;
+    }
+    
+    strncpy(as->alias, alias_token->token, sizeof(as->alias));
+    
+    consume_token(parser);
+
+    return as;
 }
 
 /* Parse WHERE clause */
