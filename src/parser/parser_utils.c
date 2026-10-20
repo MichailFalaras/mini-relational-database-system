@@ -3,6 +3,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <time.h>
+#include <errno.h>
 #include "parser_utils.h"
 #include "../../include/parser.h"
 #include "../../include/tokenizer.h"
@@ -2693,12 +2694,11 @@ LimitNode *parse_limit(Parser *parser) {
 
     Token *current = get_current_token(parser);
 
-    if (!current || current->type != NUMBER) {
+    if (!parse_uint32_token(current, &limit->limit)) {
+        printf("parse_limit: Invalid LIMIT value.\n");
         ast_free_limit(limit);
         return NULL;
     }
-
-    limit->limit = (uint32_t) strtoul(current->token, NULL, 10);
 
     consume_token(parser);
     return limit;
@@ -2734,15 +2734,45 @@ OffsetNode *parse_offset(Parser *parser) {
 
     Token *current = get_current_token(parser);
 
-    if (!current || current->type != NUMBER) {
+    if (!parse_uint32_token(current, &offset->offset)) {
+        printf("parse_offset: Invalid OFFSET value.\n");
         ast_free_offset(offset);
         return NULL;
     }
 
-    offset->offset = (uint32_t) strtoul(current->token, NULL, 10);
-
     consume_token(parser);
     return offset;
+}
+
+// Parse and validate an uint32_t token value
+bool parse_uint32_token(const Token *token, uint32_t *out_value) {
+    if (!token || !out_value || token->type != NUMBER) {
+        return false;
+    }
+
+    // Return empty token string
+    if (!token->token || token->token[0] == '\0') {
+        return false;
+    }
+
+    // Require decimal
+    for (const char *p = token->token; *p != '\0'; p++) {
+        if (*p < '0' || *p > '9') {
+            return false;
+        }
+    }
+
+    errno = 0;
+    char *end = NULL;
+
+    unsigned long value = strtoul(token->token, &end, 10);
+
+    if (errno == ERANGE || end == token->token || *end != '\0' || value > UINT32_MAX) {
+        return false;
+    }
+
+    *out_value = (uint32_t) value;
+    return true;
 }
 
 /* Parse INTO clause in INSERT INTO */

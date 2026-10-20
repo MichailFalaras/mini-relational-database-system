@@ -158,6 +158,8 @@ LimitNode *parse_limit(Parser *parser);
 
 OffsetNode *parse_offset(Parser *parser);
 
+bool parse_uint32_token(const Token *token, uint32_t *out_value);
+
 IntoNode *parse_into(Parser *parser);
 
 ValuesNode *parse_values(Parser *parser);
