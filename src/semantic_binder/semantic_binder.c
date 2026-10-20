@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include "../../include/semantic_binder.h"
 #include "../../include/database.h"
 #include "../../include/ast.h"
@@ -64,7 +65,18 @@ bool bind_statement(ASTNode *root, Database *db) {
             success = false;
             return false;
     }
-
+    
     free(context.relations);
     return success;
+}
+
+/* Free SELECT projection metadata */
+void bound_projection_free(BoundProjection *projection) {
+    if (!projection) {
+        return;
+    }
+
+    free(projection->columns);
+    projection->columns = NULL;
+    projection->num_columns = 0;
 }
