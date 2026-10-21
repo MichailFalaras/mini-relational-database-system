@@ -37,6 +37,7 @@ typedef struct binding_context {
     uint32_t num_relations;
 
     BindingClause current_clause;
+    uint32_t aggregate_depth;
 } BindingContext;
 
 // Result type of a bound expression
