@@ -6,16 +6,16 @@
 typedef struct expression_node ExpressionNode;
 
 typedef enum ast_node_type {
-    AST_SELECT,
-    AST_INSERT,
-    AST_UPDATE,
-    AST_DELETE,
-    AST_CREATE_TABLE,
-    AST_DROP_TABLE,
-    AST_ALTER_TABLE,
-    AST_TRUNCATE_TABLE,
-    AST_CREATE_INDEX,
-    AST_DROP_INDEX,
+    AST_SELECT = 0,
+    AST_INSERT = 1,
+    AST_UPDATE = 2,
+    AST_DELETE = 3,
+    AST_CREATE_TABLE = 4,
+    AST_DROP_TABLE = 5,
+    AST_ALTER_TABLE = 6,
+    AST_TRUNCATE_TABLE = 7, 
+    AST_CREATE_INDEX = 8,
+    AST_DROP_INDEX = 9,
 } ASTNodeType;
 
 typedef struct ast_as {
