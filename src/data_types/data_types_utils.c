@@ -354,10 +354,12 @@ bool is_integer_type(DataType type) {
 }
 
 bool are_equality_compatible(DataType left, DataType right) {
+    // Numeric types can be compared with each other.
     if (is_numeric_type(left) && is_numeric_type(right)) {
-        return left == right;
+        return true;
     }
 
+    // Text types can be compared with each other.
     if (is_text_type(left) && is_text_type(right)) {
         return true;
     }
@@ -367,29 +369,31 @@ bool are_equality_compatible(DataType left, DataType right) {
            (left == TIMESTAMP && right == TIMESTAMP);
 }
 
+bool are_ordering_compatible(DataType left, DataType right) {
+    if (!supports_ordering(left) || !supports_ordering(right)) {
+        return false;
+    }
+
+    // Numeric types can be ordered against each other.
+    if (is_numeric_type(left) && is_numeric_type(right)) {
+        return true;
+    }
+
+    // Text types can be ordered against each other.
+    if (is_text_type(left) && is_text_type(right)) {
+        return true;
+    }
+
+    // DATE and TIMESTAMP currently require identical types.
+    return left == right;
+}
+
 bool supports_ordering(DataType type) {
     return is_numeric_type(type) ||
            is_text_type(type) ||
            type == DATE ||
            type == TIMESTAMP;
 }
-
-bool are_ordering_compatible(DataType left, DataType right) {
-    if (!supports_ordering(left) || !supports_ordering(right)) {
-        return false;
-    }
-
-    if (is_numeric_type(left) && is_numeric_type(right)) {
-        return left == right;
-    }
-
-    if (is_text_type(left) && is_text_type(right)) {
-        return true;
-    }
-
-    return left == right;
-}
-
 
 // Data type conversion utils
 

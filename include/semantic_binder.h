@@ -8,6 +8,8 @@
 typedef struct database Database;
 typedef struct table Table;
 typedef struct abstract_syntax_tree_node ASTNode;
+typedef struct expression_node ExpressionNode;
+
 
 // Used to track the current clause and apply rules to expressions
 // depending on where they're used

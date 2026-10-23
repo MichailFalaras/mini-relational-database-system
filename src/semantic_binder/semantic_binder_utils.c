@@ -1650,7 +1650,18 @@ bool grouped_expressions_equal(const ExpressionNode *left, const ExpressionNode 
                 return false;
             }
 
-            return values_equal(left_literal->literal, right_literal->literal);
+            // Handle typed NULL values
+            if (left_literal->literal->null_val || right_literal->literal->null_val) {
+                return left_literal->literal->null_val && right_literal->literal->null_val;
+            }
+
+            int comparison = 0;
+
+            if (!value_compare(left_literal->literal, right_literal->literal, &comparison)) {
+                return false;
+            }
+
+            return comparison == 0;
         }
 
         case EXPR_COLUMN_REF: {
@@ -1773,7 +1784,7 @@ bool expression_contains_aggregate(const ExpressionNode *expr) {
             return expression_contains_aggregate(expr->expression_data.is_not_null_expr.operand);
 
         case EXPR_IN: {
-            In *in = &expr->expression_data.in_expr;
+            const In *in = &expr->expression_data.in_expr;
             
             if (expression_contains_aggregate(in->operand)) {
                 return true;
@@ -1789,7 +1800,7 @@ bool expression_contains_aggregate(const ExpressionNode *expr) {
         }
 
         case EXPR_BETWEEN: {
-            Between *between = &expr->expression_data.between_expr;
+            const Between *between = &expr->expression_data.between_expr;
 
             return (
                 expression_contains_aggregate(between->lower) ||
