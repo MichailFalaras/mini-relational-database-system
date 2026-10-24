@@ -9,7 +9,8 @@
 #include "../../include/expressions.h"
 #include "../data_types/data_types_utils.h"
 #include "../../include/table.h"
-#include "../../include/schema.h"   
+#include "../../include/schema.h"
+#include "../../include/constraints.h"
 
 
 /* ---------- Binding of ExpressionNode ---------- */
@@ -104,6 +105,12 @@ bool bind_column_ref(ExpressionNode *expr, BindingContext *context, BoundExpress
     if (!context || !context->db || 
         !context->relations || context->num_relations == 0 || !out_type) {
         printf("bind_column_ref: Invalid input context or output.\n");
+        return false;
+    }
+
+    if (context->current_clause == BIND_CLAUSE_INSERT_VALUES ||
+        context->current_clause == BIND_CLAUSE_DEFAULT) {
+        printf("bind_column_ref: Column references are not allowed in VALUES.\n");
         return false;
     }
 
@@ -755,7 +762,9 @@ bool bind_function(ExpressionNode *expr, BindingContext *context, BoundExpressio
 
     if (context->current_clause == BIND_CLAUSE_WHERE ||
         context->current_clause == BIND_CLAUSE_JOIN_ON ||
-        context->current_clause == BIND_CLAUSE_GROUP_BY) {
+        context->current_clause == BIND_CLAUSE_GROUP_BY ||
+        context->current_clause == BIND_CLAUSE_INSERT_VALUES ||
+        context->current_clause == BIND_CLAUSE_DEFAULT) {
         printf("bind_function: Aggregate functions are not allowed in this clause.\n");
         return false;
     }
@@ -1010,7 +1019,86 @@ cleanup:
 }
 
 
-bool bind_insert(ASTNode *root, BindingContext *context);
+bool bind_insert(ASTNode *root, BindingContext *context, BoundInsertionValues *out_values) {
+    if (!root || root->type != AST_INSERT) {
+        printf("bind_insert: Invalid AST root node.\n");
+        return false;
+    }
+
+    if (!context || !context->db || !out_values) {
+        printf("bind_insert: Invalid context or output.\n");
+        return false;
+    }
+
+    if (context->relations || context->num_relations != 0 || 
+        context->aggregate_depth != 0 ||
+        out_values->table || out_values->values || out_values->num_values != 0) {
+        printf("bind_insert: Expected fresh binding state.\n");
+        return false;
+    }
+
+    InsertNode *insert = &root->node_contents.insert;
+
+    if (!insert->into || !insert->values ||
+        !insert->values->values ||
+        insert->values->num_values == 0) {
+        printf("bind_insert: Invalid INSERT AST structure.\n");
+        return false;
+    }
+
+    BoundExpressionType *value_types = NULL;
+    bool success = false;
+
+    // Bind INTO clause
+    if (!bind_into(insert->into, context)) {
+        printf("bind_insert: INTO binding failed.\n");
+        return false;
+    }
+
+    if ((size_t)insert->values->num_values > SIZE_MAX / sizeof(BoundExpressionType)) {
+        printf("bind_insert: Value type allocation overflow.\n");
+        return false;
+    }
+
+    value_types = calloc(insert->values->num_values, sizeof(BoundExpressionType));
+
+    if (!value_types) {
+        printf("bind_insert: Data types of values array could not be allocated.\n");
+        return false;
+    }
+    
+     // Bind VALUES expressions under the appropriate clause
+    BindingClause previous_clause = context->current_clause;
+    context->current_clause = BIND_CLAUSE_INSERT_VALUES;
+
+    success = bind_values(insert->values, context, value_types);
+
+    context->current_clause = previous_clause;
+
+    if (!success) {
+        printf("bind_insert: VALUES binding failed.\n");
+        free(value_types);
+        return false;
+    }
+
+    // Validate assignments to explicitly specified columns
+    if (!validate_insert_assignments(insert->into, insert->values, value_types, context)) {
+        printf("bind_insert: Invalid compatibility between columns and assigned values.\n");
+        free(value_types);
+        return false;
+    }
+
+    
+    // Construct complete schema-ordered insertion values
+    if (!build_bound_insertion_values(insert->into, insert->values, value_types, context, out_values)) {
+        printf("bind_insert: Insertion values could not be constructed.\n");
+        free(value_types);
+        return false;
+    }
+
+    free(value_types);
+    return true;
+}
 
 bool bind_update(ASTNode *root, BindingContext *context);
 
@@ -1362,9 +1450,97 @@ bool bind_order_by(OrderByNode *order_by, BindingContext *context) {
     return true;
 }
 
-bool bind_into(IntoNode *into, BindingContext *context);
+// Bind INTO clause
+bool bind_into(IntoNode *into, BindingContext *context) {
+    if (!into || 
+        into->table_name[0] == '\0' || 
+        (into->num_column_refs > 0 && !into->column_refs) ||
+        (into->num_column_refs == 0 && into->column_refs)) {
+        printf("bind_into: Invalid INTO AST node.\n");
+        return false;
+    }
 
-bool bind_values(ValuesNode *values, BindingContext *context);
+    if (!context || !context->db) {
+        printf("bind_into: Invalid context.\n");
+        return false;
+    }
+
+    if (!register_binding_relation(into->table_name, "", context)) {
+        printf("bind_into: Into node's table could not be registered.\n");
+        return false;
+    }
+    
+    // Bind each column reference
+    for (uint32_t i = 0; i < into->num_column_refs; i++) {
+        ExpressionNode *column_expr = into->column_refs[i];
+
+        if (!column_expr || column_expr->type != EXPR_COLUMN_REF) {
+            printf("bind_into: Invalid column reference expression.\n");
+            return false;
+        }
+
+        ColumnRef *current = &column_expr->expression_data.column_value;
+
+        // INSERT destination columns must be unqualified
+        if (current->table_name[0] != '\0') {
+            printf("bind_into: Qualified destination columns are not allowed.\n");
+            return false;
+        }
+
+        BoundExpressionType result_type = {0};
+
+        if(!bind_scalar_expression(column_expr, context, &result_type)) {
+            printf("bind_into: Column reference expression could not be bound.\n");
+            return false;
+        }
+
+        // Detect potential duplicate columns
+        for (uint32_t j = 0; j < i; j++) {
+            ColumnRef *previous = &into->column_refs[j]->expression_data.column_value;
+
+            if (current->column_index == previous->column_index) {
+                printf("bind_into: Duplicate destination column.\n");
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+// Bind VALUES clause
+bool bind_values(ValuesNode *values, BindingContext *context, BoundExpressionType *out_types) {
+    if (!values || !values->values || values->num_values == 0) {
+        printf("bind_values: Invalid VALUES AST root node.\n");
+        return false;
+    }
+
+    if (!context || !context->db || !out_types) {
+        printf("bind_values: Invalid binding context or output.\n");
+        return false;
+    }
+
+    // Bind VALUES
+    for (uint32_t i = 0; i < values->num_values; i++) {
+        ExpressionNode *value_expr = values->values[i];
+        
+        if (!value_expr) {
+            printf("bind_values: Invalid value expression.\n");
+            return false;
+        }
+
+        BoundExpressionType result_type = {0};
+
+        if (!bind_scalar_expression(value_expr, context, &result_type)) {
+            printf("bind_values: Value expression could not be bound.\n");
+            return false;
+        }
+
+        out_types[i] = result_type;
+    }
+
+    return true;
+}
 
 bool bind_set(SetNode *set, BindingContext *context);
 
@@ -1829,4 +2005,384 @@ bool validate_grouped_order_by(OrderByNode *order_by, GroupByNode *group_by) {
     }
 
     return true;
+}
+
+// Check assignment compatibility between columns and corresponding inserted values
+bool validate_insert_assignments(IntoNode *into, ValuesNode *values, 
+    const BoundExpressionType *value_types, BindingContext *context) {
+    
+    if (!into || 
+        into->table_name[0] == '\0' || 
+        (into->num_column_refs > 0 && !into->column_refs) ||
+        (into->num_column_refs == 0 && into->column_refs)) {
+        printf("validate_insert_assignments: Invalid AST root node.\n");
+        return false;
+    }
+
+    if (!values || !values->values || values->num_values == 0) {
+        printf("validate_insert_assignments: Invalid AST root node.\n");
+        return false;
+    }
+
+    if (!context || 
+        !context->relations ||
+        !context->relations[0].table || 
+        context->num_relations != 1) {
+        printf("validate_insert_assignments: Invalid context.\n");
+        return false;
+    }
+
+    if (!value_types) {
+        printf("validate_insert_assignments: Invalid value data types.\n");
+        return false;
+    }
+
+    // Validate inserting table and its schema
+    Table *table = context->relations[0].table;
+
+    if (!table->table_schema || 
+        !table->table_schema->columns ||
+        table->table_schema->num_columns == 0) {
+        printf("validate_insert_assignments: Invalid table schema.\n");
+        return false;
+    }
+
+    Schema *schema = table->table_schema;
+
+    // Validate total number of column-value pairs
+    uint32_t num_target_columns = 
+        into->num_column_refs > 0 ? into->num_column_refs : schema->num_columns;
+
+    if (values->num_values != num_target_columns) {
+        printf("validate_insert_assignments: Column/value count mismatch.\n");
+        return false;
+    }
+
+    // Validate column-value pairs
+    for (uint32_t i = 0; i < values->num_values; i++) {
+        uint32_t column_index = i;
+
+        if (into->num_column_refs > 0) {
+            ExpressionNode *column_expr = into->column_refs[i];
+
+            if (!column_expr || column_expr->type != EXPR_COLUMN_REF) {
+                printf("validate_insert_assignments: Invalid destination column.\n");
+                return false;
+            }
+
+            ColumnRef *column_ref = &column_expr->expression_data.column_value;
+
+            if (column_ref->relation_index != 0 || 
+                column_ref->column_index < 0 ||
+                (uint32_t)column_ref->column_index >= schema->num_columns) {
+                printf("validate_insert_assignments: Invalid bound column index.\n");
+                return false;
+            }
+
+            column_index = (uint32_t) column_ref->column_index;
+        }
+
+        Column *column = schema->columns[column_index];
+
+        if (!column) {
+            printf("validate_insert_assignments: Invalid schema column.\n");
+            return false;
+        }
+
+        ExpressionNode *value_expr = values->values[i];
+
+        if (!value_expr) {
+            printf("validate_insert_assignments: Invalid value expression.\n");
+            return false;
+        }
+
+        BoundExpressionType value_type = value_types[i];
+
+        // Determine whether the supplied expression is an explicit NULL
+        bool is_explicit_null = value_type.is_untyped_null;
+
+        if (value_expr->type == EXPR_LITERAL) {
+            Literal *literal = &value_expr->expression_data.literal_value;
+
+            if (!literal->is_untyped_null && literal->literal && literal->literal->null_val) {
+                is_explicit_null = true;
+            }
+        }
+
+        // Validate assignment compatibility for all typed expressions
+        if (!value_type.is_untyped_null && value_type.type != column->type) {
+            printf("validate_insert_assignments: Data types don't match.\n");
+            return false;
+        }
+
+        // Validate NULL constraints for explicit NULL assignments
+        if (is_explicit_null) {
+            if (schema->num_constraints > 0 && !schema->constraints) {
+                printf("validate_insert_assignments: Invalid constraint array.\n");
+                return false;
+            }
+
+            for (uint32_t j = 0; j < schema->num_constraints; j++) {
+                Constraint *constraint = schema->constraints[j];
+
+                if (!constraint) {
+                    printf("validate_insert_assignments: Invalid constraint in table's schema.\n");
+                    return false;
+                }
+
+                if (constraint->type != NOT_NULL && constraint->type != PRIMARY_KEY) {
+                    continue;
+                }
+
+                if (constraint_has_column(constraint, column_index)) {
+                    printf("validate_insert_assignments: NULL is not allowed in this column.\n");
+                    return false;
+                }
+            }
+        }
+    }
+
+    return true;
+}
+
+// Build insertion values tuple
+bool build_bound_insertion_values(IntoNode *into, ValuesNode *values,
+    const BoundExpressionType *value_types, BindingContext *context, BoundInsertionValues *out_values) {
+    if (!into || 
+        into->table_name[0] == '\0' || 
+        (into->num_column_refs > 0 && !into->column_refs) ||
+        (into->num_column_refs == 0 && into->column_refs)) {
+        printf("build_bound_insertion_values: Invalid AST into node.\n");
+        return false;
+    }
+
+    if (!values || !values->values || values->num_values == 0) {
+        printf("build_bound_insertion_values: Invalid VALUES AST node.\n");
+        return false;
+    }
+
+    if (!context || !context->db || 
+        !context->relations || 
+        context->num_relations != 1 ||
+        !context->relations[0].table) {
+        printf("build_bound_insertion_values: Invalid binding context.\n");
+        return false;
+    }
+
+    if (!value_types) {
+        printf("build_bound_insertion_values: Invalid value types.\n");
+        return false;
+    }
+
+    if (!out_values) {
+        printf("build_bound_insertion_values: Invalid output.\n");
+        return false;
+    }
+
+    // Caller must provide an empty output
+    if (out_values->table || out_values->values || out_values->num_values != 0) {
+        printf("build_bound_insertion_values: Output must be empty.\n");
+        return false;
+    }
+
+    Table *table = context->relations[0].table;
+    Schema *schema = table->table_schema;
+
+    if (!schema || !schema->columns || schema->num_columns == 0 ||
+        (schema->num_constraints > 0 && !schema->constraints)) {
+        printf("build_bound_insertion_values: Invalid table schema.\n");
+        return false;
+    }
+
+    uint32_t num_columns = schema->num_columns;
+    uint32_t expected_values = 
+        into->num_column_refs > 0 ? into->num_column_refs : num_columns;
+
+    if (values->num_values != expected_values) {
+        printf("build_bound_insertion_values: Column/value count mismatch.\n");
+        return false;
+    }
+
+    if ((size_t)num_columns > SIZE_MAX / sizeof(BoundInsertValue) ||
+        (size_t)num_columns > SIZE_MAX / sizeof(bool)) {
+        printf("build_bound_insertion_values: Allocation size overflow.\n");
+        return false;
+    }
+
+    BoundInsertValue *bound_values = (BoundInsertValue *) calloc(num_columns, sizeof(BoundInsertValue));
+    bool *assigned = (bool *) calloc(num_columns, sizeof(bool));
+
+    if (!bound_values || !assigned) {
+        printf("build_bound_insertion_values: Allocation failed.\n");
+        free(bound_values);
+        free(assigned);
+        return false;
+    }
+
+    bool success = false;
+
+    // Map explicitly supplied expressions into schema order
+    for (uint32_t i = 0; i < values->num_values; i++) {
+        uint32_t column_index = i;
+
+        if (into->num_column_refs > 0) {
+            ExpressionNode *column_expr = into->column_refs[i];
+
+            if (!column_expr || column_expr->type != EXPR_COLUMN_REF) {
+                printf("build_bound_insertion_values: Invalid destination column.\n");
+                goto cleanup;
+            }
+
+            ColumnRef *column_ref = &column_expr->expression_data.column_value;
+
+            if (column_ref->relation_index != 0 || column_ref->column_index < 0 ||
+                (uint32_t)column_ref->column_index >= num_columns) {
+                printf("build_bound_insertion_values: Invalid bound column.\n");
+                goto cleanup;
+            }
+
+            column_index = (uint32_t)column_ref->column_index;
+        }
+
+        if (!schema->columns[column_index] || !values->values[i]) {
+            printf("build_bound_insertion_values: Invalid column or value.\n");
+            goto cleanup;
+        }
+
+        // Check for duplicate column assignment
+        if (assigned[column_index]) {
+            printf("build_bound_insertion_values: Duplicate destination column.\n");
+            goto cleanup;
+        }
+
+        // Assign existing expression and data type for the corresponding column
+        assigned[column_index] = true;
+
+        bound_values[column_index].kind = BOUND_INSERT_EXPRESSION;
+        bound_values[column_index].expression = values->values[i];
+        bound_values[column_index].result_type = value_types[i];
+    }
+
+    // Resolve columns omitted from the explicit INSERT column list
+    for (uint32_t i = 0; i < num_columns; i++) {
+        if (assigned[i]) {
+            continue;
+        }
+
+        Column *column = schema->columns[i];
+
+        if (!column) {
+            printf("build_bound_insertion_values: Invalid schema column.\n");
+            goto cleanup;
+        }
+
+        Constraint *default_constraint = NULL;
+        bool allows_null = true;
+
+        // Check if any constraint applies to the current omitted column
+        // and if it does check its type to verify if it allows null or has a default value
+        for (uint32_t j = 0; j < schema->num_constraints; j++) {
+            Constraint *constraint = schema->constraints[j];
+
+            if (!constraint) {
+                printf("build_bound_insertion_values: Invalid constraint.\n");
+                goto cleanup;
+            }
+
+            if (!constraint_has_column(constraint, i)) {
+                continue;
+            }
+
+            if (constraint->type == NOT_NULL || constraint->type == PRIMARY_KEY) {
+                allows_null = false;
+            }
+            else if (constraint->type == DEFAULT) {
+                if (default_constraint) {
+                    printf("build_bound_insertion_values: Duplicate DEFAULT.\n");
+                    goto cleanup;
+                }
+
+                default_constraint = constraint;
+            }
+        }
+
+        // If omitted column has a DEFAULT expression, bind and validate it
+        if (default_constraint) {
+            ExpressionNode *default_expr =
+                default_constraint->constraint_data.default_value.default_expr;
+
+            if (!default_expr) {
+                printf("build_bound_insertion_values: Invalid DEFAULT expression.\n");
+                goto cleanup;
+            }
+
+            BoundExpressionType default_type = {0};
+
+            BindingClause previous_clause = context->current_clause;
+            context->current_clause = BIND_CLAUSE_DEFAULT;
+
+            bool bound = bind_scalar_expression(default_expr, context, &default_type);
+
+            context->current_clause = previous_clause;
+
+            if (!bound) {
+                printf("build_bound_insertion_values: DEFAULT expression binding failed.\n");
+                goto cleanup;
+            }
+
+            // Validate type compatibility
+            if (!default_type.is_untyped_null && default_type.type != column->type) {
+                printf("build_bound_insertion_values: DEFAULT data type mismatch.\n");
+                goto cleanup;
+            }
+
+            // A DEFAULT NULL is invalid for NOT NULL / PRIMARY KEY columns
+            bool is_null_default = default_type.is_untyped_null;
+
+            if (default_expr->type == EXPR_LITERAL) {
+                Literal *literal = &default_expr->expression_data.literal_value;
+
+                if (!literal->is_untyped_null && literal->literal && literal->literal->null_val) {
+                    is_null_default = true;
+                }
+            }
+
+            if (is_null_default && !allows_null) {
+                printf("build_bound_insertion_values: NULL DEFAULT for required column.\n");
+                goto cleanup;
+            }
+
+            bound_values[i].kind = BOUND_INSERT_DEFAULT;
+            bound_values[i].expression = default_expr;
+            bound_values[i].result_type = default_type;
+        }
+        else if (allows_null) {
+            bound_values[i].kind = BOUND_INSERT_NULL;
+            bound_values[i].expression = NULL;
+            bound_values[i].result_type = (BoundExpressionType) {
+                .type = column->type,
+                .is_untyped_null = true
+            };
+        }
+        else {
+            printf("build_bound_insertion_values: Required column omitted.\n");
+            goto cleanup;
+        }
+    }
+
+    // Publish only after successful construction
+    out_values->table = table;
+    out_values->values = bound_values;
+    out_values->num_values = num_columns;
+
+    success = true;
+
+cleanup:
+    free(assigned);
+
+    if (!success) {
+        free(bound_values);
+    }
+
+    return success;
 }

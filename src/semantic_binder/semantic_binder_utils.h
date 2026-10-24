@@ -8,6 +8,7 @@ typedef struct database Database;
 typedef struct abstract_syntax_tree_node ASTNode;
 typedef struct binding_context BindingContext;
 typedef struct expression_node ExpressionNode;
+typedef struct table Table;
 
 typedef struct ast_projection ProjectionNode;
 typedef struct ast_from FromNode;
@@ -29,6 +30,7 @@ typedef struct ast_constraint ConstraintNode;
 typedef struct ast_alter_action AlterActionNode;
 typedef struct bound_expression_type BoundExpressionType;
 typedef struct bound_projection BoundProjection;
+typedef struct bound_insertion_values BoundInsertionValues;
 
 
 /* ---------- Binding of ExpressionNode ---------- */
@@ -72,9 +74,9 @@ bool bind_function(ExpressionNode *expr, BindingContext *context, BoundExpressio
 
 bool bind_select(ASTNode *root, BindingContext *context, BoundProjection *out_projection);
 
-bool bind_update(ASTNode *root, BindingContext *context);
+bool bind_insert(ASTNode *root, BindingContext *context, BoundInsertionValues *out_values);
 
-bool bind_insert(ASTNode *root, BindingContext *context);
+bool bind_update(ASTNode *root, BindingContext *context);
 
 bool bind_delete(ASTNode *root, BindingContext *context);
 
@@ -110,7 +112,7 @@ bool bind_order_by(OrderByNode *order_by, BindingContext *context);
 
 bool bind_into(IntoNode *into, BindingContext *context);
 
-bool bind_values(ValuesNode *values, BindingContext *context);
+bool bind_values(ValuesNode *values, BindingContext *context, BoundExpressionType *out_types);
 
 bool bind_set(SetNode *set, BindingContext *context);
 
@@ -168,5 +170,13 @@ bool expression_contains_aggregate(const ExpressionNode *expr);
 
 // Validate ORDER BY clause in a grouped query
 bool validate_grouped_order_by(OrderByNode *order_by, GroupByNode *group_by);
+
+// Check assignment compatibility between columns and corresponding inserted values
+bool validate_insert_assignments(IntoNode *into, ValuesNode *values,
+    const BoundExpressionType *value_types, BindingContext *context);
+
+// Build insertion values tuple
+bool build_bound_insertion_values(IntoNode *into, ValuesNode *values,
+    const BoundExpressionType *value_types, BindingContext *context, BoundInsertionValues *out_values);
 
 #endif
