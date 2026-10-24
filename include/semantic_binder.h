@@ -20,10 +20,10 @@ typedef enum binding_clause {
     BIND_CLAUSE_GROUP_BY = 3,
     BIND_CLAUSE_HAVING = 4,
     BIND_CLAUSE_ORDER_BY = 5,
-    BIND_CLAUSE_VALUES = 6,
+    BIND_CLAUSE_INSERT_VALUES = 6,
     BIND_CLAUSE_SET = 7,
     BIND_CLAUSE_CHECK = 8,
-    BIND_CLAUSE_DEFAULT = 9
+    BIND_CLAUSE_DEFAULT = 9,
 } BindingClause;
 
 typedef struct binding_relation {
@@ -48,6 +48,7 @@ typedef struct bound_expression_type {
     bool is_untyped_null;
 } BoundExpressionType;
 
+
 // Metadata for a single projected output column
 typedef struct bound_projection_column {
     ExpressionNode *expression; // Non-owning AST pointer
@@ -61,10 +62,57 @@ typedef struct bound_projection {
     uint32_t num_columns;
 } BoundProjection;
 
-/* Validate ASTNode's semantic correctness */
-extern bool bind_statement(ASTNode *root, Database *db);
 
-/* Free SELECT projection metadata */
+// Metadata for a single insert value
+typedef enum bound_insert_value_kind {
+    BOUND_INSERT_EXPRESSION,
+    BOUND_INSERT_DEFAULT,
+    BOUND_INSERT_NULL
+} BoundInsertValueKind;
+
+typedef struct bound_insert_value {
+    BoundInsertValueKind kind;
+
+    // Non-owning reference to an AST expression
+    ExpressionNode *expression;
+    BoundExpressionType result_type;
+} BoundInsertValue;
+
+// Metadata for the inserted VALUES
+typedef struct bound_insertion_values {
+    Table *table;
+
+    // One entry per schema column, in schema order
+    BoundInsertValue *values;
+    uint32_t num_values;
+} BoundInsertionValues;
+
+
+// Final Bound Statement
+typedef enum bound_statement_type {
+    BOUND_STATEMENT_NONE = 0,
+    BOUND_STATEMENT_SELECT = 1,
+    BOUND_STATEMENT_INSERT = 2,
+} BoundStatementType;
+
+typedef struct bound_statement {
+    BoundStatementType type;
+
+    union {
+        BoundProjection projection;
+        BoundInsertionValues insertion;
+    } data;
+} BoundStatement;
+
+/* Validate ASTNode's semantic correctness */
+extern bool bind_statement(ASTNode *root, Database *db, BoundStatement *out_statement);
+
+/* ---------- Metadata Deallocation Helpers ---------- */
+
 extern void bound_projection_free(BoundProjection *projection);
+
+extern void bound_insertion_values_free(BoundInsertionValues *insertion);
+
+extern void bound_statement_free(BoundStatement *statement);
 
 #endif

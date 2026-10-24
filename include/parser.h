@@ -26,6 +26,7 @@ typedef enum statement_type {
 typedef struct statement {
     ASTNode *root;
     StatementType type;
+    BoundStatement bound;
 } Statement;
 
 /* Parser component containing:

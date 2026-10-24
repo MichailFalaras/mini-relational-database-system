@@ -8,6 +8,8 @@
 #include "../../include/expressions.h"
 #include "../../include/ast.h"
 #include "../../include/database.h"
+#include "../../include/semantic_binder.h"
+
 
 /* Allocate and initialize Parser component. */
 Parser *parser_init(TokenArray *token_array) {
@@ -47,10 +49,12 @@ Statement *parse_query(Parser *parser, Database *db) {
         return NULL;
     }
     
-    /*if (!bind_statement(root, db)) {
+    BoundStatement out_statement = {0};
+
+    if (!bind_statement(root, db, &out_statement)) {
         ast_free_node(root);
         return NULL;
-    }*/
+    }
     
     StatementType type = ast_to_statement_type(root->type);
 
@@ -58,8 +62,11 @@ Statement *parse_query(Parser *parser, Database *db) {
     
     if (!statement) {
         ast_free_node(root);
+        bound_statement_free(&out_statement);
         return NULL;
     }
+
+    statement->bound = out_statement;
 
     return statement;
 }
