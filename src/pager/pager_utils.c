@@ -77,10 +77,7 @@ FreePageResult get_free_page(Pager *pager, uint32_t *page_num) {
         return FREE_PAGE_ERROR;
     }
 
-    uint32_t free_list_head;
-    memcpy(&free_list_head,
-        zero->page_data + FREE_LIST_HEAD_OFFSET,
-        sizeof(uint32_t));
+    uint32_t free_list_head = get_free_list_head(zero);
     
     /* No free pages. */
     if (free_list_head == 0) {
@@ -99,10 +96,10 @@ FreePageResult get_free_page(Pager *pager, uint32_t *page_num) {
     /* Since we are returning the first free page no matter what,
      * update free_list_head of page 0 to show to the free page after
      * the page we are returning. */
-    memcpy(zero->page_data + FREE_LIST_HEAD_OFFSET,
-        free_page->page_data,
-        sizeof(uint32_t)
-    );
+    uint32_t free_page_num = get_next_free_list_page(free_page);
+    if (!set_free_list_head(zero, free_page_num)) {
+        return FREE_PAGE_ERROR;
+    }
 
     *page_num = free_list_head;
     if (!page_clear(pager, pager->pages[*page_num])) {
@@ -132,12 +129,7 @@ PageFreeStatus is_page_free(Pager *pager, uint32_t page_num) {
         return PAGE_FREE_ERROR;
     }
 
-    uint32_t free_list_head;
-    memcpy(
-        &free_list_head,
-        zero->page_data + FREE_LIST_HEAD_OFFSET,
-        sizeof(uint32_t)
-    );
+    uint32_t free_list_head = get_free_list_head(zero);
 
     if (free_list_head >= pager->num_pages || free_list_head >= MAX_PAGES) {
         fprintf(stderr, "Corrupted Free List page number.\n");
@@ -166,11 +158,7 @@ PageFreeStatus is_page_free(Pager *pager, uint32_t page_num) {
             /* Load the page into memory and continue the loop. */
         }
 
-        memcpy(
-            &free_list_head,
-            pager->pages[free_list_head]->page_data,
-            sizeof(uint32_t)
-        );
+        free_list_head = get_next_free_list_page(pager->pages[free_list_head]);
     }
 
     return PAGE_NOT_FREE;
@@ -202,29 +190,20 @@ bool connect_free_page(Pager *pager, uint32_t page_num) {
         return false;
     }
 
-    uint32_t free_list_head;
-    memcpy(
-        &free_list_head,
-        zero->page_data + FREE_LIST_HEAD_OFFSET,
-        sizeof(uint32_t)
-    );
+    uint32_t free_list_head = get_free_list_head(zero);
 
     if (free_list_head >= pager->num_pages || free_list_head >= MAX_PAGES) {
         fprintf(stderr, "Corrupted Free List page number.\n");
         return false;
     }
 
-    memcpy(
-        zero->page_data + FREE_LIST_HEAD_OFFSET,
-        &page_num,
-        sizeof(uint32_t)
-    );
+    if (!set_free_list_head(zero, page_num)) {
+        return false;
+    }
 
-    memcpy(
-        page->page_data,
-        &free_list_head,
-        sizeof(uint32_t)
-    );
+    if (!set_next_free_list_page(page, free_list_head)) {
+        return false;
+    }
 
     if (!page_mark_dirty(zero) || !page_mark_dirty(page)) {
         return false;
