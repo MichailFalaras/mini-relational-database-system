@@ -10,6 +10,7 @@
 #include "../src/btree/btree_utils.h"
 #include "../../include/schema.h"
 #include "../../include/index.h"
+#include "../../include/encoding.h"
 #include "catalog_utils.h"
 
 /* Create Catalog struct and create System Catalog Root Page
@@ -258,7 +259,6 @@ CatalogStatus catalog_create_metadata_pages(const Catalog *catalog, CatalogRecor
     // Ceiling rounding up of pages needed
     uint32_t pages_needed = (serialized_size + METADATA_PAGE_PAYLOAD_SIZE - 1) / METADATA_PAGE_PAYLOAD_SIZE;
     Page *prev = curr;
-    uint8_t *write = prev->page_data;
     uint32_t page_num = 0;
 
     // Allocate new pages and connect them to the previous
@@ -279,16 +279,18 @@ CatalogStatus catalog_create_metadata_pages(const Catalog *catalog, CatalogRecor
         metadata_pages.pages[metadata_pages.num_pages] = curr;
         metadata_pages.num_pages++;
 
-        write = prev->page_data;
-        memcpy(write, &page_num, sizeof(uint32_t));
+        if (!set_next_metadata_page_num(prev, page_num)) {
+            goto page_cleanup;
+        }
 
         prev = curr;
         pages_needed--;
     }
 
     page_num = 0;
-    write = curr->page_data;
-    memcpy(write, &page_num, sizeof(uint32_t));
+    if (!set_next_metadata_page_num(curr, page_num)) {
+        goto page_cleanup;
+    }
 
     return CATALOG_SUCCESS;
 
@@ -355,6 +357,11 @@ CatalogStatus catalog_persist_metadata_pages(const Catalog *catalog, CatalogReco
     uint8_t *curr_write = curr->page_data + sizeof(uint32_t);
 
     memcpy(curr_write, buffer_read, bytes_to_write);
+
+    if (!page_mark_dirty(curr)) {
+        goto page_cleanup;
+    }
+
     buffer_read += bytes_to_write;
     remaining_size -= bytes_to_write;
 
@@ -367,8 +374,7 @@ CatalogStatus catalog_persist_metadata_pages(const Catalog *catalog, CatalogReco
             bytes_to_write = remaining_size;
         }
 
-        uint32_t next_page_num = 0;
-        memcpy(&next_page_num, curr->page_data, sizeof(uint32_t));
+        uint32_t next_page_num = get_next_metadata_page_num(curr);
 
         if (next_page_num == SUPERBLOCK_PAGE_NUM) {
             goto page_cleanup;
@@ -505,7 +511,7 @@ CatalogStatus catalog_read_metadata_pages(const Catalog *catalog, BTreeCellConte
         metadata_pages.pages[metadata_pages.num_pages] = page;
         metadata_pages.num_pages++;
 
-        memcpy(&page_num, page->page_data, sizeof(uint32_t));
+        page_num = get_next_metadata_page_num(page);
 
         memcpy(buffer_write, page->page_data + sizeof(uint32_t), bytes_to_write);
         buffer_write += bytes_to_write;
@@ -563,7 +569,7 @@ CatalogStatus catalog_release_metadata_pages(const Catalog *catalog, uint32_t me
         if (!page) {
             return CATALOG_ERROR;
         }
-        memcpy(&page_num, page->page_data, sizeof(uint32_t));
+        page_num = get_next_metadata_page_num(page);
 
         metadata_pages.pages[metadata_pages.num_pages] = page;
         metadata_pages.num_pages++;
