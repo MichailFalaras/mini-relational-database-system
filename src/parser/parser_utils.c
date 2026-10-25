@@ -1011,7 +1011,15 @@ Value *create_number_literal(Parser *parser) {
             return NULL;
         }
 
-        number = (number * 10) + (uint32_t)(token_string[i] - '0');
+        uint32_t digit = (uint32_t)(token_string[i] - '0');
+
+        // Check for overflow
+        if (number > (UINT32_MAX - digit) / 10) {
+            return NULL;
+        }
+
+        number = number * 10 + digit;
+
         if (is_numeric) {
             scale++;
         }
