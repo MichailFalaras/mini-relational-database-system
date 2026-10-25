@@ -107,11 +107,15 @@ bool value_compare(const Value *left, const Value *right, int *result);
 /* Check if 2 Data Types are compatible */
 bool value_types_compatible(DataType left, DataType right);
 
+/* Converts a Value struct to another data type, if compatible */
+bool value_convert_data_type(DataType target, Value *value);
+
 /* Check if a Value can be assigned to a target Data Type */
 bool value_can_assign(DataType target, const Value *value);
 
-/* Converts a Value struct to another data type, if compatible */
-bool value_convert_data_type(DataType target, Value *value);
+/* Check whether a source DataType supports assignment to a target DataType. */
+bool value_types_assignable(DataType target, DataType source);
+
 
 /* Deallocate Value struct */
 void value_free(Value *value);

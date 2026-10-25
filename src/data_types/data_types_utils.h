@@ -36,6 +36,7 @@ bool are_ordering_compatible(DataType left, DataType right);
 bool supports_ordering(DataType type);
 
 // Data type conversion utils
+bool convert_to_integer(Value *value);
 bool convert_to_unsigned_integer(Value *value);
 bool convert_to_numeric(Value *value);
 bool convert_to_float(Value *value);
