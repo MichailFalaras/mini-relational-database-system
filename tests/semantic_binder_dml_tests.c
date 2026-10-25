@@ -12,6 +12,7 @@
 #include "../include/ast.h"
 #include "../include/tokenizer.h"
 #include "../include/parser.h"
+#include "../include/constraints.h"
 
 
 #define ASSERT(condition) \
@@ -102,11 +103,9 @@ static void init_binder_fixture(BinderTestFixture *fixture) {
     fixture->context.current_clause = BIND_CLAUSE_SELECT;
 }
 
-static void cleanup_select_binder_fixture(BinderTestFixture *fixture, BoundProjection *projection) {
-    if (projection) {
-        free(projection->columns);
-        projection->columns = NULL;
-        projection->num_columns = 0;
+static void cleanup_binder_fixture(BinderTestFixture *fixture, BoundStatement *statement) {
+    if (statement) {
+        bound_statement_free(statement);
     }
 
     if (fixture) {
@@ -179,7 +178,7 @@ int test_bind_select_basic() {
     int result = 1;
     
     BinderTestFixture binder = {0};
-    BoundProjection projection_result = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_SELECT };
 
     TestToken tokens[] = {
         {"SELECT", KEYWORD}, {"id", IDENTIFIER}, {",", PUNCTUATION}, {"name", IDENTIFIER},
@@ -200,7 +199,7 @@ int test_bind_select_basic() {
     ASSERT(root->type == AST_SELECT);
 
     // Bind SELECT query
-    ASSERT(bind_select(root, &binder.context, &projection_result));
+    ASSERT(bind_select(root, &binder.context, &bound_result.data.projection));
 
     // Verify registered relations
     ASSERT(binder.context.num_relations == 1);
@@ -208,13 +207,13 @@ int test_bind_select_basic() {
     ASSERT(binder.context.relations[0].table == binder.table_ptrs[0]);
 
     // Verify projection
-    ASSERT(projection_result.num_columns == 2);
-    ASSERT(projection_result.columns != NULL);
-    ASSERT(projection_result.columns[0].result_type.type == INTEGER);
-    ASSERT(projection_result.columns[1].result_type.type == VARCHAR);
+    ASSERT(bound_result.data.projection.num_columns == 2);
+    ASSERT(bound_result.data.projection.columns != NULL);
+    ASSERT(bound_result.data.projection.columns[0].result_type.type == INTEGER);
+    ASSERT(bound_result.data.projection.columns[1].result_type.type == VARCHAR);
 
-    ASSERT(strcmp(projection_result.columns[0].output_name, "id") == 0);
-    ASSERT(strcmp(projection_result.columns[1].output_name, "name") == 0);
+    ASSERT(strcmp(bound_result.data.projection.columns[0].output_name, "id") == 0);
+    ASSERT(strcmp(bound_result.data.projection.columns[1].output_name, "name") == 0);
 
     ASSERT(binder.context.current_clause == BIND_CLAUSE_SELECT);
     ASSERT(binder.context.aggregate_depth == 0);
@@ -237,7 +236,7 @@ int test_bind_select_basic() {
     result = 0;
 
 cleanup:
-    cleanup_select_binder_fixture(&binder, &projection_result);
+    cleanup_binder_fixture(&binder, &bound_result);
     free_test_parser(parser, root);
     return result;
 }
@@ -246,7 +245,7 @@ int test_bind_select_qualified_columns() {
     int result = 1;
     
     BinderTestFixture binder = {0};
-    BoundProjection projection_result = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_SELECT };
 
     TestToken tokens[] = {
         {"SELECT", KEYWORD}, {"employees", IDENTIFIER},  {".", PUNCTUATION},
@@ -267,7 +266,7 @@ int test_bind_select_qualified_columns() {
     ASSERT(root->type == AST_SELECT);
 
     // Bind SELECT query
-    ASSERT(bind_select(root, &binder.context, &projection_result));
+    ASSERT(bind_select(root, &binder.context, &bound_result.data.projection));
 
     // Verify registered relations
     ASSERT(binder.context.num_relations == 1);
@@ -275,9 +274,9 @@ int test_bind_select_qualified_columns() {
     ASSERT(binder.context.relations[0].table == binder.table_ptrs[0]);
 
     // Verify projection
-    ASSERT(projection_result.num_columns == 1);
-    ASSERT(projection_result.columns != NULL);
-    ASSERT(projection_result.columns[0].result_type.type == INTEGER);
+    ASSERT(bound_result.data.projection.num_columns == 1);
+    ASSERT(bound_result.data.projection.columns != NULL);
+    ASSERT(bound_result.data.projection.columns[0].result_type.type == INTEGER);
 
     // Verify bound column references
     SelectNode *select = &root->node_contents.select;
@@ -292,7 +291,7 @@ int test_bind_select_qualified_columns() {
     result = 0;
 
 cleanup:
-    cleanup_select_binder_fixture(&binder, &projection_result);
+    cleanup_binder_fixture(&binder, &bound_result);
     free_test_parser(parser, root);
     return result;
 }
@@ -301,7 +300,7 @@ int test_bind_select_table_alias() {
     int result = 1;
     
     BinderTestFixture binder = {0};
-    BoundProjection projection_result = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_SELECT };
 
     TestToken tokens[] = {
         {"SELECT", KEYWORD}, {"e", IDENTIFIER},  {".", PUNCTUATION}, {"id", IDENTIFIER}, 
@@ -323,7 +322,7 @@ int test_bind_select_table_alias() {
     ASSERT(root->type == AST_SELECT);
 
     // Bind SELECT query
-    ASSERT(bind_select(root, &binder.context, &projection_result));
+    ASSERT(bind_select(root, &binder.context, &bound_result.data.projection));
 
     // Verify registered relations
     ASSERT(binder.context.num_relations == 1);
@@ -332,9 +331,9 @@ int test_bind_select_table_alias() {
     ASSERT(strcmp(binder.context.relations[0].alias, "e") == 0);
 
     // Verify projection
-    ASSERT(projection_result.num_columns == 1);
-    ASSERT(projection_result.columns != NULL);
-    ASSERT(projection_result.columns[0].result_type.type == INTEGER);
+    ASSERT(bound_result.data.projection.num_columns == 1);
+    ASSERT(bound_result.data.projection.columns != NULL);
+    ASSERT(bound_result.data.projection.columns[0].result_type.type == INTEGER);
 
     // Verify bound column references
     SelectNode *select = &root->node_contents.select;
@@ -349,7 +348,7 @@ int test_bind_select_table_alias() {
     result = 0;
 
 cleanup:
-    cleanup_select_binder_fixture(&binder, &projection_result);
+    cleanup_binder_fixture(&binder, &bound_result);
     free_test_parser(parser, root);
     return result;
 }
@@ -358,7 +357,7 @@ int test_bind_select_projection_alias() {
     int result = 1;
     
     BinderTestFixture binder = {0};
-    BoundProjection projection_result = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_SELECT };
 
     TestToken tokens[] = {
         {"SELECT", KEYWORD}, {"salary", IDENTIFIER}, {"AS", KEYWORD}, {"income", IDENTIFIER},
@@ -379,7 +378,7 @@ int test_bind_select_projection_alias() {
     ASSERT(root->type == AST_SELECT);
 
     // Bind SELECT query
-    ASSERT(bind_select(root, &binder.context, &projection_result));
+    ASSERT(bind_select(root, &binder.context, &bound_result.data.projection));
 
     // Verify registered relations
     ASSERT(binder.context.num_relations == 1);
@@ -387,10 +386,10 @@ int test_bind_select_projection_alias() {
     ASSERT(binder.context.relations[0].table == binder.table_ptrs[0]);
 
     // Verify projection
-    ASSERT(projection_result.num_columns == 1);
-    ASSERT(projection_result.columns != NULL);
-    ASSERT(projection_result.columns[0].result_type.type == DOUBLE);
-    ASSERT(strcmp(projection_result.columns[0].output_name, "income") == 0);
+    ASSERT(bound_result.data.projection.num_columns == 1);
+    ASSERT(bound_result.data.projection.columns != NULL);
+    ASSERT(bound_result.data.projection.columns[0].result_type.type == DOUBLE);
+    ASSERT(strcmp(bound_result.data.projection.columns[0].output_name, "income") == 0);
 
     // Verify bound column references
     SelectNode *select = &root->node_contents.select;
@@ -405,7 +404,7 @@ int test_bind_select_projection_alias() {
     result = 0;
 
 cleanup:
-    cleanup_select_binder_fixture(&binder, &projection_result);
+    cleanup_binder_fixture(&binder, &bound_result);
     free_test_parser(parser, root);
     return result;
 }
@@ -414,7 +413,7 @@ int test_bind_select_multiple_from_tables() {
     int result = 1;
     
     BinderTestFixture binder = {0};
-    BoundProjection projection_result = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_SELECT };
 
     TestToken tokens[] = {
         {"SELECT", KEYWORD}, {"employees", IDENTIFIER}, {".", PUNCTUATION}, {"id", IDENTIFIER},
@@ -437,7 +436,7 @@ int test_bind_select_multiple_from_tables() {
     ASSERT(root->type == AST_SELECT);
 
     // Bind SELECT query
-    ASSERT(bind_select(root, &binder.context, &projection_result));
+    ASSERT(bind_select(root, &binder.context, &bound_result.data.projection));
 
     // Verify registered relations
     ASSERT(binder.context.num_relations == 2);
@@ -446,10 +445,10 @@ int test_bind_select_multiple_from_tables() {
     ASSERT(binder.context.relations[1].table == binder.table_ptrs[1]);
 
     // Verify projection
-    ASSERT(projection_result.num_columns == 2);
-    ASSERT(projection_result.columns != NULL);
-    ASSERT(projection_result.columns[0].result_type.type == INTEGER);
-    ASSERT(projection_result.columns[1].result_type.type == VARCHAR);
+    ASSERT(bound_result.data.projection.num_columns == 2);
+    ASSERT(bound_result.data.projection.columns != NULL);
+    ASSERT(bound_result.data.projection.columns[0].result_type.type == INTEGER);
+    ASSERT(bound_result.data.projection.columns[1].result_type.type == VARCHAR);
 
     // Verify bound column references
     SelectNode *select = &root->node_contents.select;
@@ -469,7 +468,7 @@ int test_bind_select_multiple_from_tables() {
     result = 0;
 
 cleanup:
-    cleanup_select_binder_fixture(&binder, &projection_result);
+    cleanup_binder_fixture(&binder, &bound_result);
     free_test_parser(parser, root);
     return result;
 } 
@@ -478,7 +477,7 @@ int test_bind_select_join() {
     int result = 1;
     
     BinderTestFixture binder = {0};
-    BoundProjection projection_result = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_SELECT };
 
     TestToken tokens[] = {
         {"SELECT", KEYWORD}, {"e", IDENTIFIER}, {".", PUNCTUATION}, {"name", IDENTIFIER},
@@ -504,7 +503,7 @@ int test_bind_select_join() {
     ASSERT(root->type == AST_SELECT);
 
     // Bind SELECT query
-    ASSERT(bind_select(root, &binder.context, &projection_result));
+    ASSERT(bind_select(root, &binder.context, &bound_result.data.projection));
 
     // Verify registered relations
     ASSERT(binder.context.num_relations == 2);
@@ -515,10 +514,10 @@ int test_bind_select_join() {
     ASSERT(strcmp(binder.context.relations[1].alias, "d") == 0);
 
     // Verify projection
-    ASSERT(projection_result.num_columns == 2);
-    ASSERT(projection_result.columns != NULL);
-    ASSERT(projection_result.columns[0].result_type.type == VARCHAR);
-    ASSERT(projection_result.columns[1].result_type.type == VARCHAR);
+    ASSERT(bound_result.data.projection.num_columns == 2);
+    ASSERT(bound_result.data.projection.columns != NULL);
+    ASSERT(bound_result.data.projection.columns[0].result_type.type == VARCHAR);
+    ASSERT(bound_result.data.projection.columns[1].result_type.type == VARCHAR);
 
     // Verify bound column references
     SelectNode *select = &root->node_contents.select;
@@ -558,7 +557,7 @@ int test_bind_select_join() {
     result = 0;
 
 cleanup:
-    cleanup_select_binder_fixture(&binder, &projection_result);
+    cleanup_binder_fixture(&binder, &bound_result);
     free_test_parser(parser, root);
     return result;
 }
@@ -567,7 +566,7 @@ int test_bind_select_where() {
     int result = 1;
     
     BinderTestFixture binder = {0};
-    BoundProjection projection_result = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_SELECT };
 
     TestToken tokens[] = {
         {"SELECT", KEYWORD}, {"name", IDENTIFIER}, {"FROM", KEYWORD}, {"employees", IDENTIFIER},
@@ -590,7 +589,7 @@ int test_bind_select_where() {
     ASSERT(root->type == AST_SELECT);
 
     // Bind SELECT query
-    ASSERT(bind_select(root, &binder.context, &projection_result));
+    ASSERT(bind_select(root, &binder.context, &bound_result.data.projection));
 
     // Verify registered relations
     ASSERT(binder.context.num_relations == 1);
@@ -598,9 +597,9 @@ int test_bind_select_where() {
     ASSERT(binder.context.relations[0].table == binder.table_ptrs[0]);
 
     // Verify projection
-    ASSERT(projection_result.num_columns == 1);
-    ASSERT(projection_result.columns != NULL);
-    ASSERT(projection_result.columns[0].result_type.type == VARCHAR);
+    ASSERT(bound_result.data.projection.num_columns == 1);
+    ASSERT(bound_result.data.projection.columns != NULL);
+    ASSERT(bound_result.data.projection.columns[0].result_type.type == VARCHAR);
 
     // Verify bound column references
     SelectNode *select = &root->node_contents.select;
@@ -615,7 +614,7 @@ int test_bind_select_where() {
     result = 0;
 
 cleanup:
-    cleanup_select_binder_fixture(&binder, &projection_result);
+    cleanup_binder_fixture(&binder, &bound_result);
     free_test_parser(parser, root);
     return result;
 }
@@ -624,7 +623,7 @@ int test_bind_select_group_by() {
     int result = 1;
     
     BinderTestFixture binder = {0};
-    BoundProjection projection_result = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_SELECT };
 
     TestToken tokens[] = {
         {"SELECT", KEYWORD}, {"department_id", IDENTIFIER}, {",", PUNCTUATION},
@@ -647,7 +646,7 @@ int test_bind_select_group_by() {
     ASSERT(root->type == AST_SELECT);
 
     // Bind SELECT query
-    ASSERT(bind_select(root, &binder.context, &projection_result));
+    ASSERT(bind_select(root, &binder.context, &bound_result.data.projection));
 
     // Verify registered relations
     ASSERT(binder.context.num_relations == 1);
@@ -655,10 +654,10 @@ int test_bind_select_group_by() {
     ASSERT(binder.context.relations[0].table == binder.table_ptrs[0]);
 
     // Verify projection
-    ASSERT(projection_result.num_columns == 2);
-    ASSERT(projection_result.columns != NULL);
-    ASSERT(projection_result.columns[0].result_type.type == INTEGER);
-    ASSERT(projection_result.columns[1].result_type.type == UNSIGNED_INTEGER);
+    ASSERT(bound_result.data.projection.num_columns == 2);
+    ASSERT(bound_result.data.projection.columns != NULL);
+    ASSERT(bound_result.data.projection.columns[0].result_type.type == INTEGER);
+    ASSERT(bound_result.data.projection.columns[1].result_type.type == UNSIGNED_INTEGER);
 
     // Verify bound column references
     SelectNode *select = &root->node_contents.select;
@@ -678,7 +677,7 @@ int test_bind_select_group_by() {
     result = 0;
 
 cleanup:
-    cleanup_select_binder_fixture(&binder, &projection_result);
+    cleanup_binder_fixture(&binder, &bound_result);
     free_test_parser(parser, root);
     return result;
 }
@@ -687,7 +686,7 @@ int test_bind_select_having() {
     int result = 1;
     
     BinderTestFixture binder = {0};
-    BoundProjection projection_result = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_SELECT };
 
     TestToken tokens[] = {
         {"SELECT", KEYWORD}, {"department_id", IDENTIFIER}, {",", PUNCTUATION},
@@ -712,7 +711,7 @@ int test_bind_select_having() {
     ASSERT(root->type == AST_SELECT);
 
     // Bind SELECT query
-    ASSERT(bind_select(root, &binder.context, &projection_result));
+    ASSERT(bind_select(root, &binder.context, &bound_result.data.projection));
 
     // Verify registered relations
     ASSERT(binder.context.num_relations == 1);
@@ -720,10 +719,10 @@ int test_bind_select_having() {
     ASSERT(binder.context.relations[0].table == binder.table_ptrs[0]);
 
     // Verify projection
-    ASSERT(projection_result.num_columns == 2);
-    ASSERT(projection_result.columns != NULL);
-    ASSERT(projection_result.columns[0].result_type.type == INTEGER);
-    ASSERT(projection_result.columns[1].result_type.type == UNSIGNED_INTEGER);
+    ASSERT(bound_result.data.projection.num_columns == 2);
+    ASSERT(bound_result.data.projection.columns != NULL);
+    ASSERT(bound_result.data.projection.columns[0].result_type.type == INTEGER);
+    ASSERT(bound_result.data.projection.columns[1].result_type.type == UNSIGNED_INTEGER);
 
     // Verify bound column references
     SelectNode *select = &root->node_contents.select;
@@ -763,7 +762,7 @@ int test_bind_select_having() {
     result = 0;
 
 cleanup:
-    cleanup_select_binder_fixture(&binder, &projection_result);
+    cleanup_binder_fixture(&binder, &bound_result);
     free_test_parser(parser, root);
     return result;
 }
@@ -772,7 +771,7 @@ int test_bind_select_order_by() {
     int result = 1;
     
     BinderTestFixture binder = {0};
-    BoundProjection projection_result = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_SELECT };
 
     TestToken tokens[] = {
         {"SELECT", KEYWORD}, {"name", IDENTIFIER},
@@ -795,7 +794,7 @@ int test_bind_select_order_by() {
     ASSERT(root->type == AST_SELECT);
 
     // Bind SELECT query
-    ASSERT(bind_select(root, &binder.context, &projection_result));
+    ASSERT(bind_select(root, &binder.context, &bound_result.data.projection));
 
     // Verify registered relations
     ASSERT(binder.context.num_relations == 1);
@@ -803,9 +802,9 @@ int test_bind_select_order_by() {
     ASSERT(binder.context.relations[0].table == binder.table_ptrs[0]);
 
     // Verify projection
-    ASSERT(projection_result.num_columns == 1);
-    ASSERT(projection_result.columns != NULL);
-    ASSERT(projection_result.columns[0].result_type.type == VARCHAR);
+    ASSERT(bound_result.data.projection.num_columns == 1);
+    ASSERT(bound_result.data.projection.columns != NULL);
+    ASSERT(bound_result.data.projection.columns[0].result_type.type == VARCHAR);
 
     // Verify bound column references
     SelectNode *select = &root->node_contents.select;
@@ -828,7 +827,7 @@ int test_bind_select_order_by() {
     result = 0;
 
 cleanup:
-    cleanup_select_binder_fixture(&binder, &projection_result);
+    cleanup_binder_fixture(&binder, &bound_result);
     free_test_parser(parser, root);
     return result;
 }
@@ -837,7 +836,7 @@ int test_bind_select_grouped_order_by() {
     int result = 1;
     
     BinderTestFixture binder = {0};
-    BoundProjection projection_result = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_SELECT };
 
     TestToken tokens[] = {
         {"SELECT", KEYWORD}, {"department_id", IDENTIFIER}, {",", PUNCTUATION},
@@ -862,7 +861,7 @@ int test_bind_select_grouped_order_by() {
     ASSERT(root->type == AST_SELECT);
 
     // Bind SELECT query
-    ASSERT(bind_select(root, &binder.context, &projection_result));
+    ASSERT(bind_select(root, &binder.context, &bound_result.data.projection));
 
     // Verify registered relations
     ASSERT(binder.context.num_relations == 1);
@@ -870,10 +869,10 @@ int test_bind_select_grouped_order_by() {
     ASSERT(binder.context.relations[0].table == binder.table_ptrs[0]);
 
     // Verify projection
-    ASSERT(projection_result.num_columns == 2);
-    ASSERT(projection_result.columns != NULL);
-    ASSERT(projection_result.columns[0].result_type.type == INTEGER);
-    ASSERT(projection_result.columns[1].result_type.type == UNSIGNED_INTEGER);
+    ASSERT(bound_result.data.projection.num_columns == 2);
+    ASSERT(bound_result.data.projection.columns != NULL);
+    ASSERT(bound_result.data.projection.columns[0].result_type.type == INTEGER);
+    ASSERT(bound_result.data.projection.columns[1].result_type.type == UNSIGNED_INTEGER);
 
     // Verify bound column references
     SelectNode *select = &root->node_contents.select;
@@ -909,7 +908,7 @@ int test_bind_select_grouped_order_by() {
     result = 0;
 
 cleanup:
-    cleanup_select_binder_fixture(&binder, &projection_result);
+    cleanup_binder_fixture(&binder, &bound_result);
     free_test_parser(parser, root);
     return result;
 }
@@ -918,7 +917,7 @@ int test_bind_select_implicit_aggregation() {
     int result = 1;
     
     BinderTestFixture binder = {0};
-    BoundProjection projection_result = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_SELECT };
 
     TestToken tokens[] = {
         {"SELECT", KEYWORD}, {"COUNT", IDENTIFIER}, {"(", PUNCTUATION}, {"*", OPERATOR}, 
@@ -941,7 +940,7 @@ int test_bind_select_implicit_aggregation() {
     ASSERT(root->type == AST_SELECT);
 
     // Bind SELECT query
-    ASSERT(bind_select(root, &binder.context, &projection_result));
+    ASSERT(bind_select(root, &binder.context, &bound_result.data.projection));
 
     // Verify registered relations
     ASSERT(binder.context.num_relations == 1);
@@ -949,10 +948,10 @@ int test_bind_select_implicit_aggregation() {
     ASSERT(binder.context.relations[0].table == binder.table_ptrs[0]);
 
     // Verify projection
-    ASSERT(projection_result.num_columns == 2);
-    ASSERT(projection_result.columns != NULL);
-    ASSERT(projection_result.columns[0].result_type.type == UNSIGNED_INTEGER);
-    ASSERT(projection_result.columns[1].result_type.type == DOUBLE);
+    ASSERT(bound_result.data.projection.num_columns == 2);
+    ASSERT(bound_result.data.projection.columns != NULL);
+    ASSERT(bound_result.data.projection.columns[0].result_type.type == UNSIGNED_INTEGER);
+    ASSERT(bound_result.data.projection.columns[1].result_type.type == DOUBLE);
 
     // Verify bound column references
     SelectNode *select = &root->node_contents.select;
@@ -979,7 +978,7 @@ int test_bind_select_implicit_aggregation() {
     result = 0;
 
 cleanup:
-    cleanup_select_binder_fixture(&binder, &projection_result);
+    cleanup_binder_fixture(&binder, &bound_result);
     free_test_parser(parser, root);
     return result;
 }
@@ -988,7 +987,7 @@ int test_bind_select_implicit_having() {
     int result = 1;
     
     BinderTestFixture binder = {0};
-    BoundProjection projection_result = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_SELECT };
 
     TestToken tokens[] = {
         {"SELECT", KEYWORD}, {"COUNT", IDENTIFIER}, {"(", PUNCTUATION}, {"*", OPERATOR}, 
@@ -1011,7 +1010,7 @@ int test_bind_select_implicit_having() {
     ASSERT(root->type == AST_SELECT);
 
     // Bind SELECT query
-    ASSERT(bind_select(root, &binder.context, &projection_result));
+    ASSERT(bind_select(root, &binder.context, &bound_result.data.projection));
 
     // Verify registered relations
     ASSERT(binder.context.num_relations == 1);
@@ -1019,9 +1018,9 @@ int test_bind_select_implicit_having() {
     ASSERT(binder.context.relations[0].table == binder.table_ptrs[0]);
 
     // Verify projection
-    ASSERT(projection_result.num_columns == 1);
-    ASSERT(projection_result.columns != NULL);
-    ASSERT(projection_result.columns[0].result_type.type == UNSIGNED_INTEGER);
+    ASSERT(bound_result.data.projection.num_columns == 1);
+    ASSERT(bound_result.data.projection.columns != NULL);
+    ASSERT(bound_result.data.projection.columns[0].result_type.type == UNSIGNED_INTEGER);
 
     // Verify bound column references
     SelectNode *select = &root->node_contents.select;
@@ -1052,7 +1051,7 @@ int test_bind_select_implicit_having() {
     result = 0;
 
 cleanup:
-    cleanup_select_binder_fixture(&binder, &projection_result);
+    cleanup_binder_fixture(&binder, &bound_result);
     free_test_parser(parser, root);
     return result;
 }
@@ -1061,7 +1060,7 @@ int test_bind_select_all_clauses() {
     int result = 1;
 
     BinderTestFixture binder = {0};
-    BoundProjection projection_result = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_SELECT };
 
     TestToken tokens[] = {
         {"SELECT", KEYWORD},
@@ -1124,7 +1123,7 @@ int test_bind_select_all_clauses() {
     ASSERT(root->type == AST_SELECT);
 
     // Bind SELECT query
-    ASSERT(bind_select(root, &binder.context, &projection_result));
+    ASSERT(bind_select(root, &binder.context, &bound_result.data.projection));
 
     SelectNode *select = &root->node_contents.select;
 
@@ -1139,11 +1138,11 @@ int test_bind_select_all_clauses() {
     ASSERT(strcmp(binder.context.relations[1].alias, "d") == 0);
 
     // Verify projection
-    ASSERT(projection_result.num_columns == 2);
-    ASSERT(projection_result.columns != NULL);
+    ASSERT(bound_result.data.projection.num_columns == 2);
+    ASSERT(bound_result.data.projection.columns != NULL);
 
-    ASSERT(projection_result.columns[0].result_type.type == INTEGER);
-    ASSERT(projection_result.columns[1].result_type.type == UNSIGNED_INTEGER);
+    ASSERT(bound_result.data.projection.columns[0].result_type.type == INTEGER);
+    ASSERT(bound_result.data.projection.columns[1].result_type.type == UNSIGNED_INTEGER);
 
     ExpressionNode *dept_id_expr = select->projection->expressions[0];
     ExpressionNode *count_expr = select->projection->expressions[1];
@@ -1255,7 +1254,7 @@ int test_bind_select_all_clauses() {
     result = 0;
 
 cleanup:
-    cleanup_select_binder_fixture(&binder, &projection_result);
+    cleanup_binder_fixture(&binder, &bound_result);
     free_test_parser(parser, root);
     return result;
 }
@@ -1264,7 +1263,7 @@ int test_bind_select_unknown_table() {
     int result = 1;
 
     BinderTestFixture binder = {0};
-    BoundProjection projection_result = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_SELECT };
 
     Parser *parser = NULL;
     ASTNode *root = NULL;
@@ -1285,12 +1284,12 @@ int test_bind_select_unknown_table() {
     ASSERT(root->type == AST_SELECT);
 
     // Bind SELECT query
-    ASSERT(!bind_select(root, &binder.context, &projection_result));
+    ASSERT(!bind_select(root, &binder.context, &bound_result.data.projection));
 
     result = 0;
 
 cleanup:
-    cleanup_select_binder_fixture(&binder, &projection_result);
+    cleanup_binder_fixture(&binder, &bound_result);
     free_test_parser(parser, root);
     return result;
 }
@@ -1299,7 +1298,7 @@ int test_bind_select_unknown_column() {
     int result = 1;
 
     BinderTestFixture binder = {0};
-    BoundProjection projection_result = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_SELECT };
 
     Parser *parser = NULL;
     ASTNode *root = NULL;
@@ -1320,12 +1319,12 @@ int test_bind_select_unknown_column() {
     ASSERT(root->type == AST_SELECT);
 
     // Bind SELECT query
-    ASSERT(!bind_select(root, &binder.context, &projection_result));
+    ASSERT(!bind_select(root, &binder.context, &bound_result.data.projection));
 
     result = 0;
 
 cleanup:
-    cleanup_select_binder_fixture(&binder, &projection_result);
+    cleanup_binder_fixture(&binder, &bound_result);
     free_test_parser(parser, root);
     return result;
 }
@@ -1334,7 +1333,7 @@ int test_bind_select_ambiguous_column() {
     int result = 1;
 
     BinderTestFixture binder = {0};
-    BoundProjection projection_result = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_SELECT };
 
     Parser *parser = NULL;
     ASTNode *root = NULL;
@@ -1355,12 +1354,12 @@ int test_bind_select_ambiguous_column() {
     ASSERT(root->type == AST_SELECT);
 
     // Bind SELECT query
-    ASSERT(!bind_select(root, &binder.context, &projection_result));
+    ASSERT(!bind_select(root, &binder.context, &bound_result.data.projection));
 
     result = 0;
 
 cleanup:
-    cleanup_select_binder_fixture(&binder, &projection_result);
+    cleanup_binder_fixture(&binder, &bound_result);
     free_test_parser(parser, root);
     return result;
 }
@@ -1369,7 +1368,7 @@ int test_bind_select_unknown_qualifier() {
     int result = 1;
 
     BinderTestFixture binder = {0};
-    BoundProjection projection_result = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_SELECT };
 
     Parser *parser = NULL;
     ASTNode *root = NULL;
@@ -1390,12 +1389,12 @@ int test_bind_select_unknown_qualifier() {
     ASSERT(root->type == AST_SELECT);
 
     // Bind SELECT query
-    ASSERT(!bind_select(root, &binder.context, &projection_result));
+    ASSERT(!bind_select(root, &binder.context, &bound_result.data.projection));
 
     result = 0;
 
 cleanup:
-    cleanup_select_binder_fixture(&binder, &projection_result);
+    cleanup_binder_fixture(&binder, &bound_result);
     free_test_parser(parser, root);
     return result;
 }
@@ -1404,7 +1403,7 @@ int test_bind_select_duplicate_relation_alias() {
     int result = 1;
 
     BinderTestFixture binder = {0};
-    BoundProjection projection_result = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_SELECT };
 
     Parser *parser = NULL;
     ASTNode *root = NULL;
@@ -1427,12 +1426,12 @@ int test_bind_select_duplicate_relation_alias() {
     ASSERT(root->type == AST_SELECT);
 
     // Bind SELECT query
-    ASSERT(!bind_select(root, &binder.context, &projection_result));
+    ASSERT(!bind_select(root, &binder.context, &bound_result.data.projection));
 
     result = 0;
 
 cleanup:
-    cleanup_select_binder_fixture(&binder, &projection_result);
+    cleanup_binder_fixture(&binder, &bound_result);
     free_test_parser(parser, root);
     return result;
 }
@@ -1441,7 +1440,7 @@ int test_bind_select_invalid_join_on() {
     int result = 1;
 
     BinderTestFixture binder = {0};
-    BoundProjection projection_result = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_SELECT };
 
     Parser *parser = NULL;
     ASTNode *root = NULL;
@@ -1466,12 +1465,12 @@ int test_bind_select_invalid_join_on() {
     ASSERT(root->type == AST_SELECT);
 
     // Bind SELECT query
-    ASSERT(!bind_select(root, &binder.context, &projection_result));
+    ASSERT(!bind_select(root, &binder.context, &bound_result.data.projection));
 
     result = 0;
 
 cleanup:
-    cleanup_select_binder_fixture(&binder, &projection_result);
+    cleanup_binder_fixture(&binder, &bound_result);
     free_test_parser(parser, root);
     return result;
 }
@@ -1480,7 +1479,7 @@ int test_bind_select_aggregate_in_join_on() {
     int result = 1;
 
     BinderTestFixture binder = {0};
-    BoundProjection projection_result = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_SELECT };
 
     Parser *parser = NULL;
     ASTNode *root = NULL;
@@ -1505,12 +1504,12 @@ int test_bind_select_aggregate_in_join_on() {
     ASSERT(root->type == AST_SELECT);
 
     // Bind SELECT query
-    ASSERT(!bind_select(root, &binder.context, &projection_result));
+    ASSERT(!bind_select(root, &binder.context, &bound_result.data.projection));
 
     result = 0;
 
 cleanup:
-    cleanup_select_binder_fixture(&binder, &projection_result);
+    cleanup_binder_fixture(&binder, &bound_result);
     free_test_parser(parser, root);
     return result;
 }
@@ -1519,7 +1518,7 @@ int test_bind_select_invalid_where_type() {
     int result = 1;
 
     BinderTestFixture binder = {0};
-    BoundProjection projection_result = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_SELECT };
 
     Parser *parser = NULL;
     ASTNode *root = NULL;
@@ -1541,12 +1540,12 @@ int test_bind_select_invalid_where_type() {
     ASSERT(root->type == AST_SELECT);
 
     // Bind SELECT query
-    ASSERT(!bind_select(root, &binder.context, &projection_result));
+    ASSERT(!bind_select(root, &binder.context, &bound_result.data.projection));
 
     result = 0;
 
 cleanup:
-    cleanup_select_binder_fixture(&binder, &projection_result);
+    cleanup_binder_fixture(&binder, &bound_result);
     free_test_parser(parser, root);
     return result;
 }
@@ -1555,7 +1554,7 @@ int test_bind_select_aggregate_in_where() {
     int result = 1;
 
     BinderTestFixture binder = {0};
-    BoundProjection projection_result = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_SELECT };
 
     Parser *parser = NULL;
     ASTNode *root = NULL;
@@ -1577,12 +1576,12 @@ int test_bind_select_aggregate_in_where() {
     ASSERT(root->type == AST_SELECT);
 
     // Bind SELECT query
-    ASSERT(!bind_select(root, &binder.context, &projection_result));
+    ASSERT(!bind_select(root, &binder.context, &bound_result.data.projection));
 
     result = 0;
 
 cleanup:
-    cleanup_select_binder_fixture(&binder, &projection_result);
+    cleanup_binder_fixture(&binder, &bound_result);
     free_test_parser(parser, root);
     return result;
 }
@@ -1591,7 +1590,7 @@ int test_bind_select_aggregate_in_group_by() {
     int result = 1;
 
     BinderTestFixture binder = {0};
-    BoundProjection projection_result = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_SELECT };
 
     Parser *parser = NULL;
     ASTNode *root = NULL;
@@ -1614,12 +1613,12 @@ int test_bind_select_aggregate_in_group_by() {
     ASSERT(root->type == AST_SELECT);
 
     // Bind SELECT query
-    ASSERT(!bind_select(root, &binder.context, &projection_result));
+    ASSERT(!bind_select(root, &binder.context, &bound_result.data.projection));
 
     result = 0;
 
 cleanup:
-    cleanup_select_binder_fixture(&binder, &projection_result);
+    cleanup_binder_fixture(&binder, &bound_result);
     free_test_parser(parser, root);
     return result;
 }
@@ -1628,7 +1627,7 @@ int test_bind_select_ungrouped_projection() {
     int result = 1;
 
     BinderTestFixture binder = {0};
-    BoundProjection projection_result = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_SELECT };
 
     Parser *parser = NULL;
     ASTNode *root = NULL;
@@ -1651,12 +1650,12 @@ int test_bind_select_ungrouped_projection() {
     ASSERT(root->type == AST_SELECT);
 
     // Bind SELECT query
-    ASSERT(!bind_select(root, &binder.context, &projection_result));
+    ASSERT(!bind_select(root, &binder.context, &bound_result.data.projection));
 
     result = 0;
 
 cleanup:
-    cleanup_select_binder_fixture(&binder, &projection_result);
+    cleanup_binder_fixture(&binder, &bound_result);
     free_test_parser(parser, root);
     return result;
 }
@@ -1665,7 +1664,7 @@ int test_bind_select_invalid_implicit_aggregation() {
     int result = 1;
 
     BinderTestFixture binder = {0};
-    BoundProjection projection_result = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_SELECT };
 
     Parser *parser = NULL;
     ASTNode *root = NULL;
@@ -1687,12 +1686,12 @@ int test_bind_select_invalid_implicit_aggregation() {
     ASSERT(root->type == AST_SELECT);
 
     // Bind SELECT query
-    ASSERT(!bind_select(root, &binder.context, &projection_result));
+    ASSERT(!bind_select(root, &binder.context, &bound_result.data.projection));
 
     result = 0;
 
 cleanup:
-    cleanup_select_binder_fixture(&binder, &projection_result);
+    cleanup_binder_fixture(&binder, &bound_result);
     free_test_parser(parser, root);
     return result;
 }
@@ -1701,7 +1700,7 @@ int test_bind_select_nested_aggregates() {
     int result = 1;
 
     BinderTestFixture binder = {0};
-    BoundProjection projection_result = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_SELECT };
 
     Parser *parser = NULL;
     ASTNode *root = NULL;
@@ -1723,12 +1722,12 @@ int test_bind_select_nested_aggregates() {
     ASSERT(root->type == AST_SELECT);
 
     // Bind SELECT query
-    ASSERT(!bind_select(root, &binder.context, &projection_result));
+    ASSERT(!bind_select(root, &binder.context, &bound_result.data.projection));
 
     result = 0;
 
 cleanup:
-    cleanup_select_binder_fixture(&binder, &projection_result);
+    cleanup_binder_fixture(&binder, &bound_result);
     free_test_parser(parser, root);
     return result;
 }
@@ -1737,7 +1736,7 @@ int test_bind_select_invalid_having() {
     int result = 1;
 
     BinderTestFixture binder = {0};
-    BoundProjection projection_result = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_SELECT };
 
     Parser *parser = NULL;
     ASTNode *root = NULL;
@@ -1761,12 +1760,12 @@ int test_bind_select_invalid_having() {
     ASSERT(root->type == AST_SELECT);
 
     // Bind SELECT query
-    ASSERT(!bind_select(root, &binder.context, &projection_result));
+    ASSERT(!bind_select(root, &binder.context, &bound_result.data.projection));
 
     result = 0;
 
 cleanup:
-    cleanup_select_binder_fixture(&binder, &projection_result);
+    cleanup_binder_fixture(&binder, &bound_result);
     free_test_parser(parser, root);
     return result;
 }
@@ -1775,7 +1774,7 @@ int test_bind_select_invalid_grouped_order_by() {
     int result = 1;
 
     BinderTestFixture binder = {0};
-    BoundProjection projection_result = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_SELECT };
 
     Parser *parser = NULL;
     ASTNode *root = NULL;
@@ -1797,12 +1796,12 @@ int test_bind_select_invalid_grouped_order_by() {
     ASSERT(root->type == AST_SELECT);
 
     // Bind SELECT query
-    ASSERT(!bind_select(root, &binder.context, &projection_result));
+    ASSERT(!bind_select(root, &binder.context, &bound_result.data.projection));
 
     result = 0;
 
 cleanup:
-    cleanup_select_binder_fixture(&binder, &projection_result);
+    cleanup_binder_fixture(&binder, &bound_result);
     free_test_parser(parser, root);
     return result;   
 }
@@ -1811,7 +1810,7 @@ int test_bind_select_invalid_implicit_having() {
     int result = 1;
 
     BinderTestFixture binder = {0};
-    BoundProjection projection_result = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_SELECT };
 
     Parser *parser = NULL;
     ASTNode *root = NULL;
@@ -1832,12 +1831,12 @@ int test_bind_select_invalid_implicit_having() {
     ASSERT(root->type == AST_SELECT);
 
     // Bind SELECT query
-    ASSERT(!bind_select(root, &binder.context, &projection_result));
+    ASSERT(!bind_select(root, &binder.context, &bound_result.data.projection));
 
     result = 0;
 
 cleanup:
-    cleanup_select_binder_fixture(&binder, &projection_result);
+    cleanup_binder_fixture(&binder, &bound_result);
     free_test_parser(parser, root);
     return result;
 }
@@ -1846,7 +1845,7 @@ int test_bind_select_null_arguments() {
     int result = 1;
 
     BinderTestFixture binder = {0};
-    BoundProjection projection_result = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_SELECT };
 
     Parser *parser = NULL;
     ASTNode *root = NULL;
@@ -1867,10 +1866,10 @@ int test_bind_select_null_arguments() {
     ASSERT(root->type == AST_SELECT);
 
     // NULL root
-    ASSERT(!bind_select(NULL, &binder.context, &projection_result));
+    ASSERT(!bind_select(NULL, &binder.context, &bound_result.data.projection));
 
     // NULL context
-    ASSERT(!bind_select(root, NULL, &projection_result));
+    ASSERT(!bind_select(root, NULL, &bound_result.data.projection));
 
     // NULL output
     ASSERT(!bind_select(root, &binder.context, NULL));
@@ -1878,7 +1877,7 @@ int test_bind_select_null_arguments() {
     result = 0;
 
 cleanup:
-    cleanup_select_binder_fixture(&binder, &projection_result);
+    cleanup_binder_fixture(&binder, &bound_result);
     free_test_parser(parser, root);
     return result;
 }
@@ -1887,7 +1886,7 @@ int test_bind_select_invalid_ast_structure() {
     int result = 1;
 
     BinderTestFixture binder = {0};
-    BoundProjection projection_result = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_SELECT };
 
     Parser *parser = NULL;
     ASTNode *root = NULL;
@@ -1917,7 +1916,7 @@ int test_bind_select_invalid_ast_structure() {
     // Temporarily create a malformed WHERE node
     select->where->expression = NULL;
 
-    ASSERT(!bind_select(root, &binder.context, &projection_result));
+    ASSERT(!bind_select(root, &binder.context, &bound_result.data.projection));
 
     // Restore the original expression
     select->where->expression = original_expression;
@@ -1925,7 +1924,7 @@ int test_bind_select_invalid_ast_structure() {
     result = 0;
 
 cleanup:
-    cleanup_select_binder_fixture(&binder, &projection_result);
+    cleanup_binder_fixture(&binder, &bound_result);
     free_test_parser(parser, root);
     return result;
 }
@@ -1934,7 +1933,7 @@ int test_bind_select_nonempty_output() {
     int result = 1;
 
     BinderTestFixture binder = {0};
-    BoundProjection projection_result = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_SELECT };
 
     Parser *parser = NULL;
     ASTNode *root = NULL;
@@ -1955,22 +1954,22 @@ int test_bind_select_nonempty_output() {
     ASSERT(root != NULL);
     ASSERT(root->type == AST_SELECT);
 
-    projection_result.columns = calloc(1, sizeof(BoundProjectionColumn));
-    ASSERT(projection_result.columns != NULL);
+    bound_result.data.projection.columns = calloc(1, sizeof(BoundProjectionColumn));
+    ASSERT(bound_result.data.projection.columns != NULL);
 
-    projection_result.num_columns = 1;
+    bound_result.data.projection.num_columns = 1;
 
-    BoundProjectionColumn *original_columns = projection_result.columns;
+    BoundProjectionColumn *original_columns = bound_result.data.projection.columns;
 
-    ASSERT(!bind_select(root, &binder.context, &projection_result));
+    ASSERT(!bind_select(root, &binder.context, &bound_result.data.projection));
 
-    ASSERT(projection_result.columns == original_columns);
-    ASSERT(projection_result.num_columns == 1);
+    ASSERT(bound_result.data.projection.columns == original_columns);
+    ASSERT(bound_result.data.projection.num_columns == 1);
 
     result = 0;
 
 cleanup:
-    cleanup_select_binder_fixture(&binder, &projection_result);
+    cleanup_binder_fixture(&binder, &bound_result);
     free_test_parser(parser, root);
     return result;
 }
@@ -1979,7 +1978,7 @@ int test_bind_select_projection_cleanup() {
     int result = 1;
 
     BinderTestFixture binder = {0};
-    BoundProjection projection_result = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_SELECT };
 
     Parser *parser = NULL;
     ASTNode *root = NULL;
@@ -2000,15 +1999,759 @@ int test_bind_select_projection_cleanup() {
     ASSERT(root != NULL);
     ASSERT(root->type == AST_SELECT);
 
-    ASSERT(!bind_select(root, &binder.context, &projection_result));
+    ASSERT(!bind_select(root, &binder.context, &bound_result.data.projection));
 
-    ASSERT(projection_result.columns == NULL);
-    ASSERT(projection_result.num_columns == 0);
+    ASSERT(bound_result.data.projection.columns == NULL);
+    ASSERT(bound_result.data.projection.num_columns == 0);
 
     result = 0;
 
 cleanup:
-    cleanup_select_binder_fixture(&binder, &projection_result);
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
+/* ---------- bind_insert unit tests ---------- */
+
+int test_bind_insert_all_columns_implicit_schema() {
+    int result = 1;
+
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_INSERT };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    init_binder_fixture(&binder);
+
+    TestToken tokens[] = {
+        {"INSERT", KEYWORD}, {"INTO", KEYWORD}, {"employees", IDENTIFIER},
+        {"VALUES", KEYWORD}, {"(", PUNCTUATION}, {"1", NUMBER}, {",", PUNCTUATION},
+        {"'Alice'", STRING}, {",", PUNCTUATION}, 
+        {"2500.0", NUMBER},  {",", PUNCTUATION}, {"10", NUMBER}, {")", PUNCTUATION}, 
+        {";", PUNCTUATION}
+    };
+
+    // Create parser and AST
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_INSERT);
+
+    ASSERT(bind_insert(root, &binder.context, &bound_result.data.insertion));
+
+    BoundInsertionValues *insertion = &bound_result.data.insertion;
+    InsertNode *insert = &root->node_contents.insert;
+
+    ASSERT(insertion->num_values == 4);
+    ASSERT(insertion->values != NULL);
+
+    for (uint32_t i = 0; i < 4; i++) {
+        ASSERT(insertion->values[i].expression == insert->values->values[i]);
+    }
+
+    ASSERT(insertion->values[0].result_type.type == UNSIGNED_INTEGER);
+    ASSERT(insertion->values[1].result_type.type == CHAR);
+    ASSERT(insertion->values[2].result_type.type == NUMERIC);
+    ASSERT(insertion->values[3].result_type.type == UNSIGNED_INTEGER);
+
+    for (uint32_t i = 0; i < 4; i++) {
+        ASSERT(!insertion->values[i].result_type.is_untyped_null);
+    }
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_insert_explicit_columns_reordered() {
+    int result = 1;
+
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_INSERT };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    init_binder_fixture(&binder);
+
+    TestToken tokens[] = {
+        {"INSERT", KEYWORD}, {"INTO", KEYWORD}, {"employees", IDENTIFIER},
+        {"(", PUNCTUATION},
+        {"salary", IDENTIFIER}, {",", PUNCTUATION},
+        {"name", IDENTIFIER}, {",", PUNCTUATION},
+        {"id", IDENTIFIER}, {",", PUNCTUATION},
+        {"department_id", IDENTIFIER},
+        {")", PUNCTUATION},
+        {"VALUES", KEYWORD}, {"(", PUNCTUATION},
+        {"2500.0", NUMBER}, {",", PUNCTUATION},
+        {"'Alice'", STRING}, {",", PUNCTUATION},
+        {"1", NUMBER}, {",", PUNCTUATION},
+        {"10", NUMBER},
+        {")", PUNCTUATION}, {";", PUNCTUATION}
+    };
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_INSERT);
+
+    ASSERT(bind_insert(root, &binder.context, &bound_result.data.insertion));
+
+    BoundInsertionValues *insertion = &bound_result.data.insertion;
+    InsertNode *insert = &root->node_contents.insert;
+
+    ASSERT(insertion->table == binder.table_ptrs[0]);
+    ASSERT(insertion->num_values == 4);
+    ASSERT(insertion->values != NULL);
+
+    // Destination schema: id, name, salary, department_id
+    // Input order: salary, name, id, department_id
+    ASSERT(insertion->values[0].expression == insert->values->values[2]);
+    ASSERT(insertion->values[1].expression == insert->values->values[1]);
+    ASSERT(insertion->values[2].expression == insert->values->values[0]);
+    ASSERT(insertion->values[3].expression == insert->values->values[3]);
+
+    ASSERT(insertion->values[0].result_type.type == UNSIGNED_INTEGER);
+    ASSERT(insertion->values[1].result_type.type == CHAR);
+    ASSERT(insertion->values[2].result_type.type == NUMERIC);
+    ASSERT(insertion->values[3].result_type.type == UNSIGNED_INTEGER);
+
+    for (uint32_t i = 0; i < 4; i++) {
+        ASSERT(insertion->values[i].kind == BOUND_INSERT_EXPRESSION);
+        ASSERT(!insertion->values[i].result_type.is_untyped_null);
+    }
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_insert_partial_columns() {
+    int result = 1;
+
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_INSERT };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    init_binder_fixture(&binder);
+
+    TestToken tokens[] = {
+        {"INSERT", KEYWORD}, {"INTO", KEYWORD}, {"employees", IDENTIFIER}, {"(", PUNCTUATION},
+        {"id", IDENTIFIER}, {",", PUNCTUATION}, {"name", IDENTIFIER}, {")", PUNCTUATION},
+        {"VALUES", KEYWORD}, {"(", PUNCTUATION}, {"1", NUMBER}, {",", PUNCTUATION},
+        {"'Alice'", STRING}, {")", PUNCTUATION}, {";", PUNCTUATION}
+    };
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_INSERT);
+
+    ASSERT(bind_insert(root, &binder.context, &bound_result.data.insertion));
+
+    BoundInsertionValues *insertion = &bound_result.data.insertion;
+    InsertNode *insert = &root->node_contents.insert;
+
+    ASSERT(insertion->table == binder.table_ptrs[0]);
+    ASSERT(insertion->num_values == 4);
+    ASSERT(insertion->values != NULL);
+
+    ASSERT(insertion->values[0].kind == BOUND_INSERT_EXPRESSION);
+    ASSERT(insertion->values[0].expression == insert->values->values[0]);
+
+    ASSERT(insertion->values[1].kind == BOUND_INSERT_EXPRESSION);
+    ASSERT(insertion->values[1].expression == insert->values->values[1]);
+
+    ASSERT(insertion->values[2].kind == BOUND_INSERT_NULL);
+    ASSERT(insertion->values[2].expression == NULL);
+    ASSERT(insertion->values[2].result_type.type == DOUBLE);
+    ASSERT(insertion->values[2].result_type.is_untyped_null);
+
+    ASSERT(insertion->values[3].kind == BOUND_INSERT_NULL);
+    ASSERT(insertion->values[3].expression == NULL);
+    ASSERT(insertion->values[3].result_type.type == INTEGER);
+    ASSERT(insertion->values[3].result_type.is_untyped_null);
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
+
+int test_bind_insert_default_values() {
+    int result = 1;
+
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_INSERT };
+
+    Parser *parser = NULL;
+    Parser *default_parser = NULL;
+    ASTNode *root = NULL;
+    ASTNode *default_root = NULL;
+
+    Constraint default_constraint = {0};
+    Constraint *constraints[1] = { &default_constraint };
+
+    init_binder_fixture(&binder);
+
+    // Supply a default expression through an independently parsed AST.
+    // That AST owns the expression for the duration of the test.
+    TestToken default_tokens[] = {
+        {"INSERT", KEYWORD}, {"INTO", KEYWORD}, {"employees", IDENTIFIER}, {"VALUES", KEYWORD}, 
+        {"(", PUNCTUATION}, {"1", NUMBER}, {",", PUNCTUATION}, {"'Alice'", STRING}, {",", PUNCTUATION},
+        {"2500.0", NUMBER}, {",", PUNCTUATION}, {"10", NUMBER}, {")", PUNCTUATION}, {";", PUNCTUATION}
+    };
+
+    TestToken tokens[] = {
+        {"INSERT", KEYWORD}, {"INTO", KEYWORD}, {"employees", IDENTIFIER},
+        {"(", PUNCTUATION},
+        {"id", IDENTIFIER}, {",", PUNCTUATION},
+        {"name", IDENTIFIER},
+        {")", PUNCTUATION},
+        {"VALUES", KEYWORD}, {"(", PUNCTUATION},
+        {"1", NUMBER}, {",", PUNCTUATION},
+        {"'Alice'", STRING},
+        {")", PUNCTUATION}, {";", PUNCTUATION}
+    };
+
+    default_parser = create_test_parser(default_tokens, ARRAY_SIZE(default_tokens));
+    ASSERT(default_parser != NULL);
+
+    default_root = parse(default_parser);
+    ASSERT(default_root != NULL);
+    ASSERT(default_root->type == AST_INSERT);
+
+    ExpressionNode *default_expr = default_root->node_contents.insert.values->values[2];
+
+    ASSERT(default_expr != NULL);
+
+    default_constraint.type = DEFAULT;
+    default_constraint.constraint_data.default_value.column_ref = 2;
+    default_constraint.constraint_data.default_value.default_expr = default_expr;
+
+    binder.schemas[0].constraints = constraints;
+    binder.schemas[0].num_constraints = 1;
+
+    // Parse actual tested AST
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_INSERT);
+
+    ASSERT(bind_insert(root, &binder.context, &bound_result.data.insertion));
+
+    BoundInsertionValues *insertion = &bound_result.data.insertion;
+    InsertNode *insert = &root->node_contents.insert;
+
+    ASSERT(insertion->num_values == 4);
+    ASSERT(insertion->values != NULL);
+
+    ASSERT(insertion->values[0].kind == BOUND_INSERT_EXPRESSION);
+    ASSERT(insertion->values[0].expression == insert->values->values[0]);
+
+    ASSERT(insertion->values[1].kind == BOUND_INSERT_EXPRESSION);
+    ASSERT(insertion->values[1].expression == insert->values->values[1]);
+
+    ASSERT(insertion->values[2].kind == BOUND_INSERT_DEFAULT);
+    ASSERT(insertion->values[2].expression == default_expr);
+    ASSERT(insertion->values[2].result_type.type == NUMERIC);
+    ASSERT(!insertion->values[2].result_type.is_untyped_null);
+
+    ASSERT(insertion->values[3].kind == BOUND_INSERT_NULL);
+    ASSERT(insertion->values[3].expression == NULL);
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    free_test_parser(default_parser, default_root);
+    return result;
+}
+
+
+int test_bind_insert_null_values() {
+    int result = 1;
+
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_INSERT };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    init_binder_fixture(&binder);
+
+    TestToken tokens[] = {
+        {"INSERT", KEYWORD}, {"INTO", KEYWORD}, {"employees", IDENTIFIER},
+        {"VALUES", KEYWORD}, {"(", PUNCTUATION},
+        {"1", NUMBER}, {",", PUNCTUATION},
+        {"'Alice'", STRING}, {",", PUNCTUATION},
+        {"NULL", KEYWORD}, {",", PUNCTUATION},
+        {"NULL", KEYWORD},
+        {")", PUNCTUATION}, {";", PUNCTUATION}
+    };
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_INSERT);
+
+    ASSERT(bind_insert(root, &binder.context, &bound_result.data.insertion));
+
+    BoundInsertionValues *insertion = &bound_result.data.insertion;
+    InsertNode *insert = &root->node_contents.insert;
+
+    ASSERT(insertion->num_values == 4);
+    ASSERT(insertion->values != NULL);
+
+    for (uint32_t i = 0; i < 4; i++) {
+        ASSERT(insertion->values[i].kind == BOUND_INSERT_EXPRESSION);
+        ASSERT(insertion->values[i].expression == insert->values->values[i]);
+    }
+
+    ASSERT(!insertion->values[0].result_type.is_untyped_null);
+    ASSERT(!insertion->values[1].result_type.is_untyped_null);
+
+    ASSERT(insertion->values[2].result_type.is_untyped_null);
+    ASSERT(insertion->values[3].result_type.is_untyped_null);
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_insert_expression_assignment() {
+    int result = 1;
+
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_INSERT };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    init_binder_fixture(&binder);
+
+    TestToken tokens[] = {
+        {"INSERT", KEYWORD}, {"INTO", KEYWORD}, {"employees", IDENTIFIER},
+        {"VALUES", KEYWORD}, {"(", PUNCTUATION},
+        {"1", NUMBER}, {",", PUNCTUATION},
+        {"'Alice'", STRING}, {",", PUNCTUATION},
+        {"100", NUMBER}, {"+", OPERATOR}, {"200", NUMBER},
+        {",", PUNCTUATION},
+        {"10", NUMBER},
+        {")", PUNCTUATION}, {";", PUNCTUATION}
+    };
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_INSERT);
+
+    ASSERT(bind_insert(root, &binder.context, &bound_result.data.insertion));
+
+    BoundInsertionValues *insertion = &bound_result.data.insertion;
+    InsertNode *insert = &root->node_contents.insert;
+
+    ASSERT(insertion->num_values == 4);
+    ASSERT(insertion->values != NULL);
+
+    ASSERT(insertion->values[2].kind == BOUND_INSERT_EXPRESSION);
+    ASSERT(insertion->values[2].expression == insert->values->values[2]);
+
+    ExpressionNode *salary_expr = insertion->values[2].expression;
+
+    ASSERT(salary_expr != NULL);
+    ASSERT(salary_expr->type == EXPR_BINARY);
+    ASSERT(salary_expr->expression_data.binary_expr.op == OP_ADD);
+
+    ASSERT(!insertion->values[2].result_type.is_untyped_null);
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_insert_not_null_violation() {
+    int result = 1;
+
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_INSERT };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    Constraint not_null_constraint = {0};
+    Constraint *constraints[1] = { &not_null_constraint };
+
+    init_binder_fixture(&binder);
+
+    not_null_constraint.type = NOT_NULL;
+    not_null_constraint.constraint_data.not_null.column_ref = 0;
+
+    binder.schemas[0].constraints = constraints;
+    binder.schemas[0].num_constraints = 1;
+
+    TestToken tokens[] = {
+        {"INSERT", KEYWORD}, {"INTO", KEYWORD}, {"employees", IDENTIFIER},
+        {"VALUES", KEYWORD}, {"(", PUNCTUATION},
+        {"NULL", KEYWORD}, {",", PUNCTUATION},
+        {"'Alice'", STRING}, {",", PUNCTUATION},
+        {"2500.0", NUMBER}, {",", PUNCTUATION},
+        {"10", NUMBER},
+        {")", PUNCTUATION}, {";", PUNCTUATION}
+    };
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_INSERT);
+
+    ASSERT(!bind_insert(root, &binder.context, &bound_result.data.insertion));
+
+    ASSERT(bound_result.data.insertion.table == NULL);
+    ASSERT(bound_result.data.insertion.values == NULL);
+    ASSERT(bound_result.data.insertion.num_values == 0);
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_insert_incompatible_types() {
+    int result = 1;
+
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_INSERT };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    init_binder_fixture(&binder);
+
+    TestToken tokens[] = {
+        {"INSERT", KEYWORD}, {"INTO", KEYWORD}, {"employees", IDENTIFIER},
+        {"VALUES", KEYWORD}, {"(", PUNCTUATION},
+        {"1", NUMBER}, {",", PUNCTUATION},
+        {"'Alice'", STRING}, {",", PUNCTUATION},
+        {"'invalid'", STRING}, {",", PUNCTUATION},
+        {"10", NUMBER},
+        {")", PUNCTUATION}, {";", PUNCTUATION}
+    };
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_INSERT);
+
+    ASSERT(!bind_insert(root, &binder.context, &bound_result.data.insertion));
+
+    ASSERT(bound_result.data.insertion.table == NULL);
+    ASSERT(bound_result.data.insertion.values == NULL);
+    ASSERT(bound_result.data.insertion.num_values == 0);
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_insert_literal_out_of_range() {
+    int result = 1;
+
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_INSERT };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    init_binder_fixture(&binder);
+
+    TestToken tokens[] = {
+        {"INSERT", KEYWORD}, {"INTO", KEYWORD}, {"employees", IDENTIFIER},
+        {"VALUES", KEYWORD}, {"(", PUNCTUATION},
+        {"2147483648", NUMBER}, {",", PUNCTUATION},
+        {"'Alice'", STRING}, {",", PUNCTUATION},
+        {"2500.0", NUMBER}, {",", PUNCTUATION},
+        {"10", NUMBER},
+        {")", PUNCTUATION}, {";", PUNCTUATION}
+    };
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_INSERT);
+
+    ASSERT(!bind_insert(root, &binder.context, &bound_result.data.insertion));
+
+    ASSERT(bound_result.data.insertion.table == NULL);
+    ASSERT(bound_result.data.insertion.values == NULL);
+    ASSERT(bound_result.data.insertion.num_values == 0);
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_insert_unknown_table() {
+    int result = 1;
+
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_INSERT };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    init_binder_fixture(&binder);
+
+    TestToken tokens[] = {
+        {"INSERT", KEYWORD}, {"INTO", KEYWORD},
+        {"unknown_table", IDENTIFIER},
+        {"VALUES", KEYWORD}, {"(", PUNCTUATION},
+        {"1", NUMBER}, {",", PUNCTUATION},
+        {"'Alice'", STRING},
+        {")", PUNCTUATION}, {";", PUNCTUATION}
+    };
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_INSERT);
+
+    ASSERT(!bind_insert(root, &binder.context, &bound_result.data.insertion));
+
+    ASSERT(bound_result.data.insertion.table == NULL);
+    ASSERT(bound_result.data.insertion.values == NULL);
+    ASSERT(bound_result.data.insertion.num_values == 0);
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_insert_unknown_column() {
+    int result = 1;
+
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_INSERT };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    init_binder_fixture(&binder);
+
+    TestToken tokens[] = {
+        {"INSERT", KEYWORD}, {"INTO", KEYWORD}, {"employees", IDENTIFIER},
+        {"(", PUNCTUATION},
+        {"id", IDENTIFIER}, {",", PUNCTUATION},
+        {"unknown_column", IDENTIFIER},
+        {")", PUNCTUATION},
+        {"VALUES", KEYWORD}, {"(", PUNCTUATION},
+        {"1", NUMBER}, {",", PUNCTUATION},
+        {"10", NUMBER},
+        {")", PUNCTUATION}, {";", PUNCTUATION}
+    };
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_INSERT);
+
+    ASSERT(!bind_insert(root, &binder.context, &bound_result.data.insertion));
+
+    ASSERT(bound_result.data.insertion.table == NULL);
+    ASSERT(bound_result.data.insertion.values == NULL);
+    ASSERT(bound_result.data.insertion.num_values == 0);
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_insert_duplicate_columns() {
+    int result = 1;
+
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_INSERT };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    init_binder_fixture(&binder);
+
+    TestToken tokens[] = {
+        {"INSERT", KEYWORD}, {"INTO", KEYWORD}, {"employees", IDENTIFIER},
+        {"(", PUNCTUATION}, {"id", IDENTIFIER}, {",", PUNCTUATION}, {"id", IDENTIFIER},
+        {")", PUNCTUATION}, {"VALUES", KEYWORD}, {"(", PUNCTUATION}, {"1", NUMBER}, {",", PUNCTUATION},
+        {"2", NUMBER}, {")", PUNCTUATION}, {";", PUNCTUATION}
+    };
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_INSERT);
+
+    ASSERT(!bind_insert(root, &binder.context, &bound_result.data.insertion));
+
+    ASSERT(bound_result.data.insertion.table == NULL);
+    ASSERT(bound_result.data.insertion.values == NULL);
+    ASSERT(bound_result.data.insertion.num_values == 0);
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_insert_value_count_mismatch() {
+    int result = 1;
+
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_INSERT };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    init_binder_fixture(&binder);
+
+    TestToken tokens[] = {
+        {"INSERT", KEYWORD}, {"INTO", KEYWORD}, {"employees", IDENTIFIER},
+        {"VALUES", KEYWORD}, {"(", PUNCTUATION},
+        {"1", NUMBER}, {",", PUNCTUATION},
+        {"'Alice'", STRING}, {",", PUNCTUATION},
+        {"2500.0", NUMBER},
+        {")", PUNCTUATION}, {";", PUNCTUATION}
+    };
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_INSERT);
+
+    ASSERT(!bind_insert(root, &binder.context, &bound_result.data.insertion));
+
+    ASSERT(bound_result.data.insertion.table == NULL);
+    ASSERT(bound_result.data.insertion.values == NULL);
+    ASSERT(bound_result.data.insertion.num_values == 0);
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_insert_invalid_arguments_and_output() {
+    int result = 1;
+
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_INSERT };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    init_binder_fixture(&binder);
+
+    TestToken tokens[] = {
+        {"INSERT", KEYWORD}, {"INTO", KEYWORD}, {"employees", IDENTIFIER},
+        {"VALUES", KEYWORD}, {"(", PUNCTUATION},
+        {"1", NUMBER}, {",", PUNCTUATION},
+        {"'Alice'", STRING}, {",", PUNCTUATION},
+        {"2500.0", NUMBER}, {",", PUNCTUATION},
+        {"10", NUMBER},
+        {")", PUNCTUATION}, {";", PUNCTUATION}
+    };
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_INSERT);
+
+    ASSERT(!bind_insert(NULL, &binder.context, &bound_result.data.insertion));
+    ASSERT(!bind_insert(root, NULL, &bound_result.data.insertion));
+    ASSERT(!bind_insert(root, &binder.context, NULL));
+
+    // Construct an existing output to verify it is not overwritten.
+    bound_result.data.insertion.values = calloc(1, sizeof(BoundInsertValue));
+    ASSERT(bound_result.data.insertion.values != NULL);
+
+    bound_result.data.insertion.num_values = 1;
+
+    BoundInsertValue *original_values = bound_result.data.insertion.values;
+
+    ASSERT(!bind_insert(root, &binder.context, &bound_result.data.insertion));
+
+    ASSERT(bound_result.data.insertion.values == original_values);
+    ASSERT(bound_result.data.insertion.num_values == 1);
+    ASSERT(bound_result.data.insertion.table == NULL);
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
     free_test_parser(parser, root);
     return result;
 }
@@ -2096,6 +2839,37 @@ int main(int argc, char *argv[]) {
     generate_output(result, 32, "test_bind_select_nonempty_output");
     result = test_bind_select_projection_cleanup();
     generate_output(result, 33, "test_bind_select_projection_cleanup");
+
+    /* ---------- bind_insert unit tests ---------- */
+    result = test_bind_insert_all_columns_implicit_schema();
+    generate_output(result, 34, "test_bind_insert_all_columns_implicit_schema");
+    result = test_bind_insert_explicit_columns_reordered();
+    generate_output(result, 35, "test_bind_insert_explicit_columns_reordered");
+    result = test_bind_insert_partial_columns();
+    generate_output(result, 36, "test_bind_insert_partial_columns");
+    result = test_bind_insert_default_values();
+    generate_output(result, 37, "test_bind_insert_default_values");
+    result = test_bind_insert_null_values();
+    generate_output(result, 38, "test_bind_insert_null_values");
+    result = test_bind_insert_expression_assignment();
+    generate_output(result, 39, "test_bind_insert_expression_assignment");
+    
+    result = test_bind_insert_not_null_violation();
+    generate_output(result, 40, "test_bind_insert_not_null_violation");
+    result = test_bind_insert_incompatible_types();
+    generate_output(result, 41, "test_bind_insert_incompatible_types");
+    result = test_bind_insert_literal_out_of_range();
+    generate_output(result, 42, "test_bind_insert_literal_out_of_range");
+    result = test_bind_insert_unknown_table();
+    generate_output(result, 43, "test_bind_insert_unknown_table");
+    result = test_bind_insert_unknown_column();
+    generate_output(result, 44, "test_bind_insert_unknown_column");
+    result = test_bind_insert_duplicate_columns();
+    generate_output(result, 45, "test_bind_insert_duplicate_columns");
+    result = test_bind_insert_value_count_mismatch();
+    generate_output(result, 46, "test_bind_insert_value_count_mismatch");
+    result = test_bind_insert_invalid_arguments_and_output();
+    generate_output(result, 47, "test_bind_insert_invalid_arguments_and_output");
 
     return 0;
 }
