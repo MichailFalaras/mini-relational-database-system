@@ -8,6 +8,7 @@
 #include "../include/pager.h"
 #include "../include/page.h"
 #include "../src/pager/pager_utils.h"
+#include "../include/encoding.h"
 
 #define ASSERT(condition) \
     if (!(condition)) { \
@@ -24,8 +25,8 @@ static int test_opening_new_file() {
     Pager *pager = pager_open(db_path);
     ASSERT(pager != NULL);
     ASSERT(pager->file_length == 0);
-    ASSERT(pager->num_pages == 2);
-    ASSERT(pager->access_counter == 4);
+    ASSERT(pager->num_pages == 1);
+    ASSERT(pager->access_counter == 1);
     /* Checks if file is actually made. */
     ASSERT(access(db_path, F_OK) == 0);
 
@@ -41,9 +42,9 @@ static int test_opening_existing_file() {
 
     Pager *pager = pager_open(db_path);
     ASSERT(pager != NULL);
-    ASSERT(pager->file_length == 2 * PAGE_SIZE);
-    ASSERT(pager->num_pages == 2);
-    ASSERT(pager->access_counter == 4);
+    ASSERT(pager->file_length == 1 * PAGE_SIZE);
+    ASSERT(pager->num_pages == 1);
+    ASSERT(pager->access_counter == 2);
 
     bool res = pager_close(pager);
     ASSERT(res == true);
@@ -96,8 +97,8 @@ static int test_page_creation_and_clearing() {
     uint32_t page_num;
     bool res = pager_allocate_page(pager, &page_num);
     ASSERT(res == true);
-    ASSERT(page_num == 2);
-    ASSERT(pager->num_pages == 3);
+    ASSERT(page_num == 1);
+    ASSERT(pager->num_pages == 2);
 
     Page *page = pager_get_page(pager, page_num);
     ASSERT(page != NULL);
@@ -120,11 +121,11 @@ static int test_page_loading_existing_page() {
     const char *db_path = "build/database2.db";
     
     Pager *pager = pager_open(db_path);
-    /* page_nums: 0, 1, 2 */
-    ASSERT(pager->num_pages == 3);
-    ASSERT(pager->file_length = 3 * PAGE_SIZE);
+    /* page_nums: 0, 1 */
+    ASSERT(pager->num_pages == 2);
+    ASSERT(pager->file_length = 2 * PAGE_SIZE);
 
-    uint32_t page_num = 2;
+    uint32_t page_num = 1;
     Page *page = pager_get_page(pager, page_num);
     ASSERT(page != NULL);
     ASSERT(pager->pages[page_num] != NULL);
@@ -146,8 +147,8 @@ static int test_cache_page_retrieval() {
     uint32_t page_num;
     bool res = pager_allocate_page(pager, &page_num);
     ASSERT(res == true);
-    ASSERT(page_num == 2);
-    ASSERT(pager->num_pages == 3);
+    ASSERT(page_num == 1);
+    ASSERT(pager->num_pages == 2);
 
     Page *page1 = pager_get_page(pager, page_num);
     ASSERT(page1 != NULL);
@@ -164,7 +165,7 @@ static int test_cache_page_retrieval() {
     return 0;
 }
 
-/* Release 2 pages, one already existing in the disk and one just
+/* Release pages, one already existing in the disk and one just
  * getting created in RAM. 
  * Reuse last page entered in the Free Page List which is the head of
  * the list, connect page 0's free list pointer to the other page.
@@ -175,8 +176,8 @@ static int test_release_and_reuse_page() {
     const char *db_path = "build/database2.db";
 
     Pager *pager = pager_open(db_path);
-    ASSERT(pager->num_pages == 3);
-    ASSERT(pager->file_length = 3 * PAGE_SIZE);
+    ASSERT(pager->num_pages == 2);
+    ASSERT(pager->file_length == 2 * PAGE_SIZE);
 
     Page *page = pager_get_page(pager, pager->num_pages-1);
     ASSERT(page != NULL);
@@ -184,89 +185,68 @@ static int test_release_and_reuse_page() {
     uint32_t page_num;
     bool res = pager_allocate_page(pager, &page_num);
     ASSERT(res == true);
+    ASSERT(page_num == 2);
 
     page = pager_get_page(pager, page_num);
     ASSERT(page != NULL);
 
     uint32_t free_list_index;
-    memcpy(
-        &free_list_index,
-        pager->pages[0]->page_data + FREE_LIST_HEAD_OFFSET,
-        sizeof(uint32_t)
-    );
+    free_list_index = get_free_list_head(pager->pages[0]);
     ASSERT(free_list_index == 0);
+
+    res = pager_release_page(pager, 1);
+    ASSERT(res == true);
 
     res = pager_release_page(pager, 2);
     ASSERT(res == true);
 
     res = pager_release_page(pager, 3);
-    ASSERT(res == true);
+    ASSERT(res == false);
 
-    memcpy(
-        &free_list_index,
-        pager->pages[0]->page_data + FREE_LIST_HEAD_OFFSET,
-        sizeof(uint32_t)
-    );
+    free_list_index = get_free_list_head(pager->pages[0]);
+    ASSERT(free_list_index == 2);
 
-    uint32_t free_page1, free_page2;
-    memcpy(
-        &free_page1,
-        pager->pages[2]->page_data,
-        sizeof(uint32_t)
-    );
-    
-    memcpy(
-        &free_page2,
-        pager->pages[3]->page_data,
-        sizeof(uint32_t)
-    );
+    free_list_index = get_next_free_list_page(pager->pages[free_list_index]);
+    ASSERT(free_list_index == 1);
 
-    /* FIFO */
-    ASSERT(free_list_index == 3);
-    ASSERT(free_page2 == 2);
-    ASSERT(free_page1 == 0);
-    
+    free_list_index = get_next_free_list_page(pager->pages[free_list_index]);
+    ASSERT(free_list_index == 0);
+
     ASSERT(pager->pages[0]->is_dirty == true);
-    ASSERT(pager->pages[3]->is_dirty == true);
+    ASSERT(pager->pages[1]->is_dirty == true);
     ASSERT(pager->pages[2]->is_dirty == true);
 
     res = pager_allocate_page(pager, &page_num);
     ASSERT(res == true);
-    /* Page num should be 3 because we return the first free
-     * page of the list. */
-    ASSERT(page_num == 3);
-    /* This should remove it from Free Page List. */
+    ASSERT(page_num == 2);
+
     page = pager_get_page(pager, page_num);
     ASSERT(page != NULL);
 
-    /* Since we removed it, page 0 free list pointer should
-     * point to page_num == 2*/
-    memcpy(
-        &free_list_index,
-        pager->pages[0]->page_data + FREE_LIST_HEAD_OFFSET,
-        sizeof(uint32_t)
-    );
-    ASSERT(free_list_index == 2);
+    free_list_index = get_free_list_head(pager->pages[0]);
+    ASSERT(free_list_index == 1);
 
     res = pager_allocate_page(pager, &page_num);
     ASSERT(res == true);
-    ASSERT(page_num == 2);
-    
+    ASSERT(page_num == 1);
+
     page = pager_get_page(pager, page_num);
     ASSERT(page != NULL);
 
-    memcpy(
-        &free_list_index,
-        pager->pages[0]->page_data + FREE_LIST_HEAD_OFFSET,
-        sizeof(uint32_t)
-    );
+    free_list_index = get_free_list_head(pager->pages[0]);
     ASSERT(free_list_index == 0);
 
-    /* Forced to allocate a new page. */
+    res = pager_allocate_page(pager, &page_num);
+    ASSERT(res == true);
+    ASSERT(page_num == 3);
+
+    page = pager_get_page(pager, page_num);
+    ASSERT(page != NULL);
+
     res = pager_allocate_page(pager, &page_num);
     ASSERT(res == true);
     ASSERT(page_num == 4);
-    
+
     page = pager_get_page(pager, page_num);
     ASSERT(page != NULL);
 
@@ -402,8 +382,8 @@ static int test_evict_all_pages() {
 
     res = pager_evict_all(pager);
     ASSERT(res == true);
-    ASSERT(pager->file_length == 7 * PAGE_SIZE);
-    for (uint32_t i = 0; i < 5; i++) {
+    ASSERT(pager->file_length == 6 * PAGE_SIZE);
+    for (uint32_t i = 0; i < 4; i++) {
         ASSERT(pager->pages[i+2] == NULL);
     }
 
