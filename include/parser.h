@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "semantic_binder.h"
 
 typedef struct abstract_syntax_tree_node ASTNode;
 typedef struct token_array TokenArray;
