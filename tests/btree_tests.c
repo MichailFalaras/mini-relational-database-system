@@ -18,6 +18,8 @@
 
 #define ASSERT(condition) { \
     if (!(condition)) { \
+        fprintf(stderr, "ASSERT failed at %s:%d: %s\n", \
+            __FILE__, __LINE__, #condition); \
         return 1; \
     } \
 }
@@ -3454,7 +3456,9 @@ static int test_split_propagation() {
         &visited_pages
     );
     ASSERT(status == BTREE_SUCCESS);
-    ASSERT(visited_pages.count == ctx.pager->num_pages - 2);
+
+    // NOTE: Forgotten to change that only the Superblock Page is reserved.
+    ASSERT(visited_pages.count == ctx.pager->num_pages - 1);
 
     /* Pending cell must still be searchable after both split levels. */
     BTreeSearchKey search_key = {0};

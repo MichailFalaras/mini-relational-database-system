@@ -190,15 +190,13 @@ BTreeStatus btree_page_validate(Pager *pager, BTreePage *btree_page, BTreeIndexS
                 uint32_t root_page_num = 0;
                 uint32_t metadata_page_num = 0;
 
-                memcpy(&catalog_type, payload, sizeof(uint8_t));
-
+                catalog_type = load_u8_le(payload);
                 payload += sizeof(uint8_t);
 
-                memcpy(&root_page_num, payload, sizeof(uint32_t));
-
+                root_page_num = load_u32_le(payload);
                 payload += sizeof(uint32_t);
 
-                memcpy(&metadata_page_num, payload, sizeof(uint32_t));
+                metadata_page_num = load_u32_le(payload);
 
                 // Catalog record type must represent either a Table or an Index.
                 if (catalog_type > CATALOG_INDEX) {
