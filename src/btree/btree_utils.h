@@ -1,6 +1,10 @@
 #ifndef BTREE_UTILS_H_
 #define BTREE_UTILS_H_
 
+#include <stdint.h>
+#include <stdbool.h>
+
+#include "../../include/encoding.h"
 #include "../../include/btree.h"
 #include "../../include/page.h"
 
@@ -232,28 +236,6 @@ static inline uint16_t get_cell_size(uint32_t cell_pointer) {
 
 static inline uint16_t get_header_size(BTreeNodeType node_type) {
     return (node_type == BTREE_INTERNAL_NODE) ? BTREE_INTERNAL_HEADER_SIZE : BTREE_LEAF_HEADER_SIZE;
-}
-
-// Solving Endianness/Portability and Unaligned Access
-static inline uint16_t load_u16_le(const uint8_t *src) {
-    return (uint16_t)src[0] | ((uint16_t)src[1] << 8);
-}
-
-static inline void store_u16_le(uint8_t *dst, uint16_t value) {
-    dst[0] = (uint8_t)value;
-    dst[1] = (uint8_t)(value >> 8);
-}
-
-static inline uint32_t load_u32_le(const uint8_t *src) {
-    return (uint32_t)src[0] | ((uint32_t)src[1] << 8) | 
-           ((uint32_t)src[2] << 16) | ((uint32_t)src[3] << 24);
-}
-
-static inline void store_u32_le(uint8_t *dst, uint32_t value) {
-    dst[0] = (uint8_t)value;
-    dst[1] = (uint8_t)(value >> 8);
-    dst[2] = (uint8_t)(value >> 16);
-    dst[3] = (uint8_t)(value >> 24);
 }
 
 static inline BTreeNodeType get_node_type(const uint8_t *page_data) {
