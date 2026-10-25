@@ -335,8 +335,27 @@ bool bind_unary(ExpressionNode *expr, BindingContext *context, BoundExpressionTy
         }
 
         if (unary->op == OP_SUB && operand_type.type == UNSIGNED_INTEGER) {
-            printf("bind_unary: Cannot negate an unsigned integer.\n");
-            return false;
+            if (unary->operand->type != EXPR_LITERAL) {
+                printf("bind_unary: Negation of non-literal unsigned expressions is not supported.\n");
+                return false;
+            }
+
+            Value *value = unary->operand->expression_data.literal_value.literal;
+
+            if (!value || value->type != UNSIGNED_INTEGER || value->null_val) {
+                return false;
+            }
+
+            uint32_t magnitude = value->value.uint32_val;
+
+            if (magnitude > (uint32_t)INT32_MAX + 1U) {
+                printf("bind_unary: Negated integer exceeds signed 32-bit range.\n");
+                return false;
+            }
+
+            out_type->type = INTEGER;
+            out_type->is_untyped_null = false;
+            return true; 
         }
     }
     else if (unary->op == OP_NOT) {
@@ -2110,9 +2129,20 @@ bool validate_insert_assignments(IntoNode *into, ValuesNode *values,
         }
 
         // Validate assignment compatibility for all typed expressions
-        if (!value_type.is_untyped_null && value_type.type != column->type) {
-            printf("validate_insert_assignments: Data types don't match.\n");
-            return false;
+        if (!is_explicit_null) {
+            if (value_expr->type == EXPR_LITERAL) {
+                Literal *literal = &value_expr->expression_data.literal_value;
+
+                if (!literal->literal ||
+                    !value_can_assign(column->type, literal->literal)) {
+                    printf("validate_insert_assignments: Invalid literal assignment.\n");
+                    return false;
+                }
+            }
+            else if (!value_types_assignable(column->type, value_type.type)) {
+                printf("validate_insert_assignments: Incompatible expression type.\n");
+                return false;
+            }
         }
 
         // Validate NULL constraints for explicit NULL assignments
@@ -2331,9 +2361,18 @@ bool build_bound_insertion_values(IntoNode *into, ValuesNode *values,
             }
 
             // Validate type compatibility
-            if (!default_type.is_untyped_null && default_type.type != column->type) {
-                printf("build_bound_insertion_values: DEFAULT data type mismatch.\n");
-                goto cleanup;
+            if (!default_type.is_untyped_null) {
+                if (default_expr->type == EXPR_LITERAL) {
+                    Literal *literal = &default_expr->expression_data.literal_value;
+
+                    if (!literal->literal ||
+                        !value_can_assign(column->type, literal->literal)) {
+                        return false;
+                    }
+                }
+                else if (!value_types_assignable(column->type, default_type.type)) {
+                    return false;
+                }
             }
 
             // A DEFAULT NULL is invalid for NOT NULL / PRIMARY KEY columns
