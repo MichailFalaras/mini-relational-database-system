@@ -116,7 +116,7 @@ typedef struct ast_insert {
 } InsertNode;
 
 typedef struct ast_assignment {
-    char column_name[64];
+    ExpressionNode *column_ref;
     ExpressionNode *value;
 } AssignmentNode;
 
@@ -127,6 +127,7 @@ typedef struct ast_set {
 
 typedef struct ast_update {
     char table_name[64];
+    AsNode alias;
     SetNode *set;
     WhereNode *where;
 } UpdateNode;

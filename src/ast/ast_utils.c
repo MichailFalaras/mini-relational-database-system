@@ -206,6 +206,7 @@ void ast_free_assignments(AssignmentNode *assignments, uint32_t num_assignments)
     }
 
     for (uint32_t i = 0; i < num_assignments; i++) {
+        expression_node_free(assignments[i].column_ref);
         expression_node_free(assignments[i].value);
     }
 
