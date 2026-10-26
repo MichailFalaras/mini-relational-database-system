@@ -823,7 +823,14 @@ int test_parse_update_single_assignment() {
     ASSERT(update->set != NULL);
     ASSERT(update->set->num_assignments == 1);
 
-    ASSERT(strcmp(update->set->assignments[0].column_name, "age") == 0);
+    ASSERT(update->set->assignments[0].column_ref != NULL);
+    ASSERT(update->set->assignments[0].column_ref->type == EXPR_COLUMN_REF);
+
+    ASSERT(strcmp(
+        update->set->assignments[0].column_ref->expression_data.column_value.column_name,
+        "age"
+    ) == 0);
+
     ASSERT(update->set->assignments[0].value != NULL);
     ASSERT(update->set->assignments[0].value->type == EXPR_LITERAL);
 
@@ -857,9 +864,22 @@ int test_parse_update_multiple_assignments() {
     
     ASSERT(update->set != NULL);
     ASSERT(update->set->num_assignments == 2);
-    
-    ASSERT(strcmp(update->set->assignments[0].column_name, "name") == 0);
-    ASSERT(strcmp(update->set->assignments[1].column_name, "age") == 0);
+
+    ASSERT(update->set->assignments[0].column_ref != NULL);
+    ASSERT(update->set->assignments[0].column_ref->type == EXPR_COLUMN_REF);
+
+    ASSERT(strcmp(
+        update->set->assignments[0].column_ref->expression_data.column_value.column_name,
+        "name"
+    ) == 0);
+
+    ASSERT(update->set->assignments[1].column_ref != NULL);
+    ASSERT(update->set->assignments[1].column_ref->type == EXPR_COLUMN_REF);
+
+    ASSERT(strcmp(
+        update->set->assignments[1].column_ref->expression_data.column_value.column_name,
+        "age"
+    ) == 0);
     
     ASSERT(update->where != NULL);
     ASSERT(update->where->expression != NULL);
@@ -927,7 +947,14 @@ int test_parse_update_complex_where() {
     UpdateNode *update = &root->node_contents.update;
     ASSERT(update->set != NULL);
     ASSERT(update->set->num_assignments == 1);
-    ASSERT(strcmp(update->set->assignments[0].column_name, "age") == 0);
+    
+    ASSERT(update->set->assignments[0].column_ref != NULL);
+    ASSERT(update->set->assignments[0].column_ref->type == EXPR_COLUMN_REF);
+
+    ASSERT(strcmp(
+        update->set->assignments[0].column_ref->expression_data.column_value.column_name,
+        "age"
+    ) == 0);
 
     ASSERT(update->where != NULL);
     ASSERT(update->where->expression != NULL);
@@ -958,6 +985,110 @@ int test_parse_update_complex_where() {
 
     ASSERT(or_left->expression_data.binary_expr.op == OP_EQ);
     ASSERT(or_right->expression_data.binary_expr.op == OP_EQ);
+
+    free_test_parser(parser, root);
+    return 0;
+
+cleanup:
+    free_test_parser(parser, root);
+    return 1;
+}
+
+int test_parse_update_qualified_assignment() {
+    TestToken tokens[] = {
+        {"UPDATE", KEYWORD}, {"users", IDENTIFIER}, {"SET", KEYWORD},
+        {"users", IDENTIFIER}, {".", PUNCTUATION}, {"age", IDENTIFIER},
+        {"=", OPERATOR}, {"25", NUMBER}, {";", PUNCTUATION}
+    };
+
+    Parser *parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASTNode *root = parser ? parse(parser) : NULL;
+
+    ASSERT(parser != NULL);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_UPDATE);
+
+    SetNode *set = root->node_contents.update.set;
+
+    ASSERT(set != NULL);
+    ASSERT(set->num_assignments == 1);
+    ASSERT(set->assignments != NULL);
+
+    ExpressionNode *column_ref = set->assignments[0].column_ref;
+
+    ASSERT(column_ref != NULL);
+    ASSERT(column_ref->type == EXPR_COLUMN_REF);
+
+    ASSERT(strcmp(
+        column_ref->expression_data.column_value.table_name, "users"
+    ) == 0);
+
+    ASSERT(strcmp(
+        column_ref->expression_data.column_value.column_name, "age"
+    ) == 0);
+
+    ASSERT(column_ref->expression_data.column_value.relation_index == -1);
+    ASSERT(column_ref->expression_data.column_value.column_index == -1);
+
+    ASSERT(set->assignments[0].value != NULL);
+    ASSERT(set->assignments[0].value->type == EXPR_LITERAL);
+
+    free_test_parser(parser, root);
+    return 0;
+
+cleanup:
+    free_test_parser(parser, root);
+    return 1;
+}
+
+int test_parse_update_multiple_expression_assignments() {
+    TestToken tokens[] = {
+        {"UPDATE", KEYWORD}, {"users", IDENTIFIER}, {"SET", KEYWORD},
+        {"age", IDENTIFIER}, {"=", OPERATOR},
+        {"age", IDENTIFIER}, {"+", OPERATOR}, {"1", NUMBER},
+        {",", PUNCTUATION},
+        {"score", IDENTIFIER}, {"=", OPERATOR},
+        {"score", IDENTIFIER}, {"*", OPERATOR}, {"2", NUMBER},
+        {";", PUNCTUATION}
+    };
+
+    Parser *parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASTNode *root = parser ? parse(parser) : NULL;
+
+    ASSERT(parser != NULL);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_UPDATE);
+
+    SetNode *set = root->node_contents.update.set;
+
+    ASSERT(set != NULL);
+    ASSERT(set->num_assignments == 2);
+    ASSERT(set->assignments != NULL);
+
+    ASSERT(set->assignments[0].column_ref != NULL);
+    ASSERT(set->assignments[1].column_ref != NULL);
+
+    ASSERT(set->assignments[0].column_ref->type == EXPR_COLUMN_REF);
+    ASSERT(set->assignments[1].column_ref->type == EXPR_COLUMN_REF);
+
+    ASSERT(strcmp(
+        set->assignments[0].column_ref->expression_data.column_value.column_name,
+        "age"
+    ) == 0);
+
+    ASSERT(strcmp(
+        set->assignments[1].column_ref->expression_data.column_value.column_name,
+        "score"
+    ) == 0);
+
+    ASSERT(set->assignments[0].value != NULL);
+    ASSERT(set->assignments[1].value != NULL);
+
+    ASSERT(set->assignments[0].value->type == EXPR_BINARY);
+    ASSERT(set->assignments[1].value->type == EXPR_BINARY);
+
+    ASSERT(set->assignments[0].value->expression_data.binary_expr.op == OP_ADD);
+    ASSERT(set->assignments[1].value->expression_data.binary_expr.op == OP_MUL);
 
     free_test_parser(parser, root);
     return 0;
@@ -1611,6 +1742,89 @@ cleanup:
     return 1;
 }
 
+int test_invalid_update_missing_assignment_column() {
+    TestToken tokens[] = {
+        {"UPDATE", KEYWORD}, {"users", IDENTIFIER}, {"SET", KEYWORD},
+        {"=", OPERATOR}, {"25", NUMBER}, {";", PUNCTUATION}
+    };
+
+    Parser *parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASTNode *root = parse(parser);
+
+    ASSERT(parser != NULL);
+    int result = root == NULL ? 0 : 1;
+
+    free_test_parser(parser, root);
+    return result;
+
+cleanup:
+    free_test_parser(parser, root);
+    return 1;
+}
+
+int test_invalid_update_literal_assignment_target() {
+    TestToken tokens[] = {
+        {"UPDATE", KEYWORD}, {"users", IDENTIFIER}, {"SET", KEYWORD},
+        {"25", NUMBER}, {"=", OPERATOR}, {"30", NUMBER},
+        {";", PUNCTUATION}
+    };
+
+    Parser *parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASTNode *root = parse(parser);
+
+    ASSERT(parser != NULL);
+    int result = root == NULL ? 0 : 1;
+
+    free_test_parser(parser, root);
+    return result;
+
+cleanup:
+    free_test_parser(parser, root);
+    return 1;
+}
+
+int test_invalid_update_arithmetic_assignment_target() {
+    TestToken tokens[] = {
+        {"UPDATE", KEYWORD}, {"users", IDENTIFIER}, {"SET", KEYWORD},
+        {"age", IDENTIFIER}, {"+", OPERATOR}, {"1", NUMBER},
+        {"=", OPERATOR}, {"30", NUMBER}, {";", PUNCTUATION}
+    };
+
+    Parser *parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASTNode *root = parse(parser);
+
+    ASSERT(parser != NULL);
+    int result = root == NULL ? 0 : 1;
+
+    free_test_parser(parser, root);
+    return result;
+
+cleanup:
+    free_test_parser(parser, root);
+    return 1;
+}
+
+int test_invalid_update_missing_column_after_dot() {
+    TestToken tokens[] = {
+        {"UPDATE", KEYWORD}, {"users", IDENTIFIER}, {"SET", KEYWORD},
+        {"users", IDENTIFIER}, {".", PUNCTUATION},
+        {"=", OPERATOR}, {"25", NUMBER}, {";", PUNCTUATION}
+    };
+
+    Parser *parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASTNode *root = parser ? parse(parser) : NULL;
+
+    ASSERT(parser != NULL);
+    ASSERT(root == NULL);
+
+    free_test_parser(parser, root);
+    return 0;
+
+cleanup:
+    free_test_parser(parser, root);
+    return 1;
+}
+
 int test_invalid_delete_missing_from() {
     TestToken tokens[] = {
         {"DELETE", KEYWORD}, {"users", IDENTIFIER}, {";", PUNCTUATION}
@@ -1802,79 +2016,93 @@ int main(int argc, char *argv[]) {
     generate_output(result, 19, "test_parse_update_arithmetic_assignment");
     result = test_parse_update_complex_where();
     generate_output(result, 20, "test_parse_update_complex_where");
+    result = test_parse_update_qualified_assignment();
+    generate_output(result, 21, "test_parse_update_qualified_assignment");
+    result = test_parse_update_multiple_expression_assignments();
+    generate_output(result, 22, "test_parse_update_multiple_expression_assignments");
+
 
     /* ---------- parse_delete unit tests ---------- */
     result = test_parse_delete_without_where();
-    generate_output(result, 21, "test_parse_delete_without_where");
+    generate_output(result, 23, "test_parse_delete_without_where");
     result = test_parse_delete_with_where();
-    generate_output(result, 22, "test_parse_delete_with_where");
+    generate_output(result, 24, "test_parse_delete_with_where");
     result = test_parse_delete_complex_where();
-    generate_output(result, 23, "test_parse_delete_complex_where");
+    generate_output(result, 25, "test_parse_delete_complex_where");
 
     /* ---------- Invalid DML test cases ---------- */
     result = test_invalid_select_missing_projection();
-    generate_output(result, 24, "test_invalid_select_missing_projection");
+    generate_output(result, 26, "test_invalid_select_missing_projection");
     result = test_invalid_select_missing_from();
-    generate_output(result, 25, "test_invalid_select_missing_from");
+    generate_output(result, 27, "test_invalid_select_missing_from");
     result = test_invalid_select_missing_table();
-    generate_output(result, 26, "test_invalid_select_missing_table");
+    generate_output(result, 28, "test_invalid_select_missing_table");
     result = test_invalid_select_trailing_projection_comma();
-    generate_output(result, 27, "test_invalid_select_trailing_projection_comma");
+    generate_output(result, 29, "test_invalid_select_trailing_projection_comma");
     result = test_invalid_select_missing_join_table();
-    generate_output(result, 28, "test_invalid_select_missing_join_table");
+    generate_output(result, 30, "test_invalid_select_missing_join_table");
     result = test_invalid_select_missing_on();
-    generate_output(result, 29, "test_invalid_select_missing_on");
+    generate_output(result, 31, "test_invalid_select_missing_on");
     result = test_invalid_select_empty_where();
-    generate_output(result, 30, "test_invalid_select_empty_where");
+    generate_output(result, 32, "test_invalid_select_empty_where");
     result = test_invalid_select_empty_order_by();
-    generate_output(result, 31, "test_invalid_select_empty_order_by");
+    generate_output(result, 33, "test_invalid_select_empty_order_by");
     result = test_invalid_select_missing_limit_value();
-    generate_output(result, 32, "test_invalid_select_missing_limit_value");
+    generate_output(result, 34, "test_invalid_select_missing_limit_value");
     result = test_invalid_select_missing_semicolon();
-    generate_output(result, 33, "test_invalid_select_missing_semicolon");
+    generate_output(result, 35, "test_invalid_select_missing_semicolon");
     result = test_invalid_select_missing_column_after_dot();
-    generate_output(result, 34, "test_invalid_select_missing_column_after_dot");
+    generate_output(result, 36, "test_invalid_select_missing_column_after_dot");
     result = test_invalid_select_missing_alias();
-    generate_output(result, 35, "test_invalid_select_missing_alias");
+    generate_output(result, 37, "test_invalid_select_missing_alias");
 
     result = test_invalid_insert_missing_into();
-    generate_output(result, 36, "test_invalid_insert_missing_into");
+    generate_output(result, 38, "test_invalid_insert_missing_into");
     result = test_invalid_insert_missing_values();
-    generate_output(result, 37, "test_invalid_insert_missing_values");
+    generate_output(result, 39, "test_invalid_insert_missing_values");
     result = test_invalid_insert_empty_values();
-    generate_output(result, 38, "test_invalid_insert_empty_values");
+    generate_output(result, 40, "test_invalid_insert_empty_values");
     result = test_invalid_insert_missing_table();
-    generate_output(result, 39, "test_invalid_insert_missing_table");
+    generate_output(result, 41, "test_invalid_insert_missing_table");
     result = test_invalid_insert_missing_parentheses();
-    generate_output(result, 40, "test_invalid_insert_missing_parentheses");
+    generate_output(result, 42, "test_invalid_insert_missing_parentheses");
     result = test_invalid_insert_trailing_comma();
-    generate_output(result, 41, "test_invalid_insert_trailing_comma");
+    generate_output(result, 43, "test_invalid_insert_trailing_comma");
     result = test_invalid_insert_missing_column_parenthesis();
-    generate_output(result, 42, "test_invalid_insert_missing_column_parenthesis");
+    generate_output(result, 44, "test_invalid_insert_missing_column_parenthesis");
 
     result = test_invalid_update_missing_set();
-    generate_output(result, 43, "test_invalid_update_missing_set");
+    generate_output(result, 45, "test_invalid_update_missing_set");
     result = test_invalid_update_missing_assignment_value();
-    generate_output(result, 44, "test_invalid_update_missing_assignment_value");
+    generate_output(result, 46, "test_invalid_update_missing_assignment_value");
     result = test_invalid_update_missing_table();
-    generate_output(result, 45, "test_invalid_update_missing_table");
+    generate_output(result, 47, "test_invalid_update_missing_table");
     result = test_invalid_update_missing_equals();
-    generate_output(result, 46, "test_invalid_update_missing_equals");
+    generate_output(result, 48, "test_invalid_update_missing_equals");
     result = test_invalid_update_trailing_comma();
-    generate_output(result, 47, "test_invalid_update_trailing_comma");
+    generate_output(result, 49, "test_invalid_update_trailing_comma");
     result = test_invalid_update_empty_where();
-    generate_output(result, 48, "test_invalid_update_empty_where");
-    
+    generate_output(result, 50, "test_invalid_update_empty_where");
+    result = test_invalid_update_missing_assignment_column();
+    generate_output(result, 51, "test_invalid_update_missing_assignment_column");
+    result = test_invalid_update_arithmetic_assignment_target();
+    generate_output(result, 52, "test_invalid_update_arithmetic_assignment_target");
+    result = test_invalid_update_literal_assignment_target();
+    generate_output(result, 53, "test_invalid_update_literal_assignment_target");
+    result = test_invalid_update_missing_column_after_dot();
+    generate_output(result, 54, "test_invalid_update_missing_column_after_dot");
+
     result = test_invalid_delete_missing_from();
-    generate_output(result, 49, "test_invalid_delete_missing_from");
+    generate_output(result, 55, "test_invalid_delete_missing_from");
     result = test_invalid_delete_multiple_tables();
-    generate_output(result, 50, "test_invalid_delete_multiple_tables");
+    generate_output(result, 56, "test_invalid_delete_multiple_tables");
     result = test_invalid_delete_missing_table();
-    generate_output(result, 51, "test_invalid_delete_missing_table");
+    generate_output(result, 57, "test_invalid_delete_missing_table");
     result = test_invalid_delete_empty_where();
-    generate_output(result, 52, "test_invalid_delete_empty_where");
+    generate_output(result, 58, "test_invalid_delete_empty_where");
     result = test_invalid_dml_missing_semicolon();
-    generate_output(result, 53, "test_invalid_dml_missing_semicolon");
+    generate_output(result, 59, "test_invalid_dml_missing_semicolon");
+    
 
     return 0;
 }

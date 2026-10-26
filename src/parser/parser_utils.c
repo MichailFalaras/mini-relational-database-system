@@ -1325,6 +1325,22 @@ ASTNode *parse_update(Parser *parser) {
 
     consume_token(parser);
 
+    // Parse optional table alias
+    Token *current = get_current_token(parser);
+
+    if (current && current->type == KEYWORD && !strcasecmp(current->token, "AS")) {
+        AsNode *alias = parse_as(parser);
+
+        if (!alias) {
+            printf("parse_update: Invalid table alias.\n");
+            ast_free_node(root);
+            return false;
+        }
+
+        root->node_contents.update.alias = *alias;
+        free(alias);
+    }
+
     // Parse SET clause
     root->node_contents.update.set = parse_set(parser);
     if (!root->node_contents.update.set) {
@@ -1334,7 +1350,7 @@ ASTNode *parse_update(Parser *parser) {
     }
 
     // Parse optional WHERE clause
-    Token *current = get_current_token(parser);
+    current = get_current_token(parser);
 
     if (current && current->type == KEYWORD && !strcasecmp(current->token, "WHERE")) {
         root->node_contents.update.where = parse_where(parser);
@@ -3048,9 +3064,14 @@ SetNode *parse_set(Parser *parser) {
 
         AssignmentNode assignment = {0};
 
-        strncpy(assignment.column_name, column_token->token, sizeof(assignment.column_name) - 1);
+        assignment.column_ref = parse_primary_expression(parser);
 
-        consume_token(parser);
+        if (!assignment.column_ref || assignment.column_ref->type != EXPR_COLUMN_REF) {
+            printf("parse_set: Expected column reference.\n");
+            expression_node_free(assignment.column_ref);
+            ast_free_set(set);
+            return NULL;
+        }
 
         // Parse mandatory '=' in assignment expression
         Token *equals_token = get_current_token(parser);
@@ -3059,6 +3080,7 @@ SetNode *parse_set(Parser *parser) {
             equals_token->type != OPERATOR ||
             strcmp(equals_token->token, "=")) {
             printf("parse_set: Expected '=' after column identifier.\n");
+            expression_node_free(assignment.column_ref);
             ast_free_set(set);
             return NULL;
         }
@@ -3070,6 +3092,7 @@ SetNode *parse_set(Parser *parser) {
 
         if (!assignment.value) {
             printf("parse_set: Invalid assignment expression.\n");
+            expression_node_free(assignment.column_ref);
             ast_free_set(set);
             return NULL;
         }
@@ -3080,6 +3103,7 @@ SetNode *parse_set(Parser *parser) {
         );
 
         if (!new_assignments) {
+            expression_node_free(assignment.column_ref);
             expression_node_free(assignment.value);
             ast_free_set(set);
             return NULL;
