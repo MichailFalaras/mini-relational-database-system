@@ -783,6 +783,7 @@ bool bind_function(ExpressionNode *expr, BindingContext *context, BoundExpressio
         context->current_clause == BIND_CLAUSE_JOIN_ON ||
         context->current_clause == BIND_CLAUSE_GROUP_BY ||
         context->current_clause == BIND_CLAUSE_INSERT_VALUES ||
+        context->current_clause == BIND_CLAUSE_SET ||
         context->current_clause == BIND_CLAUSE_DEFAULT) {
         printf("bind_function: Aggregate functions are not allowed in this clause.\n");
         return false;
@@ -888,7 +889,7 @@ bool bind_function(ExpressionNode *expr, BindingContext *context, BoundExpressio
 
 /* ---------- Binding of each ASTNodeType ---------- */
 
-
+// Bind SELECT query
 bool bind_select(ASTNode *root, BindingContext *context, BoundProjection *out_projection) {
     if (!root || root->type != AST_SELECT) {
         printf("bind_select: Invalid AST root node.\n");
@@ -1037,7 +1038,7 @@ cleanup:
     return success;
 }
 
-
+// Bind INSERT query
 bool bind_insert(ASTNode *root, BindingContext *context, BoundInsertionValues *out_values) {
     if (!root || root->type != AST_INSERT) {
         printf("bind_insert: Invalid AST root node.\n");
@@ -1107,7 +1108,6 @@ bool bind_insert(ASTNode *root, BindingContext *context, BoundInsertionValues *o
         return false;
     }
 
-    
     // Construct complete schema-ordered insertion values
     if (!build_bound_insertion_values(insert->into, insert->values, value_types, context, out_values)) {
         printf("bind_insert: Insertion values could not be constructed.\n");
@@ -1119,7 +1119,111 @@ bool bind_insert(ASTNode *root, BindingContext *context, BoundInsertionValues *o
     return true;
 }
 
-bool bind_update(ASTNode *root, BindingContext *context);
+// Bind UPDATE query
+bool bind_update(ASTNode *root, BindingContext *context, BoundUpdateValues *out_values) {
+    if (!root || root->type != AST_UPDATE) {
+        printf("bind_update: Invalid AST root node.\n");
+        return false;
+    }
+
+    if (!context || !context->db || !out_values) {
+        printf("bind_update: Invalid context or output.\n");
+        return false;
+    }
+
+    // Empty context is required
+    if (context->relations || context->num_relations != 0 || 
+        context->aggregate_depth != 0 ||
+        out_values->table || out_values->values || out_values->num_values != 0) {
+        printf("bind_update: Expected fresh binding state.\n");
+        return false;
+    }
+
+    UpdateNode *update = &root->node_contents.update;
+
+    if (!update->set || !update->set->assignments || update->set->num_assignments == 0) {
+        printf("bind_update: Invalid SET clause.\n");
+        return false;
+    }
+
+    BoundExpressionType *value_types = NULL;
+    bool success = false;
+
+    if ((size_t)update->set->num_assignments > SIZE_MAX / sizeof(BoundExpressionType)) {
+        printf("bind_update: Value type allocation overflow.\n");
+        return false;
+    }
+
+    value_types = calloc(update->set->num_assignments, sizeof(BoundExpressionType));
+
+    if (!value_types) {
+        printf("bind_update: Data types of values array could not be allocated.\n");
+        return false;
+    }
+    
+    // Bind table name and optional alias
+    char *table_name = update->table_name;
+    AsNode alias = update->alias;
+
+    if (table_name[0] == '\0') {
+        printf("bind_from: Invalid table reference expression.\n");
+        free(value_types);
+        return false;
+    }
+
+    if (!register_binding_relation(table_name, alias.alias, context)) {
+        printf("bind_from: Table could not be registered.\n");
+        free(value_types);
+        return false;
+    }
+
+    BindingClause previous_clause = context->current_clause;
+    context->current_clause = BIND_CLAUSE_SET;
+
+    success = bind_set(update->set, context, value_types);
+
+    context->current_clause = previous_clause;
+
+    // Bind SET clause
+    if (!success) {
+        printf("bind_update: Set expressions could not be bound.");
+        free(value_types);
+        return false;
+    }
+    
+    // Bind optional WHERE clause
+    if (update->where) {
+        context->current_clause = BIND_CLAUSE_WHERE;
+
+        success = bind_where(update->where, context);
+
+        context->current_clause = previous_clause;
+
+        if (!success) {
+            printf("bind_update: WHERE binding failed.\n");
+            free(value_types);
+            return false;
+        }
+    }
+
+    // Validate update assignment types
+    if (!validate_update_assignments(update->set, value_types, context)) {
+        printf("bind_update: Invalid UPDATE assignments.\n");
+        free(value_types);
+        return false;
+    }
+
+    // Construct complete updated values
+    if (!build_bound_update_values(update->set, value_types, context, out_values)) {
+        printf("bind_update: Updated values could not be constructed.\n");
+        free(value_types);
+        return false;
+    }
+
+
+    free(value_types);
+    return true;
+}
 
 bool bind_delete(ASTNode *root, BindingContext *context);
 
@@ -1561,7 +1665,67 @@ bool bind_values(ValuesNode *values, BindingContext *context, BoundExpressionTyp
     return true;
 }
 
-bool bind_set(SetNode *set, BindingContext *context);
+// Bind SET clause
+bool bind_set(SetNode *set, BindingContext *context, BoundExpressionType *out_types) {
+    if (!set || !set->assignments || set->num_assignments == 0) {
+        printf("bind_set: Invalid SET AST node.\n");
+        return false;
+    }
+
+    if (!context || !context->db || !out_types ||
+        !context->relations || context->num_relations != 1 ||
+        !context->relations[0].table) {
+        printf("bind_set: Invalid binding context or output.\n");
+        return false;
+    }
+
+    for (uint32_t i = 0; i < set->num_assignments; i++) {
+        ExpressionNode *column_expr = set->assignments[i].column_ref;
+        ExpressionNode *value_expr = set->assignments[i].value;
+        
+        if (!column_expr || column_expr->type != EXPR_COLUMN_REF || !value_expr) {
+            printf("bind_set: Invalid assignment.\n");
+            return false;
+        }
+
+        ColumnRef *current = &column_expr->expression_data.column_value;
+
+        // Bind destination column
+        BoundExpressionType column_type = {0};
+
+        if (!bind_column_ref(column_expr, context, &column_type)) {
+            printf("bind_set: Destination column could not be bound.\n");
+            return false;
+        }
+
+        if (current->relation_index != 0 || current->column_index < 0) {
+            printf("bind_set: Invalid destination relation or column.\n");
+            return false;
+        }
+
+        // Reject duplicate columns
+        for (uint32_t j = 0; j < i; j++) {
+            ColumnRef *previous = &set->assignments[j].column_ref->expression_data.column_value;
+
+            if (current->column_index == previous->column_index) {
+                printf("bind_set: Duplicate destination column.\n");
+                return false;
+            }
+        }
+
+        // Bind assigned expression
+        BoundExpressionType result_type = {0};
+
+        if (!bind_scalar_expression(value_expr, context, &result_type)) {
+            printf("bind_set: Assigned expression could not be bound.\n");
+            return false;
+        }
+
+        out_types[i] = result_type;
+    }
+
+    return true;
+}
 
 bool bind_columns(ColumnsNode *columns, BindingContext *context);
 
@@ -2034,12 +2198,12 @@ bool validate_insert_assignments(IntoNode *into, ValuesNode *values,
         into->table_name[0] == '\0' || 
         (into->num_column_refs > 0 && !into->column_refs) ||
         (into->num_column_refs == 0 && into->column_refs)) {
-        printf("validate_insert_assignments: Invalid AST root node.\n");
+        printf("validate_insert_assignments: Invalid INTO AST node.\n");
         return false;
     }
 
     if (!values || !values->values || values->num_values == 0) {
-        printf("validate_insert_assignments: Invalid AST root node.\n");
+        printf("validate_insert_assignments: Invalid VALUES AST node.\n");
         return false;
     }
 
@@ -2424,4 +2588,218 @@ cleanup:
     }
 
     return success;
+}
+
+// Check assignment compatibility between columns and corresponding update values
+bool validate_update_assignments(SetNode *set, const BoundExpressionType *value_types, 
+    BindingContext *context) {
+    
+    if (!set || !set->assignments || set->num_assignments == 0) {
+        printf("validate_update_assignments: Invalid SET AST node.\n");
+        return false;
+    }
+
+    if (!context || !context->db ||
+        !context->relations ||
+        !context->relations[0].table || 
+        context->num_relations != 1) {
+        printf("validate_update_assignments: Invalid context.\n");
+        return false;
+    }
+
+    if (!value_types) {
+        printf("validate_update_assignments: Invalid value data types.\n");
+        return false;
+    }
+    
+    // Validate updated table and its schema
+    Table *table = context->relations[0].table;
+    Schema *schema = table->table_schema;
+
+    if (!schema || !schema->columns || schema->num_columns == 0 ||
+        (schema->num_constraints > 0 && !schema->constraints)) {
+        printf("validate_update_assignments: Invalid table schema.\n");
+        return false;
+    }
+
+    for (uint32_t i = 0; i < set->num_assignments; i++) {
+        ExpressionNode *column_expr = set->assignments[i].column_ref;
+        ExpressionNode *value_expr = set->assignments[i].value;
+
+        if (!column_expr || column_expr->type != EXPR_COLUMN_REF ||
+            !value_expr) {
+            printf("validate_update_assignments: Invalid assignment.\n");
+            return false;
+        }
+
+        ColumnRef *column_ref = &column_expr->expression_data.column_value;
+
+        if (column_ref->relation_index != 0 ||
+            column_ref->column_index < 0 ||
+            (uint32_t)column_ref->column_index >= schema->num_columns) {
+            printf("validate_update_assignments: Invalid bound column.\n");
+            return false;
+        }
+
+        uint32_t column_index = column_ref->column_index;
+        Column *column = schema->columns[column_index];
+
+        if (!column) {
+            printf("validate_update_assignments: Invalid schema column.\n");
+            return false;
+        }
+
+        // Determine if assigned value in NULL
+        BoundExpressionType value_type = value_types[i];
+        bool is_explicit_null = value_type.is_untyped_null;
+
+        if (value_expr->type == EXPR_LITERAL) {
+            Literal *literal = &value_expr->expression_data.literal_value;
+
+            if (!literal->is_untyped_null && literal->literal && literal->literal->null_val) {
+                is_explicit_null = true;
+            }
+        }
+
+        // Validate type compatibility if assigned value is not NULL
+        if (!is_explicit_null) {
+            if (value_expr->type == EXPR_LITERAL) {
+                Literal *literal = &value_expr->expression_data.literal_value;
+
+                if (!literal->literal || !value_can_assign(column->type, literal->literal)) {
+                    printf("validate_update_assignments: Invalid literal assignment.\n");
+                    return false;
+                }
+            }
+            else if (!value_types_assignable(column->type, value_type.type)) {
+                printf("validate_update_assignments: Incompatible expression type.\n");
+                return false;
+            }
+        }
+
+        // Validate explicit NULL assignments
+        if (is_explicit_null) {
+            for (uint32_t j = 0; j < schema->num_constraints; j++) {
+                Constraint *constraint = schema->constraints[j];
+
+                if (!constraint) {
+                    printf("validate_update_assignments: Invalid constraint.\n");
+                    return false;
+                }
+
+                if (constraint->type != NOT_NULL && constraint->type != PRIMARY_KEY) {
+                    continue;
+                }
+
+                if (constraint_has_column(constraint, column_index)) {
+                    printf("validate_update_assignments: NULL not allowed.\n");
+                    return false;
+                }   
+            }
+        }
+
+    }
+
+    return true;
+}
+
+// Build updated values tuple
+bool build_bound_update_values(SetNode *set, const BoundExpressionType *value_types, 
+    BindingContext *context, BoundUpdateValues *out_values) {
+
+    if (!set || !set->assignments || set->num_assignments == 0) {
+        printf("build_bound_update_values: Invalid SET AST node.\n");
+        return false;
+    }
+
+    if (!context || !context->db || 
+        !context->relations || 
+        context->num_relations != 1 ||
+        !context->relations[0].table) {
+        printf("build_bound_update_values: Invalid binding context.\n");
+        return false;
+    }
+
+    if (!value_types || !out_values) {
+        printf("build_bound_update_values: Invalid output or value types.\n");
+        return false;
+    }
+
+    // Caller must provide an empty output
+    if (out_values->table || out_values->values || out_values->num_values != 0) {
+        printf("build_bound_update_values: Output must be empty.\n");
+        return false;
+    }
+
+    Table *table = context->relations[0].table;
+    Schema *schema = table->table_schema;
+
+    if (!schema || !schema->columns || schema->num_columns == 0) {
+        printf("build_bound_update_values: Invalid table schema.\n");
+        return false;
+    }
+
+    uint32_t num_assignments = set->num_assignments;
+
+    if (num_assignments > schema->num_columns ||
+        (size_t)num_assignments > SIZE_MAX / sizeof(BoundUpdateValue)) {
+        printf("build_bound_update_values: Invalid assignment count.\n");
+        return false;
+    }
+
+    BoundUpdateValue *bound_values = (BoundUpdateValue *) calloc(num_assignments, sizeof(BoundUpdateValue));
+
+    if (!bound_values) {
+        printf("build_bound_update_values: Allocation failed.\n");
+        return false;
+    }
+
+    for (uint32_t i = 0; i < num_assignments; i++) {
+        ExpressionNode *column_expr = set->assignments[i].column_ref;
+        ExpressionNode *value_expr = set->assignments[i].value;
+
+        if (!column_expr || column_expr->type != EXPR_COLUMN_REF || !value_expr) {
+            printf("build_bound_update_values: Invalid assignment.\n");
+            free(bound_values);
+            return false;
+        }
+
+        ColumnRef *column_ref = &column_expr->expression_data.column_value;
+
+        if (column_ref->relation_index != 0 || column_ref->column_index < 0 ||
+            (uint32_t)column_ref->column_index >= schema->num_columns) {
+            printf("build_bound_update_values: Invalid bound column.\n");
+            free(bound_values);
+            return false;
+        }
+
+        uint32_t column_index = (uint32_t)column_ref->column_index;
+
+        if (!schema->columns[column_index]) {
+            printf("build_bound_update_values: Invalid schema column.\n");
+            free(bound_values);
+            return false;
+        }
+
+        // Defensive duplicate check.
+        for (uint32_t j = 0; j < i; j++) {
+            if (bound_values[j].column_index == column_index) {
+                printf("build_bound_update_values: Duplicate destination column.\n");
+                free(bound_values);
+                return false;
+            }
+        }
+
+        // Assign existing expression and data type for the corresponding column
+        bound_values[column_index].column_index = column_index;
+        bound_values[column_index].expression = value_expr;
+        bound_values[column_index].result_type = value_types[i];
+    }
+
+    // Publish only after successful construction
+    out_values->table = table;
+    out_values->values = bound_values;
+    out_values->num_values = num_assignments;
+
+    return true;
 }

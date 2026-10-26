@@ -87,12 +87,28 @@ typedef struct bound_insertion_values {
     uint32_t num_values;
 } BoundInsertionValues;
 
+typedef struct bound_update_value {
+    uint32_t column_index;
+
+    // Non-owning reference to an AST expression
+    ExpressionNode *expression;
+    BoundExpressionType result_type;
+} BoundUpdateValue;
+
+// Metadata for the updated VALUES
+typedef struct bound_update_values {
+    Table *table;
+
+    BoundUpdateValue *values;
+    uint32_t num_values;
+} BoundUpdateValues;
 
 // Final Bound Statement
 typedef enum bound_statement_type {
     BOUND_STATEMENT_NONE = 0,
     BOUND_STATEMENT_SELECT = 1,
     BOUND_STATEMENT_INSERT = 2,
+    BOUND_STATEMENT_UPDATE = 3,
 } BoundStatementType;
 
 typedef struct bound_statement {
@@ -101,6 +117,7 @@ typedef struct bound_statement {
     union {
         BoundProjection projection;
         BoundInsertionValues insertion;
+        BoundUpdateValues update;
     } data;
 } BoundStatement;
 
@@ -112,6 +129,8 @@ extern bool bind_statement(ASTNode *root, Database *db, BoundStatement *out_stat
 extern void bound_projection_free(BoundProjection *projection);
 
 extern void bound_insertion_values_free(BoundInsertionValues *insertion);
+
+extern void bound_update_values_free(BoundUpdateValues *update);
 
 extern void bound_statement_free(BoundStatement *statement);
 

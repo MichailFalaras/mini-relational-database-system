@@ -76,7 +76,7 @@ bool bind_select(ASTNode *root, BindingContext *context, BoundProjection *out_pr
 
 bool bind_insert(ASTNode *root, BindingContext *context, BoundInsertionValues *out_values);
 
-bool bind_update(ASTNode *root, BindingContext *context);
+bool bind_update(ASTNode *root, BindingContext *context, BoundUpdateValues *out_values);
 
 bool bind_delete(ASTNode *root, BindingContext *context);
 
@@ -114,7 +114,7 @@ bool bind_into(IntoNode *into, BindingContext *context);
 
 bool bind_values(ValuesNode *values, BindingContext *context, BoundExpressionType *out_types);
 
-bool bind_set(SetNode *set, BindingContext *context);
+bool bind_set(SetNode *set, BindingContext *context, BoundExpressionType *out_types);
 
 bool bind_columns(ColumnsNode *columns, BindingContext *context);
 
@@ -178,5 +178,13 @@ bool validate_insert_assignments(IntoNode *into, ValuesNode *values,
 // Build insertion values tuple
 bool build_bound_insertion_values(IntoNode *into, ValuesNode *values,
     const BoundExpressionType *value_types, BindingContext *context, BoundInsertionValues *out_values);
+
+// Check assignment compatibility between columns and corresponding update values
+bool validate_update_assignments(SetNode *set, const BoundExpressionType *value_types, 
+    BindingContext *context);
+
+// Build updated values tuple
+bool build_bound_update_values(SetNode *set, const BoundExpressionType *value_types, 
+    BindingContext *context, BoundUpdateValues *out_values);
 
 #endif
