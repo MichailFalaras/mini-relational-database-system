@@ -600,7 +600,7 @@ BTreeStatus btree_internal_node_split(Pager *pager, BTreePage *original_page, BT
 
     /* Get separator cell's child pointer and pass it to the rightmost child pointer of
      * the original page. */
-    memcpy(&(original_page->type_specific_data.rightmost_child_pointer), cell_view.payload, sizeof(uint32_t));
+    original_page->type_specific_data.rightmost_child_pointer = load_u32_le(cell_view.payload);
     status = update_children_parent_metadata(pager, original_page, index);
     if (status != BTREE_SUCCESS) {
         pager_release_page(pager, new_page_num);

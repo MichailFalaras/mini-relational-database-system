@@ -1,6 +1,11 @@
 #ifndef CATALOG_UTILS_H_
 #define CATALOG_UTILS_H_
 
+#include <stdint.h>
+#include <stdbool.h>
+#include "../../include/page.h"
+#include "../../include/encoding.h"
+
 typedef struct catalog Catalog;
 typedef struct catalog_lookup_result CatalogLookupResult;
 typedef struct catalog_record_info CatalogRecordInfo;
@@ -50,5 +55,24 @@ CatalogStatus catalog_replace_record(const Catalog *catalog, CatalogRecordInfo *
 
 /* Conversion from catalog lookup status to catalog status */
 CatalogStatus catalog_lookup_to_catalog_status(CatalogLookupStatus status);
+
+/* ---------- METADATA PAGE INLINE HELPERS ---------- */
+
+static inline uint32_t get_next_metadata_page_num(Page *page) {
+    if (!page || !page->page_num) {
+        return 0;
+    }
+
+    return load_u32_le(page->page_data);
+}
+
+static inline bool set_next_metadata_page_num(Page *page, uint32_t metadata_page_num) {
+    if (!page || !page->page_num) {
+        return false;
+    }
+
+    store_u32_le(page->page_data, metadata_page_num);
+    return true;
+}
 
 #endif

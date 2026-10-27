@@ -13,6 +13,7 @@
 #include "../../include/table.h"
 #include "../../include/constraints.h"
 #include "../../include/expressions.h"
+#include "../../include/encoding.h"
 
 /* Serialize/Deserialize cell contents type agnostic functions. */
 bool serialize_cell_contents(uint8_t *write_offset, BTreePage *btree_page, BTreeCellContents *cell, BTreeIndexSpec *spec) {
@@ -133,7 +134,7 @@ bool serialize_internal_node(uint8_t *write_offset, BTreeCellContents *cell, BTr
         return false;
     }
 
-    memcpy(write_offset, &cell->BTreePayload.child_pointer, sizeof(uint32_t));
+    store_u32_le(write_offset, cell->BTreePayload.child_pointer);
     write_offset += sizeof(uint32_t);
     
     if (!serialize_keys(&write_offset, cell, spec)) {
@@ -152,7 +153,7 @@ bool deserialize_internal_node(uint8_t *read_offset, BTreeCellView *cell_view, B
     cell->key_size = cell_view->key.key_size;
     cell->cell_size = cell->key_size + sizeof(uint32_t);
 
-    memcpy(&cell->BTreePayload.child_pointer, read_offset, sizeof(uint32_t));
+    cell->BTreePayload.child_pointer = load_u32_le(read_offset);
     read_offset += sizeof(uint32_t);
 
     cell->keys = (Value **) calloc(spec->index_key->num_columns, sizeof(Value *));
@@ -291,10 +292,10 @@ bool serialize_row(uint8_t **write_offset, const Row *row, BTreeIndexSpec *spec)
         return false;
     }
 
-    memcpy(*write_offset, &row->is_deleted, sizeof(uint8_t));
+    store_u8_le(*write_offset, row->is_deleted);
     *write_offset += sizeof(uint8_t);
 
-    memcpy(*write_offset, &row->n_columns, sizeof(uint32_t));
+    store_u32_le(*write_offset, row->n_columns);
     *write_offset += sizeof(uint32_t);
 
     if (!serialize_null_bitmap(write_offset, row->values, row->n_columns, row->n_columns)) {
@@ -322,10 +323,10 @@ bool deserialize_row(uint8_t **read_offset, BTreeCellContents *cell, BTreeIndexS
         return false;
     }
 
-    memcpy(&cell->BTreePayload.row->is_deleted, *read_offset, sizeof(uint8_t));
+    cell->BTreePayload.row->is_deleted = load_u8_le(*read_offset);
     *read_offset += sizeof(uint8_t);
 
-    memcpy(&cell->BTreePayload.row->n_columns, *read_offset, sizeof(uint32_t));
+    cell->BTreePayload.row->n_columns = load_u32_le(*read_offset);
     *read_offset += sizeof(uint32_t);
 
     if (cell->BTreePayload.row->n_columns != spec->schema->num_columns) {
@@ -389,22 +390,22 @@ bool serialize_value_data(Value *value, Column *column, void *serialized_output)
     uint8_t *output = (uint8_t *) serialized_output;
     switch (value->type) {
         case INTEGER:
-            memcpy(output, &value->value.int32_val, column->serialized_size);
+            store_i32_le(output, value->value.int32_val);
             break;
         case UNSIGNED_INTEGER:
-            memcpy(output, &value->value.uint32_val, column->serialized_size);
+            store_u32_le(output, value->value.uint32_val);
             break;
         case NUMERIC:
-            memcpy(output, &value->value.numeric_val.val, sizeof(int64_t));
+            store_i64_le(output, value->value.numeric_val.val);
             output += sizeof(int64_t);
 
-            memcpy(output, &value->value.numeric_val.scale, sizeof(uint32_t));
+            store_u32_le(output, value->value.numeric_val.scale);
             break;
         case FLOAT:
-            memcpy(output, &value->value.float_val, column->serialized_size);
+            store_float_le(output, value->value.float_val);
             break;
         case DOUBLE:
-            memcpy(output, &value->value.double_val, column->serialized_size);
+            store_double_le(output, value->value.double_val);
             break;
         case CHAR: {
             if (!value->value.char_val.string) {
@@ -450,10 +451,10 @@ bool serialize_value_data(Value *value, Column *column, void *serialized_output)
             break;
         }
         case DATE:
-            memcpy(output, &value->value.date_val, column->serialized_size);
+            store_u64_le(output, value->value.date_val);
             break;
         case TIMESTAMP:
-            memcpy(output, &value->value.timestamp_val, column->serialized_size);
+            store_u64_le(output, value->value.timestamp_val);
             break;
         // case BLOB:
         //     memcpy(serialized_output, &value->value.blob_val.size, sizeof(uint32_t));
@@ -462,7 +463,7 @@ bool serialize_value_data(Value *value, Column *column, void *serialized_output)
         //     memcpy(serialized_output, value->value.blob_val.buffer, value->value.blob_val.size);
         //     break;
         case BOOL:
-            memcpy(output, &value->value.bool_val, column->serialized_size);
+            store_u8_le(output, value->value.bool_val);
             break;
         // case JSONB:
         //     memcpy(serialized_output, &value->value.jsonb_val.size, sizeof(uint32_t));
@@ -498,22 +499,22 @@ Value *deserialize_value_data(Column *column, bool is_null, void *offset) {
     uint8_t *read_offset = (uint8_t *) offset;
     switch (column->type) {
         case INTEGER:
-            memcpy(&value->value.int32_val, read_offset, column->serialized_size);
+            value->value.int32_val = load_i32_le(read_offset);
             break;
         case UNSIGNED_INTEGER:
-            memcpy(&value->value.uint32_val, read_offset, column->serialized_size);
+            value->value.uint32_val = load_u32_le(read_offset);
             break;
         case NUMERIC:
-            memcpy(&value->value.numeric_val.val, read_offset, sizeof(int64_t));
+            value->value.numeric_val.val = load_i64_le(read_offset);
             read_offset += sizeof(int64_t);
 
-            memcpy(&value->value.numeric_val.scale, read_offset, sizeof(uint32_t));
+            value->value.numeric_val.scale = load_u32_le(read_offset);
             break;
         case FLOAT:
-            memcpy(&value->value.float_val, read_offset, column->serialized_size);
+            value->value.float_val = load_float_le(read_offset);
             break;
         case DOUBLE:
-            memcpy(&value->value.double_val, read_offset, column->serialized_size);
+            value->value.double_val = load_double_le(read_offset);
             break;
         case CHAR: {
             char *string = (char *) calloc(column->serialized_size+1, sizeof(char));
@@ -551,10 +552,10 @@ Value *deserialize_value_data(Column *column, bool is_null, void *offset) {
             break;
         }
         case DATE:
-            memcpy(&value->value.date_val, read_offset, column->serialized_size);
+            value->value.date_val = load_u64_le(read_offset);
             break;
         case TIMESTAMP:
-            memcpy(&value->value.timestamp_val, read_offset, column->serialized_size);
+            value->value.timestamp_val = load_u64_le(read_offset);
             break;
         // case BLOB:
         //     memcpy(&value->value.blob_val.size, offset, sizeof(uint32_t));
@@ -570,7 +571,7 @@ Value *deserialize_value_data(Column *column, bool is_null, void *offset) {
         //     value->value.blob_val.buffer = buffer;
         //     break;
         case BOOL:
-            memcpy(&value->value.bool_val, read_offset, column->serialized_size);
+            value->value.bool_val = load_u8_le(read_offset);
             break;
         // case JSONB:
         //     memcpy(&value->value.jsonb_val.size, offset, sizeof(uint32_t));
@@ -621,13 +622,13 @@ bool serialize_catalog_leaf_node(uint8_t *write_offset, BTreeCellContents *cell,
 
     // Serializing the Catalog payload
     uint8_t disk_type = catalog->type == CATALOG_TABLE ? 0 : 1;
-    memcpy(write_offset, &disk_type, sizeof(uint8_t));
+    store_u8_le(write_offset, disk_type);
     write_offset += sizeof(uint8_t);
 
-    memcpy(write_offset, &catalog->root_page_num, sizeof(uint32_t));
+    store_u32_le(write_offset, catalog->root_page_num);
     write_offset += sizeof(uint32_t);
 
-    memcpy(write_offset, &catalog->metadata_page_num, sizeof(uint32_t));
+    store_u32_le(write_offset, catalog->metadata_page_num);
     write_offset += sizeof(uint32_t);
 
     return true;
@@ -669,14 +670,14 @@ bool deserialize_catalog_leaf_node(uint8_t *read_offset, BTreeCellView *cell_vie
 
     // Deserializing the Catalog payload
     uint8_t disk_type = 0;
-    memcpy(&disk_type, read_offset, sizeof(uint8_t));
+    disk_type = load_u8_le(read_offset);
     catalog->type = (CatalogEntryType) disk_type;
     read_offset += sizeof(uint8_t);
 
-    memcpy(&catalog->root_page_num, read_offset, sizeof(uint32_t));
+    catalog->root_page_num = load_u32_le(read_offset);
     read_offset += sizeof(uint32_t);
 
-    memcpy(&catalog->metadata_page_num, read_offset, sizeof(uint32_t));
+    catalog->metadata_page_num = load_u32_le(read_offset);
     read_offset += sizeof(uint32_t);
 
     if (catalog->type != CATALOG_TABLE && catalog->type != CATALOG_INDEX) {
@@ -704,19 +705,19 @@ bool serialize_index_metadata(uint8_t **write_offset, const Index *index) {
     }
 
     uint8_t index_type = (uint8_t) index->type;
-    memcpy(*write_offset, &index_type, sizeof(uint8_t));
+    store_u8_le(*write_offset, index_type);
     *write_offset += sizeof(uint8_t);
 
-    memcpy(*write_offset, &index->key->num_columns, sizeof(uint32_t));
+    store_u32_le(*write_offset, index->key->num_columns); 
     *write_offset += sizeof(uint32_t);
 
     for (uint32_t i = 0; i < index->key->num_columns; i++) {
-        memcpy(*write_offset, &index->key->column_index_array[i], sizeof(uint32_t));
+        store_u32_le(*write_offset, index->key->column_index_array[i]);
         *write_offset += sizeof(uint32_t);
     }
 
     uint8_t is_unique = index->is_unique ? 1 : 0;
-    memcpy(*write_offset, &is_unique, sizeof(uint8_t));
+    store_u8_le(*write_offset, is_unique);
     *write_offset += sizeof(uint8_t);
 
     return true;
@@ -728,14 +729,14 @@ bool serialize_table_metadata(uint8_t **write_offset, const Table *table) {
     }
 
     uint8_t is_materialized = table->is_materialized ? 1 : 0;
-    memcpy(*write_offset, &is_materialized, sizeof(uint8_t));
+    store_u8_le(*write_offset, is_materialized);
     *write_offset += sizeof(uint8_t);
 
     // Should be increased when reconstructing indexes
     // memcpy(*write_offset, &(table->total_secondary_indexes), sizeof(uint32_t));
     // *write_offset += sizeof(uint32_t);
 
-    memcpy(*write_offset, &(table->row_count), sizeof(uint32_t));
+    store_u32_le(*write_offset, table->row_count);
     *write_offset += sizeof(uint32_t);
 
     if (!serialize_schema_metadata(write_offset, table->table_schema)) {
@@ -758,7 +759,7 @@ bool serialize_schema_metadata(uint8_t **write_offset, const Schema *schema) {
         return false;
     }
 
-    memcpy(*write_offset, &(schema->num_columns), sizeof(uint32_t));
+    store_u32_le(*write_offset, schema->num_columns);
     *write_offset += sizeof(uint32_t);
 
     for (uint32_t i = 0; i < schema->num_columns; i++) {
@@ -767,7 +768,7 @@ bool serialize_schema_metadata(uint8_t **write_offset, const Schema *schema) {
         }
     }
     
-    memcpy(*write_offset, &(schema->num_constraints), sizeof(uint32_t));
+    store_u32_le(*write_offset, schema->num_constraints);
     *write_offset += sizeof(uint32_t);
     
     for (uint32_t i = 0; i < schema->num_constraints; i++) {
@@ -788,20 +789,20 @@ bool serialize_column(uint8_t **write_offset, const Column *column) {
     *write_offset += 64*sizeof(uint8_t);
 
     uint8_t data_type = (uint8_t) column->type;
-    memcpy(*write_offset, &data_type, sizeof(uint8_t));
+    store_u8_le(*write_offset, data_type);
     *write_offset += sizeof(uint8_t);
 
-    memcpy(*write_offset, &(column->type_parameter), sizeof(uint32_t));
+    store_u32_le(*write_offset, column->type_parameter);
     *write_offset += sizeof(uint32_t);
 
     // Reconstructed during Column allocation
     // memcpy(*write_offset, &(column->serialized_size), sizeof(uint32_t));
     // *write_offset += sizeof(uint32_t);
 
-    memcpy(*write_offset, &(column->non_null_rows), sizeof(uint32_t));
+    store_u32_le(*write_offset, column->non_null_rows);
     *write_offset += sizeof(uint32_t);
 
-    memcpy(*write_offset, &(column->null_rows), sizeof(uint32_t));
+    store_u32_le(*write_offset, column->null_rows);
     *write_offset += sizeof(uint32_t);
 
     return true;
@@ -816,7 +817,7 @@ bool serialize_constraint(uint8_t **write_offset, const Constraint *constraint) 
     *write_offset += 64*sizeof(uint8_t);
 
     uint8_t constraint_type = (uint8_t) constraint->type;
-    memcpy(*write_offset, &constraint_type, sizeof(uint8_t));
+    store_u8_le(*write_offset, constraint_type);
     *write_offset += sizeof(uint8_t);
 
     switch(constraint->type) {
@@ -827,11 +828,11 @@ bool serialize_constraint(uint8_t **write_offset, const Constraint *constraint) 
             }
 
             uint32_t amount_columns = (uint32_t) constraint->constraint_data.primary_key.amount_columns;
-            memcpy(*write_offset, &amount_columns, sizeof(uint32_t));
+            store_u32_le(*write_offset, amount_columns);
             *write_offset += sizeof(uint32_t);
 
             for (uint32_t j = 0; j < constraint->constraint_data.primary_key.amount_columns; j++) {
-                memcpy(*write_offset, &(constraint->constraint_data.primary_key.primary_key_columns[j]), sizeof(uint32_t));
+                store_u32_le(*write_offset, constraint->constraint_data.primary_key.primary_key_columns[j]);
                 *write_offset += sizeof(uint32_t);
             }
 
@@ -848,22 +849,22 @@ bool serialize_constraint(uint8_t **write_offset, const Constraint *constraint) 
                 return false;
             }
 
-            memcpy(*write_offset, &(constraint->constraint_data.foreign_key.amount_columns), sizeof(uint32_t));
+            store_u32_le(*write_offset, constraint->constraint_data.foreign_key.amount_columns);
             *write_offset += sizeof(uint32_t);
 
             for (uint32_t j = 0; j < constraint->constraint_data.foreign_key.amount_columns; j++) {
-                memcpy(*write_offset, &(constraint->constraint_data.foreign_key.foreign_key_columns[j]), sizeof(uint32_t));
+                store_u32_le(*write_offset, constraint->constraint_data.foreign_key.foreign_key_columns[j]);
                 *write_offset += sizeof(uint32_t);
             }
 
             memcpy(*write_offset, constraint->constraint_data.foreign_key.referenced_table_name, 64*sizeof(uint8_t));
             *write_offset += 64*sizeof(uint8_t);
 
-            memcpy(*write_offset, &(constraint->constraint_data.foreign_key.amount_referenced_columns), sizeof(uint32_t));
+            store_u32_le(*write_offset, constraint->constraint_data.foreign_key.amount_referenced_columns);
             *write_offset += sizeof(uint32_t);
 
             for (uint32_t j = 0; j < constraint->constraint_data.foreign_key.amount_referenced_columns; j++) {
-                memcpy(*write_offset, &(constraint->constraint_data.foreign_key.referenced_columns[j]), sizeof(uint32_t));
+                store_u32_le(*write_offset, constraint->constraint_data.foreign_key.referenced_columns[j]);
                 *write_offset += sizeof(uint32_t);
             }
 
@@ -874,11 +875,11 @@ bool serialize_constraint(uint8_t **write_offset, const Constraint *constraint) 
                 return false;
             }
 
-            memcpy(*write_offset, &(constraint->constraint_data.unique_cols.amount_columns), sizeof(uint32_t));
+            store_u32_le(*write_offset, constraint->constraint_data.unique_cols.amount_columns);
             *write_offset += sizeof(uint32_t);
 
             for (uint32_t j = 0; j < constraint->constraint_data.unique_cols.amount_columns; j++) {
-                memcpy(*write_offset, &(constraint->constraint_data.unique_cols.column_refs[j]), sizeof(uint32_t));
+                store_u32_le(*write_offset, constraint->constraint_data.unique_cols.column_refs[j]);
                 *write_offset += sizeof(uint32_t);
             }
 
@@ -893,11 +894,11 @@ bool serialize_constraint(uint8_t **write_offset, const Constraint *constraint) 
                 return false;
             }
 
-            memcpy(*write_offset, &(constraint->constraint_data.check.amount_columns), sizeof(uint32_t));
+            store_u32_le(*write_offset, constraint->constraint_data.check.amount_columns);
             *write_offset += sizeof(uint32_t);
 
             for (uint32_t j = 0; j < constraint->constraint_data.check.amount_columns; j++) {
-                memcpy(*write_offset, &(constraint->constraint_data.check.column_refs[j]), sizeof(uint32_t));
+                store_u32_le(*write_offset, constraint->constraint_data.check.column_refs[j]);
                 *write_offset += sizeof(uint32_t);
             }
 
@@ -908,7 +909,7 @@ bool serialize_constraint(uint8_t **write_offset, const Constraint *constraint) 
 
             break;
         case NOT_NULL:
-            memcpy(*write_offset, &(constraint->constraint_data.not_null.column_ref), sizeof(uint32_t));
+            store_u32_le(*write_offset, constraint->constraint_data.not_null.column_ref);
             *write_offset += sizeof(uint32_t);
 
             break;
@@ -917,7 +918,7 @@ bool serialize_constraint(uint8_t **write_offset, const Constraint *constraint) 
                 return false;
             }
 
-            memcpy(*write_offset, &(constraint->constraint_data.default_value.column_ref), sizeof(uint32_t));
+            store_u32_le(*write_offset, constraint->constraint_data.default_value.column_ref);
             *write_offset += sizeof(uint32_t);
 
             if (!serialize_expression_node(write_offset, constraint->constraint_data.default_value.default_expr)) {
@@ -952,11 +953,11 @@ bool serialize_literal_value(uint8_t **write_offset, const Value *literal) {
     }
 
     uint8_t literal_type = (uint8_t) literal->type;
-    memcpy(*write_offset, &literal_type, sizeof(uint8_t));
+    store_u8_le(*write_offset, literal_type);
     *write_offset += sizeof(uint8_t);
 
     uint8_t null_val = literal->null_val ? 1 : 0;
-    memcpy(*write_offset, &null_val, sizeof(uint8_t));
+    store_u8_le(*write_offset, null_val);
     *write_offset += sizeof(uint8_t);
 
     if (literal->null_val) {
@@ -965,15 +966,15 @@ bool serialize_literal_value(uint8_t **write_offset, const Value *literal) {
 
     switch (literal->type) {
         case INTEGER:
-            memcpy(*write_offset, &literal->value.int32_val, sizeof(int32_t));
+            store_i32_le(*write_offset, literal->value.int32_val);
             *write_offset += sizeof(int32_t);
 
             break;
         case NUMERIC:
-            memcpy(*write_offset, &literal->value.numeric_val.val, sizeof(int64_t));
+            store_i64_le(*write_offset, literal->value.numeric_val.val);
             *write_offset += sizeof(int64_t);
 
-            memcpy(*write_offset, &literal->value.numeric_val.scale, sizeof(uint32_t));
+            store_u32_le(*write_offset, literal->value.numeric_val.scale);
             *write_offset += sizeof(uint32_t);
 
             break;
@@ -982,7 +983,7 @@ bool serialize_literal_value(uint8_t **write_offset, const Value *literal) {
                 return false;
             }
 
-            memcpy(*write_offset, &literal->value.char_val.n, sizeof(uint32_t));
+            store_u32_le(*write_offset, literal->value.char_val.n);
             *write_offset += sizeof(uint32_t);
 
             memcpy(*write_offset,
@@ -993,19 +994,19 @@ bool serialize_literal_value(uint8_t **write_offset, const Value *literal) {
             
             break;
         case DATE:
-            memcpy(*write_offset, &literal->value.date_val, sizeof(uint64_t));
+            store_u64_le(*write_offset, literal->value.date_val);
             *write_offset += sizeof(uint64_t);
 
             break;
         case TIMESTAMP:
-            memcpy(*write_offset, &literal->value.timestamp_val, sizeof(uint64_t));
+            store_u64_le(*write_offset, literal->value.timestamp_val);
             *write_offset += sizeof(uint64_t);
 
             break;
         // case BLOB:
         case BOOL: {
             uint8_t bool_val = literal->value.bool_val ? 1 : 0;
-            memcpy(*write_offset, &bool_val, sizeof(uint8_t));
+            store_u8_le(*write_offset, bool_val);
             *write_offset += sizeof(uint8_t);
 
             break;
@@ -1025,7 +1026,7 @@ bool serialize_expression_node(uint8_t **write_offset, const ExpressionNode *exp
     }
 
     uint8_t expression_type = (uint8_t) expr_node->type;
-    memcpy(*write_offset, &expression_type, sizeof(uint8_t));
+    store_u8_le(*write_offset, expression_type);
     *write_offset += sizeof(uint8_t);
 
     switch (expr_node->type) {
@@ -1039,10 +1040,10 @@ bool serialize_expression_node(uint8_t **write_offset, const ExpressionNode *exp
             memcpy(*write_offset, &expr_node->expression_data.column_value.column_name, 64*sizeof(uint8_t));
             *write_offset += 64*sizeof(uint8_t);
 
-            memcpy(*write_offset, &expr_node->expression_data.column_value.column_index, sizeof(int32_t));
+            store_i32_le(*write_offset, expr_node->expression_data.column_value.column_index);
             *write_offset += sizeof(int32_t);
 
-            memcpy(*write_offset, &expr_node->expression_data.column_value.relation_index, sizeof(int32_t));
+            store_i32_le(*write_offset, expr_node->expression_data.column_value.relation_index);
             *write_offset += sizeof(int32_t);
 
             break;
@@ -1053,7 +1054,7 @@ bool serialize_expression_node(uint8_t **write_offset, const ExpressionNode *exp
             break;
         case EXPR_UNARY: {
             uint8_t operator_type = (uint8_t) expr_node->expression_data.unary_expr.op;
-            memcpy(*write_offset, &operator_type, sizeof(uint8_t));
+            store_u8_le(*write_offset, operator_type);
             *write_offset += sizeof(uint8_t);
 
             if (!serialize_expression_node(write_offset, expr_node->expression_data.unary_expr.operand)) {
@@ -1068,7 +1069,7 @@ bool serialize_expression_node(uint8_t **write_offset, const ExpressionNode *exp
             }
             
             uint8_t operator_type = (uint8_t) expr_node->expression_data.binary_expr.op;
-            memcpy(*write_offset, &operator_type, sizeof(uint8_t));
+            store_u8_le(*write_offset, operator_type);
             *write_offset += sizeof(uint8_t);
 
             if (!serialize_expression_node(write_offset, expr_node->expression_data.binary_expr.right_operand)) {
@@ -1099,7 +1100,7 @@ bool serialize_expression_node(uint8_t **write_offset, const ExpressionNode *exp
                 return false;
             }
 
-            memcpy(*write_offset, &expr_node->expression_data.in_expr.option_count, sizeof(uint32_t));
+            store_u32_le(*write_offset, expr_node->expression_data.in_expr.option_count);
             *write_offset += sizeof(uint32_t);
 
             for (uint32_t i = 0; i < expr_node->expression_data.in_expr.option_count; i++) {
@@ -1119,14 +1120,14 @@ bool serialize_expression_node(uint8_t **write_offset, const ExpressionNode *exp
             break;
         case EXPR_FUNCTIONS: {
             uint8_t aggregate_function_type = (uint8_t) expr_node->expression_data.aggregate_func_expr.type;
-            memcpy(*write_offset, &aggregate_function_type, sizeof(uint8_t));
+            store_u8_le(*write_offset, aggregate_function_type);
             *write_offset += sizeof(uint8_t);
 
             if (!serialize_expression_node(write_offset, expr_node->expression_data.aggregate_func_expr.expression)) {
                 return false;
             }
 
-            memcpy(*write_offset, &expr_node->expression_data.aggregate_func_expr.wildcard, sizeof(uint8_t));
+            store_u8_le(*write_offset, expr_node->expression_data.aggregate_func_expr.wildcard);
             *write_offset += sizeof(uint8_t);
             
             break;
@@ -1165,7 +1166,7 @@ bool deserialize_index_metadata(Pager *pager, BTreeCellContents *catalog_cell, I
     uint8_t *read_offset = metadata_page->page_data + sizeof(uint32_t);
 
     uint8_t index_type;
-    memcpy(&index_type, read_offset, sizeof(uint8_t));
+    index_type = load_u8_le(read_offset);
     read_offset += sizeof(uint8_t);
 
     if (index_type > SECONDARY_INDEX) {
@@ -1183,7 +1184,7 @@ bool deserialize_index_metadata(Pager *pager, BTreeCellContents *catalog_cell, I
         return false;
     }
 
-    memcpy(&(*index)->key->num_columns, read_offset, sizeof(uint32_t));
+    (*index)->key->num_columns = load_u32_le(read_offset);
     read_offset += sizeof(uint32_t);
 
     if ((*index)->key->num_columns == 0) {
@@ -1200,12 +1201,12 @@ bool deserialize_index_metadata(Pager *pager, BTreeCellContents *catalog_cell, I
     }
 
     for (uint32_t i = 0; i < (*index)->key->num_columns; i++) {
-        memcpy(&(*index)->key->column_index_array[i], read_offset, sizeof(uint32_t));
+        (*index)->key->column_index_array[i] = load_u32_le(read_offset);
         read_offset += sizeof(uint32_t);
     }
 
     uint8_t is_unique;
-    memcpy(&is_unique, read_offset, sizeof(uint8_t));
+    is_unique = load_u8_le(read_offset);
     read_offset += sizeof(uint8_t);
 
     if (is_unique > 1) {
@@ -1250,7 +1251,7 @@ bool deserialize_table_metadata(Pager *pager, BTreeCellContents *catalog_cell, T
     uint8_t *read_offset = metadata_page->page_data + sizeof(uint32_t);
 
     uint8_t is_materialized;
-    memcpy(&is_materialized, read_offset, sizeof(uint8_t));
+    is_materialized = load_u8_le(read_offset);
     read_offset += sizeof(uint8_t);
 
     if (is_materialized > 1) {
@@ -1270,7 +1271,7 @@ bool deserialize_table_metadata(Pager *pager, BTreeCellContents *catalog_cell, T
         return false;
     }
 
-    memcpy(&((*table)->row_count), read_offset, sizeof(uint32_t));
+    (*table)->row_count = load_u32_le(read_offset);
     read_offset += sizeof(uint32_t);
 
     (*table)->table_schema = deserialize_schema_metadata(&read_offset);
@@ -1293,7 +1294,7 @@ Schema *deserialize_schema_metadata(uint8_t **read_offset) {
         return NULL;
     }
 
-    memcpy(&(schema->num_columns), *read_offset, sizeof(uint32_t));
+    schema->num_columns = load_u32_le(*read_offset);
     *read_offset += sizeof(uint32_t);
 
     if (schema->num_columns > 0) {
@@ -1312,7 +1313,7 @@ Schema *deserialize_schema_metadata(uint8_t **read_offset) {
         }
     }
 
-    memcpy(&(schema->num_constraints), *read_offset, sizeof(uint32_t));
+    schema->num_constraints = load_u32_le(*read_offset);
     *read_offset += sizeof(uint32_t);
 
     if (schema->num_constraints > 0) {
@@ -1345,7 +1346,7 @@ Column *deserialize_column(uint8_t **read_offset) {
     column_name[63] = '\0';
 
     uint8_t data_type;
-    memcpy(&data_type, *read_offset, sizeof(uint8_t));
+    data_type = load_u8_le(*read_offset);
     *read_offset += sizeof(uint8_t);
 
     if (data_type > JSONB) {
@@ -1353,17 +1354,17 @@ Column *deserialize_column(uint8_t **read_offset) {
     }
 
     uint32_t type_parameter;
-    memcpy(&type_parameter, *read_offset, sizeof(uint32_t));
+    type_parameter = load_u32_le(*read_offset);
     *read_offset += sizeof(uint32_t);
 
     // Reconstructed during Column allocation
 
     uint32_t non_null_rows;
-    memcpy(&non_null_rows, *read_offset, sizeof(uint32_t));
+    non_null_rows = load_u32_le(*read_offset);
     *read_offset += sizeof(uint32_t);
 
     uint32_t null_rows;
-    memcpy(&null_rows, *read_offset, sizeof(uint32_t));
+    null_rows = load_u32_le(*read_offset);
     *read_offset += sizeof(uint32_t);
 
     Column *column = column_alloc(
@@ -1391,7 +1392,7 @@ Constraint *deserialize_constraint(uint8_t **read_offset) {
     constraint_name[63] = '\0';
 
     uint8_t constraint_type;
-    memcpy(&constraint_type, *read_offset, sizeof(uint8_t));
+    constraint_type = load_u8_le(*read_offset);
     *read_offset += sizeof(uint8_t);
 
     if (constraint_type > DEFAULT) {
@@ -1409,7 +1410,7 @@ Constraint *deserialize_constraint(uint8_t **read_offset) {
     switch(constraint->type) {
         case PRIMARY_KEY: {
             uint32_t amount_columns;
-            memcpy(&amount_columns, *read_offset, sizeof(uint32_t));
+            amount_columns = load_u32_le(*read_offset);
             *read_offset += sizeof(uint32_t);
 
             constraint->constraint_data.primary_key.amount_columns = amount_columns;
@@ -1422,11 +1423,7 @@ Constraint *deserialize_constraint(uint8_t **read_offset) {
                 }
 
                 for (uint32_t j = 0; j < amount_columns; j++) {
-                    memcpy(
-                        &constraint->constraint_data.primary_key.primary_key_columns[j],
-                        *read_offset,
-                        sizeof(uint32_t)
-                    );
+                    constraint->constraint_data.primary_key.primary_key_columns[j] = load_u32_le(*read_offset);
                     *read_offset += sizeof(uint32_t);
                 }
             }
@@ -1434,11 +1431,7 @@ Constraint *deserialize_constraint(uint8_t **read_offset) {
             break;
         }
         case FOREIGN_KEY:
-            memcpy(
-                &(constraint->constraint_data.foreign_key.amount_columns),
-                *read_offset,
-                sizeof(uint32_t)
-            );
+            constraint->constraint_data.foreign_key.amount_columns = load_u32_le(*read_offset);
             *read_offset += sizeof(uint32_t);
 
             if (constraint->constraint_data.foreign_key.amount_columns > 0) {
@@ -1455,11 +1448,7 @@ Constraint *deserialize_constraint(uint8_t **read_offset) {
                     j < constraint->constraint_data.foreign_key.amount_columns;
                     j++) {
 
-                    memcpy(
-                        &constraint->constraint_data.foreign_key.foreign_key_columns[j],
-                        *read_offset,
-                        sizeof(uint32_t)
-                    );
+                    constraint->constraint_data.foreign_key.foreign_key_columns[j] = load_u32_le(*read_offset);
                     *read_offset += sizeof(uint32_t);
                 }
             }
@@ -1472,11 +1461,7 @@ Constraint *deserialize_constraint(uint8_t **read_offset) {
             *read_offset += 64*sizeof(uint8_t);
             constraint->constraint_data.foreign_key.referenced_table_name[63] = '\0';
 
-            memcpy(
-                &(constraint->constraint_data.foreign_key.amount_referenced_columns),
-                *read_offset,
-                sizeof(uint32_t)
-            );
+            constraint->constraint_data.foreign_key.amount_referenced_columns = load_u32_le(*read_offset);
             *read_offset += sizeof(uint32_t);
 
             if (constraint->constraint_data.foreign_key.amount_referenced_columns > 0) {
@@ -1492,22 +1477,14 @@ Constraint *deserialize_constraint(uint8_t **read_offset) {
                     j < constraint->constraint_data.foreign_key.amount_referenced_columns;
                     j++) {
 
-                    memcpy(
-                        &constraint->constraint_data.foreign_key.referenced_columns[j],
-                        *read_offset,
-                        sizeof(uint32_t)
-                    );
+                    constraint->constraint_data.foreign_key.referenced_columns[j] = load_u32_le(*read_offset);
                     *read_offset += sizeof(uint32_t);
                 }
             }
 
             break;
         case UNIQUE:
-            memcpy(
-                &(constraint->constraint_data.unique_cols.amount_columns),
-                *read_offset,
-                sizeof(uint32_t)
-            );
+            constraint->constraint_data.unique_cols.amount_columns = load_u32_le(*read_offset);
             *read_offset += sizeof(uint32_t);
 
             if (constraint->constraint_data.unique_cols.amount_columns > 0) {
@@ -1523,22 +1500,14 @@ Constraint *deserialize_constraint(uint8_t **read_offset) {
                     j < constraint->constraint_data.unique_cols.amount_columns;
                     j++) {
 
-                    memcpy(
-                        &constraint->constraint_data.unique_cols.column_refs[j],
-                        *read_offset,
-                        sizeof(uint32_t)
-                    );
+                    constraint->constraint_data.unique_cols.column_refs[j] = load_u32_le(*read_offset);
                     *read_offset += sizeof(uint32_t);
                 }
             }
 
             break;
         case CHECK:
-            memcpy(
-                &(constraint->constraint_data.check.amount_columns),
-                *read_offset,
-                sizeof(uint32_t)
-            );
+            constraint->constraint_data.check.amount_columns = load_u32_le(*read_offset);
             *read_offset += sizeof(uint32_t);
 
             if (constraint->constraint_data.check.amount_columns > 0) {
@@ -1554,11 +1523,7 @@ Constraint *deserialize_constraint(uint8_t **read_offset) {
                     j < constraint->constraint_data.check.amount_columns;
                     j++) {
 
-                    memcpy(
-                        &constraint->constraint_data.check.column_refs[j],
-                        *read_offset,
-                        sizeof(uint32_t)
-                    );
+                    constraint->constraint_data.check.column_refs[j] = load_u32_le(*read_offset);
                     *read_offset += sizeof(uint32_t);
                 }
             }
@@ -1573,20 +1538,12 @@ Constraint *deserialize_constraint(uint8_t **read_offset) {
 
             break;
         case NOT_NULL:
-            memcpy(
-                &(constraint->constraint_data.not_null.column_ref),
-                *read_offset,
-                sizeof(uint32_t)
-            );
+            constraint->constraint_data.not_null.column_ref = load_u32_le(*read_offset);
             *read_offset += sizeof(uint32_t);
 
             break;
         case DEFAULT:
-            memcpy(
-                &(constraint->constraint_data.default_value.column_ref),
-                *read_offset,
-                sizeof(uint32_t)
-            );
+            constraint->constraint_data.default_value.column_ref = load_u32_le(*read_offset);
             *read_offset += sizeof(uint32_t);
 
             constraint->constraint_data.default_value.default_expr =
@@ -1613,7 +1570,7 @@ Value *deserialize_literal_value(uint8_t **read_offset) {
     }
 
     uint8_t literal_type;
-    memcpy(&literal_type, *read_offset, sizeof(uint8_t));
+    literal_type = load_u8_le(*read_offset);
     *read_offset += sizeof(uint8_t);
 
     if (literal_type > JSONB) {
@@ -1621,7 +1578,7 @@ Value *deserialize_literal_value(uint8_t **read_offset) {
     }
 
     uint8_t null_val;
-    memcpy(&null_val, *read_offset, sizeof(uint8_t));
+    null_val = load_u8_le(*read_offset);
     *read_offset += sizeof(uint8_t);
 
     if (null_val > 1) {
@@ -1642,20 +1599,20 @@ Value *deserialize_literal_value(uint8_t **read_offset) {
 
     switch (literal->type) {
         case INTEGER:
-            memcpy(&literal->value.int32_val, *read_offset, sizeof(int32_t));
+            literal->value.int32_val = load_i32_le(*read_offset);
             *read_offset += sizeof(int32_t);
 
             break;
         case NUMERIC:
-            memcpy(&literal->value.numeric_val.val, *read_offset, sizeof(int64_t));
+            literal->value.numeric_val.val = load_i64_le(*read_offset);
             *read_offset += sizeof(int64_t);
 
-            memcpy(&literal->value.numeric_val.scale, *read_offset, sizeof(uint32_t));
+            literal->value.numeric_val.scale = load_u32_le(*read_offset);
             *read_offset += sizeof(uint32_t);
 
             break;
         case CHAR:
-            memcpy(&literal->value.char_val.n, *read_offset, sizeof(uint32_t));
+            literal->value.char_val.n = load_u32_le(*read_offset);
             *read_offset += sizeof(uint32_t);
 
             literal->value.char_val.string = (char *) calloc(
@@ -1678,19 +1635,19 @@ Value *deserialize_literal_value(uint8_t **read_offset) {
 
             break;
         case DATE:
-            memcpy(&literal->value.date_val, *read_offset, sizeof(uint64_t));
+            literal->value.date_val = load_u64_le(*read_offset);
             *read_offset += sizeof(uint64_t);
 
             break;
         case TIMESTAMP:
-            memcpy(&literal->value.timestamp_val, *read_offset, sizeof(uint64_t));
+            literal->value.timestamp_val = load_u64_le(*read_offset);
             *read_offset += sizeof(uint64_t);
 
             break;
         // case BLOB:
         case BOOL: {
             uint8_t bool_val;
-            memcpy(&bool_val, *read_offset, sizeof(uint8_t));
+            bool_val = load_u8_le(*read_offset);
             *read_offset += sizeof(uint8_t);
 
             if (bool_val > 1) {
@@ -1717,7 +1674,7 @@ ExpressionNode *deserialize_expression_node(uint8_t **read_offset) {
     }
 
     uint8_t expression_type;
-    memcpy(&expression_type, *read_offset, sizeof(uint8_t));
+    expression_type = load_u8_le(*read_offset);
     *read_offset += sizeof(uint8_t);
 
     if (expression_type > EXPR_FUNCTIONS) {
@@ -1750,18 +1707,10 @@ ExpressionNode *deserialize_expression_node(uint8_t **read_offset) {
             *read_offset += 64*sizeof(uint8_t);
             expr_node->expression_data.column_value.column_name[63] = '\0';
 
-            memcpy(
-                &expr_node->expression_data.column_value.column_index,
-                *read_offset,
-                sizeof(int32_t)
-            );
+            expr_node->expression_data.column_value.column_index = load_i32_le(*read_offset);
             *read_offset += sizeof(int32_t);
 
-            memcpy(
-                &expr_node->expression_data.column_value.relation_index,
-                *read_offset,
-                sizeof(int32_t)
-            );
+            expr_node->expression_data.column_value.relation_index = load_i32_le(*read_offset);
             *read_offset += sizeof(int32_t);
 
             break;
@@ -1777,7 +1726,7 @@ ExpressionNode *deserialize_expression_node(uint8_t **read_offset) {
             break;
         case EXPR_UNARY: {
             uint8_t operator_type;
-            memcpy(&operator_type, *read_offset, sizeof(uint8_t));
+            operator_type = load_u8_le(*read_offset);
             *read_offset += sizeof(uint8_t);
 
             if (operator_type >= OP_ERROR) {
@@ -1806,7 +1755,7 @@ ExpressionNode *deserialize_expression_node(uint8_t **read_offset) {
             }
 
             uint8_t operator_type;
-            memcpy(&operator_type, *read_offset, sizeof(uint8_t));
+            operator_type = load_u8_le(*read_offset);
             *read_offset += sizeof(uint8_t);
 
             if (operator_type >= OP_ERROR) {
@@ -1854,11 +1803,7 @@ ExpressionNode *deserialize_expression_node(uint8_t **read_offset) {
                 return NULL;
             }
 
-            memcpy(
-                &expr_node->expression_data.in_expr.option_count,
-                *read_offset,
-                sizeof(uint32_t)
-            );
+            expr_node->expression_data.in_expr.option_count = load_u32_le(*read_offset);
             *read_offset += sizeof(uint32_t);
 
             if (expr_node->expression_data.in_expr.option_count > 0) {
@@ -1914,7 +1859,7 @@ ExpressionNode *deserialize_expression_node(uint8_t **read_offset) {
             break;
         case EXPR_FUNCTIONS: {
             uint8_t aggregate_function_type;
-            memcpy(&aggregate_function_type, *read_offset, sizeof(uint8_t));
+            aggregate_function_type = load_u8_le(*read_offset);
             *read_offset += sizeof(uint8_t);
 
             if (aggregate_function_type > EXPR_AGGREGATE_MAX) {
@@ -1932,7 +1877,7 @@ ExpressionNode *deserialize_expression_node(uint8_t **read_offset) {
                 return NULL;
             }
 
-            memcpy(&expr_node->expression_data.aggregate_func_expr.wildcard, *read_offset, sizeof(uint8_t));
+            expr_node->expression_data.aggregate_func_expr.wildcard = load_u8_le(*read_offset);
             *read_offset += sizeof(uint8_t);
             
             break;
@@ -1956,16 +1901,16 @@ bool serialize_page_zero_metadata(uint8_t **write_offset, const PageZeroMetadata
     memcpy(*write_offset, &(page_zero->magic), DB_MAGIC_STRING_LEN);
     *write_offset += DB_MAGIC_STRING_LEN;
 
-    memcpy(*write_offset, &(page_zero->version), sizeof(uint32_t));
+    store_u32_le(*write_offset, page_zero->version);
     *write_offset += sizeof(uint32_t);
 
-    memcpy(*write_offset, &(page_zero->page_size), sizeof(uint16_t));
+    store_u16_le(*write_offset, page_zero->page_size);
     *write_offset += sizeof(uint16_t);
 
-    memcpy(*write_offset, &(page_zero->catalog_root), sizeof(uint32_t));
+    store_u32_le(*write_offset, page_zero->catalog_root);
     *write_offset += sizeof(uint32_t);
 
-    memcpy(*write_offset, &(page_zero->free_list_head), sizeof(uint32_t));
+    store_u32_le(*write_offset, page_zero->free_list_head);
     *write_offset += sizeof(uint32_t);
 
     return true;
@@ -1979,16 +1924,16 @@ bool deserialize_page_zero_metadata(uint8_t **read_offset, PageZeroMetadata *pag
     memcpy(&(page_zero->magic), *read_offset, DB_MAGIC_STRING_LEN);
     *read_offset += DB_MAGIC_STRING_LEN;
 
-    memcpy(&(page_zero->version), *read_offset, sizeof(uint32_t));
+    page_zero->version = load_u32_le(*read_offset);
     *read_offset += sizeof(uint32_t);
 
-    memcpy(&(page_zero->page_size), *read_offset, sizeof(uint16_t));
+    page_zero->page_size = load_u16_le(*read_offset);
     *read_offset += sizeof(uint16_t);
 
-    memcpy(&(page_zero->catalog_root), *read_offset, sizeof(uint32_t));
+    page_zero->catalog_root = load_u32_le(*read_offset);
     *read_offset += sizeof(uint32_t);
 
-    memcpy(&(page_zero->free_list_head), *read_offset, sizeof(uint32_t));
+    page_zero->free_list_head = load_u32_le(*read_offset);
     *read_offset += sizeof(uint32_t);
 
     return true;
@@ -2172,6 +2117,10 @@ size_t serialized_literal_value_size(Value *literal) {
     size_t size = 0;
 
     size += sizeof(uint8_t) + sizeof(uint8_t);
+
+    if (literal->null_val) {
+        return size;
+    }
 
     switch (literal->type) {
         case INTEGER:

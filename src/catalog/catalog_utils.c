@@ -9,6 +9,7 @@
 #include "../../include/serialize.h"
 #include "../../include/index.h"
 #include "../src/data_types/data_types_utils.h"
+#include "catalog_utils.h"
 
 /* Create Catalog Key from CatalogRecordInfo.
  *
@@ -245,8 +246,7 @@ bool visit_metadata_pages(Pager *pager, uint32_t metadata_page_num, CatalogMetad
     metadata_pages->pages[metadata_pages->num_pages] = curr;
     metadata_pages->num_pages++;
 
-    uint32_t next_page_num = 0;
-    memcpy(&next_page_num, curr->page_data, sizeof(uint32_t));
+    uint32_t next_page_num = get_next_metadata_page_num(curr);
 
     while (next_page_num != 0) {
         if (next_page_num >= pager->num_pages
@@ -264,7 +264,7 @@ bool visit_metadata_pages(Pager *pager, uint32_t metadata_page_num, CatalogMetad
             goto page_cleanup;
         }
 
-        memcpy(&next_page_num, curr->page_data, sizeof(uint32_t));
+        next_page_num = get_next_metadata_page_num(curr);
         metadata_pages->pages[metadata_pages->num_pages] = curr;
         metadata_pages->num_pages++;
     }
@@ -298,7 +298,9 @@ bool copy_metadata_pages(Pager *pager, CatalogMetadataPages *metadata_pages, uin
     copies.pages[copies.num_pages] = copy;
     copies.num_pages++;
 
-    uint8_t *prev_write = copy->page_data; 
+    Page *prev = copy;
+    // uint8_t *prev_write = copy->page_data; 
+
     *new_page_num = copy->page_num; // New metadata page number
 
     current_page_idx++;
@@ -307,9 +309,13 @@ bool copy_metadata_pages(Pager *pager, CatalogMetadataPages *metadata_pages, uin
         if (!copy) {
             goto copies_cleanup;
         }
-        memcpy(prev_write, &copy->page_num, sizeof(uint32_t));
 
-        prev_write = copy->page_data;
+        if (!set_next_metadata_page_num(prev, copy->page_num)) {
+            goto copies_cleanup;
+        }
+
+        prev = copy;
+        // prev_write = copy->page_data;
         current_page_idx++;
         
         copies.pages[copies.num_pages] = copy;
