@@ -6,25 +6,31 @@
 typedef struct expression_node ExpressionNode;
 
 typedef enum ast_node_type {
-    AST_SELECT,
-    AST_INSERT,
-    AST_UPDATE,
-    AST_DELETE,
-    AST_CREATE_TABLE,
-    AST_DROP_TABLE,
-    AST_ALTER_TABLE,
-    AST_TRUNCATE_TABLE,
-    AST_CREATE_INDEX,
-    AST_DROP_INDEX,
+    AST_SELECT = 0,
+    AST_INSERT = 1,
+    AST_UPDATE = 2,
+    AST_DELETE = 3,
+    AST_CREATE_TABLE = 4,
+    AST_DROP_TABLE = 5,
+    AST_ALTER_TABLE = 6,
+    AST_TRUNCATE_TABLE = 7, 
+    AST_CREATE_INDEX = 8,
+    AST_DROP_INDEX = 9,
 } ASTNodeType;
+
+typedef struct ast_as {
+    char alias[64];
+} AsNode;
 
 typedef struct ast_projection {
     ExpressionNode **expressions;
+    AsNode *aliases;
     uint32_t num_expressions;
 } ProjectionNode;
 
 typedef struct ast_from {
     ExpressionNode **expressions;
+    AsNode *aliases;
     uint32_t num_expressions;
 } FromNode;
 
@@ -65,6 +71,7 @@ typedef struct ast_on {
 
 typedef struct ast_join {
     char secondary_table_name[64];
+    AsNode alias;
     JoinType join_type;
     OnNode *on;
 } JoinNode;
@@ -109,7 +116,7 @@ typedef struct ast_insert {
 } InsertNode;
 
 typedef struct ast_assignment {
-    char column_name[64];
+    ExpressionNode *column_ref;
     ExpressionNode *value;
 } AssignmentNode;
 
@@ -120,6 +127,7 @@ typedef struct ast_set {
 
 typedef struct ast_update {
     char table_name[64];
+    AsNode alias;
     SetNode *set;
     WhereNode *where;
 } UpdateNode;

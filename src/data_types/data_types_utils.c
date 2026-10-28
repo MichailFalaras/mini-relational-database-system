@@ -349,12 +349,76 @@ bool is_text_type(DataType type) {
     return false;
 }
 
+bool is_integer_type(DataType type) {
+    return type == INTEGER || type == UNSIGNED_INTEGER;
+}
+
+bool are_equality_compatible(DataType left, DataType right) {
+    // Numeric types can be compared with each other.
+    if (is_numeric_type(left) && is_numeric_type(right)) {
+        return true;
+    }
+
+    // Text types can be compared with each other.
+    if (is_text_type(left) && is_text_type(right)) {
+        return true;
+    }
+
+    return (left == BOOL && right == BOOL) ||
+           (left == DATE && right == DATE) ||
+           (left == TIMESTAMP && right == TIMESTAMP);
+}
+
+bool are_ordering_compatible(DataType left, DataType right) {
+    if (!supports_ordering(left) || !supports_ordering(right)) {
+        return false;
+    }
+
+    // Numeric types can be ordered against each other.
+    if (is_numeric_type(left) && is_numeric_type(right)) {
+        return true;
+    }
+
+    // Text types can be ordered against each other.
+    if (is_text_type(left) && is_text_type(right)) {
+        return true;
+    }
+
+    // DATE and TIMESTAMP currently require identical types.
+    return left == right;
+}
+
+bool supports_ordering(DataType type) {
+    return is_numeric_type(type) ||
+           is_text_type(type) ||
+           type == DATE ||
+           type == TIMESTAMP;
+}
 
 // Data type conversion utils
 
+// only UNSIGNED INTEGER -> INTEGER
+bool convert_to_integer(Value *value) {
+    if (!value || value->type != UNSIGNED_INTEGER || value->value.uint32_val > INT32_MAX) {
+        return false;
+    }
+
+    int32_t converted = (int32_t)value->value.uint32_val;
+
+    memset(&value->value, 0, sizeof(value->value));
+    value->type = INTEGER;
+    value->value.int32_val = converted;
+
+    return true;
+}
+
 // only INTEGER -> UNSIGNED INTEGER
 bool convert_to_unsigned_integer(Value *value) {
-    uint32_t converted = (uint32_t) value->value.int32_val;
+    if (!value || value->type != INTEGER || value->value.int32_val < 0) {
+        return false;
+    }
+
+    uint32_t converted = (uint32_t)value->value.int32_val;
 
     memset(&value->value, 0, sizeof(value->value));
     value->type = UNSIGNED_INTEGER;
@@ -364,6 +428,10 @@ bool convert_to_unsigned_integer(Value *value) {
 
 // only INTEGER -> NUMERIC and UNSIGNED_INTEGER -> NUMERIC
 bool convert_to_numeric(Value *value) {
+    if (!value) {
+        return false;
+    }
+
     numeric_t converted = { .val = 0, .scale = 0};
 
     if (value->type == INTEGER) {
@@ -384,6 +452,10 @@ bool convert_to_numeric(Value *value) {
 
 // only INTEGER -> FLOAT and UNSIGNED_INTEGER -> FLOAT
 bool convert_to_float(Value *value) {
+    if (!value) {
+        return false;
+    }
+
     float converted;
 
     if (value->type == INTEGER) {
@@ -402,8 +474,12 @@ bool convert_to_float(Value *value) {
     return true;
 }
 
-// only INTEGER -> DOUBLE, UNSIGNED_INTEGER -> DOUBLE, and FLOAT -> DOUBLE
+// only INTEGER/UNSIGNED_INTEGER/FLOAT/NUMERIC -> DOUBLE
 bool convert_to_double(Value *value) {
+    if (!value) {
+        return false;
+    }
+
     double converted;
 
     if (value->type == INTEGER) {
@@ -414,6 +490,15 @@ bool convert_to_double(Value *value) {
     }
     else if (value->type == FLOAT) {
         converted = (double) value->value.float_val;
+    }
+    else if (value->type == NUMERIC) {
+        numeric_t numeric = value->value.numeric_val;
+
+        converted = (double)numeric.val / pow(10.0, (double)numeric.scale);
+
+        if (!isfinite(converted)) {
+            return false;
+        }
     }
     else {
         return false;
@@ -427,6 +512,10 @@ bool convert_to_double(Value *value) {
 
 // only VARCHAR -> CHAR
 bool convert_to_char(Value *value) {
+    if (!value) {
+        return false;
+    }
+
     char_n_t converted = { .n = 0, .string = NULL };
 
     if (value->type == VARCHAR) {
@@ -451,6 +540,10 @@ bool convert_to_char(Value *value) {
 
 // only CHAR -> VARCHAR
 bool convert_to_varchar(Value *value) {
+    if (!value) {
+        return false;
+    }
+
     varchar_n_t converted = { .max_n = 0, .string = NULL };
 
     if (value->type == CHAR) {
@@ -475,6 +568,10 @@ bool convert_to_varchar(Value *value) {
 
 // only CHAR -> TEXT and VARCHAR -> TEXT
 bool convert_to_text(Value *value) {
+    if (!value) {
+        return false;
+    }
+
     char *converted = NULL;
 
     if (value->type == CHAR) {
@@ -501,6 +598,10 @@ bool convert_to_text(Value *value) {
 
 // only DATE -> TIMESTAMP
 bool convert_to_timestamp(Value *value) {
+    if (!value || value->type != DATE) {
+        return false;
+    }
+
     uint64_t converted = value->value.date_val;
 
     memset(&value->value, 0, sizeof(value->value));

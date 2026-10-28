@@ -7,6 +7,10 @@
 
 /* Allocate Value struct */
 Value *value_alloc(DataType type) {
+    if (type < INTEGER || type > JSONB) {
+        return NULL;
+    }
+
     Value *new_value = (Value *) calloc(1, sizeof(Value));
     
     if (!new_value) {
@@ -506,6 +510,10 @@ bool value_convert_data_type(DataType target, Value *value) {
 
     // So far in this version,
     switch(target) {
+        // only UNSIGNED INTEGER -> INTEGER
+        case INTEGER:
+            return convert_to_integer(value);
+
         // only INTEGER -> UNSIGNED INTEGER
         case UNSIGNED_INTEGER:
             return convert_to_unsigned_integer(value);
@@ -552,61 +560,71 @@ bool value_can_assign(DataType target, const Value *value) {
         return false;
     }
 
-    // Identical data types
-    if (target == value->type)
-        return true;
+    if (!value_types_assignable(target, value->type)) {
+        return false;
+    }
 
-    // Allow value conversions as long as the target data type doesn't narrow down
-    // the tested data type.
+    if (value->null_val) {
+        return true;
+    }
+
+    if (target == INTEGER && value->type == UNSIGNED_INTEGER) {
+        return value->value.uint32_val <= INT32_MAX;
+    }
+
+    if (target == UNSIGNED_INTEGER && value->type == INTEGER) {
+        return value->value.int32_val >= 0;
+    }
+
+    return true;
+}
+
+/* Check whether a source DataType supports assignment to a target DataType. */
+bool value_types_assignable(DataType target, DataType source) {
+    if (target < INTEGER || target > JSONB ||
+        source < INTEGER || source > JSONB) {
+        return false;
+    }
+
+    if (target == source) {
+        return true;
+    }
+
     switch (target) {
         case INTEGER:
-            if (value->type == UNSIGNED_INTEGER) {
-                return value->value.uint32_val <= INT32_MAX;
-            }
+            return source == UNSIGNED_INTEGER;
 
-            return (value->type == INTEGER);
         case UNSIGNED_INTEGER:
-            if (value->type == INTEGER)
-                return value->value.int32_val >= 0;
-            
-            return false;
-        
-        case NUMERIC:
-            return (value->type == INTEGER || value->type == UNSIGNED_INTEGER);
+            return source == INTEGER;
 
+        case NUMERIC:
         case FLOAT:
-            return (value->type == INTEGER || value->type == UNSIGNED_INTEGER);
+            return source == INTEGER ||
+                   source == UNSIGNED_INTEGER;
 
         case DOUBLE:
-            return (value->type == INTEGER || value->type == UNSIGNED_INTEGER ||
-                    value->type == FLOAT);
+            return source == INTEGER ||
+                   source == UNSIGNED_INTEGER ||
+                   source == FLOAT ||
+                   source == NUMERIC;
 
         case CHAR:
-            return (value->type == VARCHAR);
+            return source == VARCHAR;
 
         case VARCHAR:
-            return (value->type == CHAR);            
-    
+            return source == CHAR;
+
         case TEXT:
-            return (value->type == CHAR || value->type == VARCHAR);
+            return source == CHAR ||
+                   source == VARCHAR;
 
-        case DATE:
-            return false;
-        
         case TIMESTAMP:
-            return value->type == DATE;
+            return source == DATE;
 
-        case BOOL:
-        case BLOB:
-        case JSONB:
-        // case NULL_TYPE:
-            return false;
-        
         default:
             return false;
     }
 }
-
 
 /* Deallocate Value structure */
 void value_free(Value *value) {

@@ -13,6 +13,7 @@ typedef enum statement_type StatementType;
 
 typedef struct ast_projection ProjectionNode;
 typedef struct ast_from FromNode;
+typedef struct ast_as AsNode;
 typedef struct ast_join JoinNode;
 typedef struct ast_on OnNode;
 typedef struct ast_where WhereNode;
@@ -34,6 +35,12 @@ typedef struct abstract_syntax_tree_node ASTNode;
 typedef enum operator_type OperatorType;
 typedef enum ast_join_types JoinType;
 typedef struct expression_node ExpressionNode;
+
+typedef enum postfix_parse_status {
+    POSTFIX_PARSE_ERROR = -1,
+    POSTFIX_PARSE_NONE = 0,
+    POSTFIX_PARSE_SUCCESS = 1
+} PostfixParseStatus;
 
 /* ASTNodeType to StatementType. */
 StatementType ast_to_statement_type(ASTNodeType type);
@@ -94,7 +101,7 @@ ExpressionNode *parse_primary_expression(Parser *parser);
 
 /* Parse postfix expressions like: IS NULL / IS NOT NULL / IN / BETWEEN
  * that require their own unique parsing. */
-ExpressionNode *parse_postfix_expression(Parser *parser, ExpressionNode **operand);
+PostfixParseStatus parse_postfix_expression(Parser *parser, ExpressionNode **operand);
 
 /* Parse literal expressions. */
 ExpressionNode *parse_literal_expression(Parser *parser);
@@ -137,6 +144,8 @@ ProjectionNode *parse_projection(Parser *parser);
 
 FromNode *parse_from(Parser *parser);
 
+AsNode *parse_as(Parser *parser);
+
 WhereNode *parse_where(Parser *parser);
 
 GroupByNode *parse_group_by(Parser *parser);
@@ -148,6 +157,8 @@ OrderByNode *parse_order_by(Parser *parser);
 LimitNode *parse_limit(Parser *parser);
 
 OffsetNode *parse_offset(Parser *parser);
+
+bool parse_uint32_token(const Token *token, uint32_t *out_value);
 
 IntoNode *parse_into(Parser *parser);
 

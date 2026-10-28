@@ -83,6 +83,7 @@ void ast_free_projection(ProjectionNode *projection) {
     }
 
     ast_free_expression_array(projection->expressions, projection->num_expressions);
+    free(projection->aliases);
     free(projection);
 }
 
@@ -92,6 +93,7 @@ void ast_free_from(FromNode *from) {
     }
 
     ast_free_expression_array(from->expressions, from->num_expressions);
+    free(from->aliases);
     free(from);
 }
 
@@ -204,6 +206,7 @@ void ast_free_assignments(AssignmentNode *assignments, uint32_t num_assignments)
     }
 
     for (uint32_t i = 0; i < num_assignments; i++) {
+        expression_node_free(assignments[i].column_ref);
         expression_node_free(assignments[i].value);
     }
 

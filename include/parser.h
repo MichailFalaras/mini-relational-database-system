@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "semantic_binder.h"
 
 typedef struct abstract_syntax_tree_node ASTNode;
 typedef struct token_array TokenArray;
@@ -26,6 +27,7 @@ typedef enum statement_type {
 typedef struct statement {
     ASTNode *root;
     StatementType type;
+    BoundStatement bound;
 } Statement;
 
 /* Parser component containing:
@@ -50,9 +52,6 @@ ExpressionNode *parse_expression(Parser *parser);
 
 /* Allocate and initialize Statement. */
 extern Statement *statement_init(ASTNode *root, StatementType type);
-
-/* Inside parse_query, last check of AST validity. */
-extern bool bind_statement(ASTNode *root, Database *db);
 
 /* Deallocate Parser component*/
 extern void parser_free(Parser *parser);

@@ -408,7 +408,7 @@ void expression_node_free(ExpressionNode *expr) {
             break;
         default:
             printf("Source type doesn't match with ExpressionNode types\n");
-            return;
+            break;
         }
 
         free(expr);
