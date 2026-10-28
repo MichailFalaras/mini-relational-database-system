@@ -461,23 +461,38 @@ bool bind_binary(ExpressionNode *expr, BindingContext *context, BoundExpressionT
     // Arithmetic operators
     if (is_arithmetic_operator) {
         if (!is_numeric_type(left_type) || !is_numeric_type(right_type)) {
-            printf("bind_binary: Invalid numeric operand types.\n");
+            printf("bind_binary: Arithmetic operands must be numeric.\n");
             return false;
         }
 
-        // Modulo is supported only for integer operands
-        if (binary->op == OP_MODULO && (!is_integer_type(left_type) || !is_integer_type(right_type))) {
+        // In this 1st version only integer operands are allowed to be used with modulo
+        if (binary->op == OP_MODULO &&
+            (!is_integer_type(left_type) || !is_integer_type(right_type))) {
             printf("bind_binary: Modulo requires integer operands.\n");
             return false;
         }
 
-        // Mixed numeric types require explicit promotion rules
-        if (left_type != right_type) {
+        DataType result_type;
+
+        if ((left_type == INTEGER && right_type == UNSIGNED_INTEGER) ||
+            (left_type == UNSIGNED_INTEGER && right_type == INTEGER)) {
+            result_type = NUMERIC;
+        }
+        else if (left_type == right_type) {
+            result_type = left_type;
+        }
+        else if (value_types_assignable(left_type, right_type)) {
+            result_type = left_type;
+        }
+        else if (value_types_assignable(right_type, left_type)) {
+            result_type = right_type;
+        }
+        else {
             printf("bind_binary: Incompatible numeric operand types.\n");
             return false;
         }
 
-        out_type->type = left_type;
+        out_type->type = result_type;
     }
     else if (is_logical_operator) {
         // Logical operators
@@ -1186,7 +1201,7 @@ bool bind_update(ASTNode *root, BindingContext *context, BoundUpdateValues *out_
 
     // Bind SET clause
     if (!success) {
-        printf("bind_update: Set expressions could not be bound.");
+        printf("bind_update: Set expressions could not be bound.\n");
         free(value_types);
         return false;
     }
@@ -2791,9 +2806,9 @@ bool build_bound_update_values(SetNode *set, const BoundExpressionType *value_ty
         }
 
         // Assign existing expression and data type for the corresponding column
-        bound_values[column_index].column_index = column_index;
-        bound_values[column_index].expression = value_expr;
-        bound_values[column_index].result_type = value_types[i];
+        bound_values[i].column_index = column_index;
+        bound_values[i].expression = value_expr;
+        bound_values[i].result_type = value_types[i];
     }
 
     // Publish only after successful construction

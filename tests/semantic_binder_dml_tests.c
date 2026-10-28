@@ -2756,6 +2756,1199 @@ cleanup:
     return result;
 }
 
+/* ---------- bind_update unit tests ---------- */
+
+int test_bind_update_basic_binding() {
+    int result = 1;
+    
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_UPDATE };
+
+    TestToken tokens[] = {
+        {"UPDATE", KEYWORD}, {"employees", IDENTIFIER}, {"SET", KEYWORD}, 
+        {"salary", IDENTIFIER}, {"=", OPERATOR}, {"2500.0", NUMBER}, {";", PUNCTUATION}
+    };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    init_binder_fixture(&binder);
+
+    // Create parser and AST
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_UPDATE);
+
+    // Bind UPDATE query
+    ASSERT(bind_update(root, &binder.context, &bound_result.data.update));
+
+    BoundUpdateValues *update_values = &bound_result.data.update;
+    UpdateNode *update = &root->node_contents.update;
+
+    // Validate registered relation
+    ASSERT(binder.context.relations != NULL);
+    ASSERT(binder.context.num_relations == 1);
+    ASSERT(binder.context.relations[0].table != NULL);
+
+    // Validate SET AST
+    ASSERT(update->set != NULL);
+    ASSERT(update->set->assignments != NULL);
+    ASSERT(update->set->num_assignments == 1);
+
+    ExpressionNode *column_expr = update->set->assignments[0].column_ref;
+    ExpressionNode *value_expr = update->set->assignments[0].value;
+
+    ASSERT(column_expr != NULL);
+    ASSERT(value_expr != NULL);
+
+    ASSERT(column_expr->type == EXPR_COLUMN_REF);
+    ASSERT(value_expr->type == EXPR_LITERAL);
+
+    // Validate resolved destination column
+    ASSERT(column_expr->expression_data.column_value.relation_index == 0);
+    ASSERT(column_expr->expression_data.column_value.column_index == 2);
+
+    // Validate bound UPDATE metadata
+    ASSERT(update_values->table == binder.context.relations[0].table);
+    ASSERT(update_values->values != NULL);
+    ASSERT(update_values->num_values == 1);
+
+    ASSERT(update_values->values[0].column_index == 2);
+    ASSERT(update_values->values[0].expression == value_expr);
+
+    // Validate inferred RHS type
+    ASSERT(!update_values->values[0].result_type.is_untyped_null);
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_update_multiple_assignments() {
+    int result = 1;
+    
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_UPDATE };
+
+    TestToken tokens[] = {
+        {"UPDATE", KEYWORD}, {"employees", IDENTIFIER}, {"SET", KEYWORD}, 
+        {"salary", IDENTIFIER}, {"=", OPERATOR}, {"2500.0", NUMBER}, {",", PUNCTUATION},
+        {"name", IDENTIFIER}, {"=", OPERATOR}, {"'Alice'", STRING}, {";", PUNCTUATION}
+    };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    init_binder_fixture(&binder);
+
+    // Create parser and AST
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_UPDATE);
+
+    // Bind UPDATE query
+    ASSERT(bind_update(root, &binder.context, &bound_result.data.update));
+
+    BoundUpdateValues *update_values = &bound_result.data.update;
+    UpdateNode *update = &root->node_contents.update;
+
+    ASSERT(binder.context.relations != NULL);
+    ASSERT(binder.context.num_relations == 1);
+    ASSERT(binder.context.relations[0].table != NULL);
+
+    ASSERT(update->set != NULL);
+    ASSERT(update->set->assignments != NULL);
+    ASSERT(update->set->num_assignments == 2);
+
+    ExpressionNode *column_expr_1 = update->set->assignments[0].column_ref;
+    ExpressionNode *value_expr_1 = update->set->assignments[0].value;
+    
+    ExpressionNode *column_expr_2 = update->set->assignments[1].column_ref;
+    ExpressionNode *value_expr_2 = update->set->assignments[1].value;
+
+    ASSERT(column_expr_1 != NULL);
+    ASSERT(value_expr_1 != NULL);
+
+    ASSERT(column_expr_2 != NULL);
+    ASSERT(value_expr_2 != NULL);
+
+    ASSERT(column_expr_1->type == EXPR_COLUMN_REF);
+    ASSERT(value_expr_1->type == EXPR_LITERAL);
+
+    ASSERT(column_expr_2->type == EXPR_COLUMN_REF);
+    ASSERT(value_expr_2->type == EXPR_LITERAL);
+
+    // Validate resolved destination column
+    ASSERT(column_expr_1->expression_data.column_value.relation_index == 0);
+    ASSERT(column_expr_1->expression_data.column_value.column_index == 2);
+
+    ASSERT(column_expr_2->expression_data.column_value.relation_index == 0);
+    ASSERT(column_expr_2->expression_data.column_value.column_index == 1);
+
+    // Validate bound UPDATE metadata
+    ASSERT(update_values->table == binder.context.relations[0].table);
+    ASSERT(update_values->values != NULL);
+    ASSERT(update_values->num_values == 2);
+
+    ASSERT(update_values->values[0].column_index == 2);
+    ASSERT(update_values->values[0].expression == value_expr_1);
+    
+    ASSERT(update_values->values[1].column_index == 1);
+    ASSERT(update_values->values[1].expression == value_expr_2);
+
+    // Validate inferred RHS type
+    ASSERT(!update_values->values[0].result_type.is_untyped_null);
+    ASSERT(!update_values->values[1].result_type.is_untyped_null);
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_update_rhs_expression() {
+    int result = 1;
+    
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_UPDATE };
+
+    TestToken tokens[] = {
+        {"UPDATE", KEYWORD}, {"employees", IDENTIFIER}, {"SET", KEYWORD}, 
+        {"salary", IDENTIFIER}, {"=", OPERATOR}, {"salary", IDENTIFIER}, 
+        {"+", OPERATOR}, {"1000.0", NUMBER}, {";", PUNCTUATION}
+    };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    init_binder_fixture(&binder);
+
+    // Create parser and AST
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_UPDATE);
+
+    // Bind UPDATE query
+    ASSERT(bind_update(root, &binder.context, &bound_result.data.update));
+
+    BoundUpdateValues *update_values = &bound_result.data.update;
+    UpdateNode *update = &root->node_contents.update;
+
+    ASSERT(binder.context.relations != NULL);
+    ASSERT(binder.context.num_relations == 1);
+    ASSERT(binder.context.relations[0].table != NULL);
+
+    ASSERT(update->set != NULL);
+    ASSERT(update->set->assignments != NULL);
+    ASSERT(update->set->num_assignments == 1);
+
+    ExpressionNode *column_expr_1 = update->set->assignments[0].column_ref;
+    ExpressionNode *value_expr_1 = update->set->assignments[0].value;
+    
+    ASSERT(column_expr_1 != NULL);
+    ASSERT(value_expr_1 != NULL);
+
+    ASSERT(column_expr_1->type == EXPR_COLUMN_REF);
+    ASSERT(value_expr_1->type == EXPR_BINARY);
+
+    // Validate resolved destination column
+    ASSERT(column_expr_1->expression_data.column_value.relation_index == 0);
+    ASSERT(column_expr_1->expression_data.column_value.column_index == 2);
+
+    // Validate bound UPDATE metadata
+    ASSERT(update_values->table == binder.context.relations[0].table);
+    ASSERT(update_values->values != NULL);
+    ASSERT(update_values->num_values == 1);
+
+    ASSERT(update_values->values[0].column_index == 2);
+    ASSERT(update_values->values[0].expression == value_expr_1);
+
+    // Validate inferred RHS type
+    ASSERT(!update_values->values[0].result_type.is_untyped_null);
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_update_where_binding() {
+    int result = 1;
+    
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_UPDATE };
+
+    TestToken tokens[] = {
+        {"UPDATE", KEYWORD}, {"employees", IDENTIFIER}, {"SET", KEYWORD}, 
+        {"salary", IDENTIFIER}, {"=", OPERATOR}, {"2500.0", NUMBER}, 
+        {"WHERE", KEYWORD}, {"id", IDENTIFIER}, {"=", OPERATOR}, {"1", NUMBER},
+        {";", PUNCTUATION}
+    };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    init_binder_fixture(&binder);
+
+    // Create parser and AST
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_UPDATE);
+
+    // Bind UPDATE query
+    ASSERT(bind_update(root, &binder.context, &bound_result.data.update));
+
+    BoundUpdateValues *update_values = &bound_result.data.update;
+    UpdateNode *update = &root->node_contents.update;
+
+    ASSERT(binder.context.relations != NULL);
+    ASSERT(binder.context.num_relations == 1);
+    ASSERT(binder.context.relations[0].table != NULL);
+
+    ASSERT(update->set != NULL);
+    ASSERT(update->set->assignments != NULL);
+    ASSERT(update->set->num_assignments == 1);
+
+    ExpressionNode *column_expr_1 = update->set->assignments[0].column_ref;
+    ExpressionNode *value_expr_1 = update->set->assignments[0].value;
+    
+    ASSERT(column_expr_1 != NULL);
+    ASSERT(value_expr_1 != NULL);
+
+    ASSERT(column_expr_1->type == EXPR_COLUMN_REF);
+    ASSERT(value_expr_1->type == EXPR_LITERAL);
+
+    // Validate resolved destination column
+    ASSERT(column_expr_1->expression_data.column_value.relation_index == 0);
+    ASSERT(column_expr_1->expression_data.column_value.column_index == 2);
+
+    // Validate bound UPDATE metadata
+    ASSERT(update_values->table == binder.context.relations[0].table);
+    ASSERT(update_values->values != NULL);
+    ASSERT(update_values->num_values == 1);
+
+    ASSERT(update_values->values[0].column_index == 2);
+    ASSERT(update_values->values[0].expression == value_expr_1);
+
+    // Validate inferred RHS type
+    ASSERT(!update_values->values[0].result_type.is_untyped_null);
+
+    // Bind Where clause
+    ASSERT(update->where != NULL);
+    ASSERT(update->where->expression != NULL);
+    ASSERT(update->where->expression->type == EXPR_BINARY);
+
+    ExpressionNode *column_expr = update->where->expression->expression_data.binary_expr.left_operand;
+
+    ASSERT(column_expr != NULL);
+    ASSERT(column_expr->type == EXPR_COLUMN_REF);
+    ASSERT(column_expr->expression_data.column_value.relation_index == 0);
+    ASSERT(column_expr->expression_data.column_value.column_index == 0);
+ 
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_update_qualified_destination() {
+    int result = 1;
+    
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_UPDATE };
+
+    TestToken tokens[] = {
+        {"UPDATE", KEYWORD}, {"employees", IDENTIFIER}, {"SET", KEYWORD}, 
+        {"employees", IDENTIFIER}, {".", PUNCTUATION}, {"salary", IDENTIFIER}, 
+        {"=", OPERATOR}, {"2500.0", NUMBER}, {";", PUNCTUATION}
+    };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    init_binder_fixture(&binder);
+
+    // Create parser and AST
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_UPDATE);
+
+    // Bind UPDATE query
+    ASSERT(bind_update(root, &binder.context, &bound_result.data.update));
+
+    BoundUpdateValues *update_values = &bound_result.data.update;
+    UpdateNode *update = &root->node_contents.update;
+
+    ASSERT(binder.context.relations != NULL);
+    ASSERT(binder.context.num_relations == 1);
+    ASSERT(binder.context.relations[0].table != NULL);
+
+    ASSERT(update->set != NULL);
+    ASSERT(update->set->assignments != NULL);
+    ASSERT(update->set->num_assignments == 1);
+
+    ExpressionNode *column_expr_1 = update->set->assignments[0].column_ref;
+    ExpressionNode *value_expr_1 = update->set->assignments[0].value;
+    
+    ASSERT(column_expr_1 != NULL);
+    ASSERT(value_expr_1 != NULL);
+
+    ASSERT(column_expr_1->type == EXPR_COLUMN_REF);
+    ASSERT(value_expr_1->type == EXPR_LITERAL);
+
+    // Validate resolved qualified destination column
+    ASSERT(
+        strcmp(
+            column_expr_1->expression_data.column_value.table_name,
+            "employees"
+        ) == 0
+    );
+    ASSERT(column_expr_1->expression_data.column_value.relation_index == 0);
+    ASSERT(column_expr_1->expression_data.column_value.column_index == 2);
+
+    // Validate bound UPDATE metadata
+    ASSERT(update_values->table == binder.context.relations[0].table);
+    ASSERT(update_values->values != NULL);
+    ASSERT(update_values->num_values == 1);
+
+    ASSERT(update_values->values[0].column_index == 2);
+    ASSERT(update_values->values[0].expression == value_expr_1);
+
+    // Validate inferred RHS type
+    ASSERT(!update_values->values[0].result_type.is_untyped_null);
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_update_set_where_resolution() {
+    int result = 1;
+    
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_UPDATE };
+
+    TestToken tokens[] = {
+        {"UPDATE", KEYWORD}, {"employees", IDENTIFIER}, {"AS", KEYWORD}, {"e", IDENTIFIER}, 
+        {"SET", KEYWORD}, {"e", IDENTIFIER}, {".", PUNCTUATION}, {"salary", IDENTIFIER}, 
+        {"=", OPERATOR}, {"e", IDENTIFIER}, {".", PUNCTUATION}, {"salary", IDENTIFIER},
+        {"+", OPERATOR}, {"1000.0", NUMBER}, {"WHERE", KEYWORD},
+        {"e", IDENTIFIER}, {".", PUNCTUATION}, {"id", IDENTIFIER}, 
+        {"=", OPERATOR}, {"1", NUMBER}, {";", PUNCTUATION}
+    };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    init_binder_fixture(&binder);
+
+    // Create parser and AST
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_UPDATE);
+
+    // Bind UPDATE query
+    ASSERT(bind_update(root, &binder.context, &bound_result.data.update));
+
+    BoundUpdateValues *update_values = &bound_result.data.update;
+    UpdateNode *update = &root->node_contents.update;
+
+    ASSERT(binder.context.relations != NULL);
+    ASSERT(binder.context.num_relations == 1);
+    ASSERT(binder.context.relations[0].table != NULL);
+
+    ASSERT(update->set != NULL);
+    ASSERT(update->set->assignments != NULL);
+    ASSERT(update->set->num_assignments == 1);
+
+    ExpressionNode *column_expr_1 = update->set->assignments[0].column_ref;
+    ExpressionNode *value_expr_1 = update->set->assignments[0].value;
+    
+    ASSERT(column_expr_1 != NULL);
+    ASSERT(value_expr_1 != NULL);
+
+    ASSERT(column_expr_1->type == EXPR_COLUMN_REF);
+    ASSERT(value_expr_1->type == EXPR_BINARY);
+
+    // Validate resolved qualified destination column
+    ASSERT(
+        strcmp(
+            column_expr_1->expression_data.column_value.table_name,
+            "e"
+        ) == 0
+    );
+    ASSERT(column_expr_1->expression_data.column_value.relation_index == 0);
+    ASSERT(column_expr_1->expression_data.column_value.column_index == 2);
+
+    // Validate bound UPDATE metadata
+    ASSERT(update_values->table == binder.context.relations[0].table);
+    ASSERT(update_values->values != NULL);
+    ASSERT(update_values->num_values == 1);
+
+    ASSERT(update_values->values[0].column_index == 2);
+    ASSERT(update_values->values[0].expression == value_expr_1);
+
+    // Validate inferred RHS type
+    ASSERT(!update_values->values[0].result_type.is_untyped_null);
+
+    // Bind Where clause
+    ASSERT(update->where != NULL);
+    ASSERT(update->where->expression != NULL);
+    ASSERT(update->where->expression->type == EXPR_BINARY);
+
+    ExpressionNode *column_expr = update->where->expression->expression_data.binary_expr.left_operand;
+
+    ASSERT(column_expr != NULL);
+    ASSERT(column_expr->type == EXPR_COLUMN_REF);
+    ASSERT(
+        strcmp(
+            column_expr->expression_data.column_value.table_name,
+            "e"
+        ) == 0
+    );
+    ASSERT(column_expr->expression_data.column_value.relation_index == 0);
+    ASSERT(column_expr->expression_data.column_value.column_index == 0);
+ 
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_update_set_nullable_column() {
+    int result = 1;
+    
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_UPDATE };
+
+    TestToken tokens[] = {
+        {"UPDATE", KEYWORD}, {"employees", IDENTIFIER}, {"SET", KEYWORD}, 
+        {"salary", IDENTIFIER}, {"=", OPERATOR}, {"NULL", KEYWORD}, {";", PUNCTUATION}
+    };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    init_binder_fixture(&binder);
+
+    // Create parser and AST
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_UPDATE);
+
+    // Bind UPDATE query
+    ASSERT(bind_update(root, &binder.context, &bound_result.data.update));
+
+    BoundUpdateValues *update_values = &bound_result.data.update;
+    UpdateNode *update = &root->node_contents.update;
+
+    ASSERT(binder.context.relations != NULL);
+    ASSERT(binder.context.num_relations == 1);
+    ASSERT(binder.context.relations[0].table != NULL);
+
+    ASSERT(update->set != NULL);
+    ASSERT(update->set->assignments != NULL);
+    ASSERT(update->set->num_assignments == 1);
+
+    ExpressionNode *column_expr_1 = update->set->assignments[0].column_ref;
+    ExpressionNode *value_expr_1 = update->set->assignments[0].value;
+    
+    ASSERT(column_expr_1 != NULL);
+    ASSERT(value_expr_1 != NULL);
+
+    ASSERT(column_expr_1->type == EXPR_COLUMN_REF);
+    ASSERT(value_expr_1->type == EXPR_LITERAL);
+
+    // Validate resolved qualified destination column
+    ASSERT(column_expr_1->expression_data.column_value.relation_index == 0);
+    ASSERT(column_expr_1->expression_data.column_value.column_index == 2);
+
+    // Validate bound UPDATE metadata
+    ASSERT(update_values->table == binder.context.relations[0].table);
+    ASSERT(update_values->values != NULL);
+    ASSERT(update_values->num_values == 1);
+
+    ASSERT(update_values->values[0].column_index == 2);
+    ASSERT(update_values->values[0].expression == value_expr_1);
+
+    // Validate inferred RHS type
+    ASSERT(update_values->values[0].result_type.is_untyped_null);
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_update_mixed_null_assignments() {
+    int result = 1;
+
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_UPDATE };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    TestToken tokens[] = {
+        {"UPDATE", KEYWORD}, {"employees", IDENTIFIER}, {"SET", KEYWORD},
+        {"name", IDENTIFIER}, {"=", OPERATOR}, {"'Alice'", STRING},
+        {",", PUNCTUATION}, {"salary", IDENTIFIER}, {"=", OPERATOR}, {"NULL", KEYWORD},
+        {";", PUNCTUATION}
+    };
+
+    init_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_UPDATE);
+
+    ASSERT(bind_update(root, &binder.context, &bound_result.data.update));
+
+    BoundUpdateValues *update_values = &bound_result.data.update;
+    UpdateNode *update = &root->node_contents.update;
+
+    ASSERT(update->set != NULL);
+    ASSERT(update->set->num_assignments == 2);
+
+    ASSERT(update_values->table == &binder.tables[0]);
+    ASSERT(update_values->values != NULL);
+    ASSERT(update_values->num_values == 2);
+
+    ASSERT(update_values->values[0].column_index == 1);
+    ASSERT(update_values->values[1].column_index == 2);
+
+    ASSERT(update_values->values[0].expression == update->set->assignments[0].value);
+    ASSERT(update_values->values[1].expression == update->set->assignments[1].value);
+
+    ASSERT(!update_values->values[0].result_type.is_untyped_null);
+    ASSERT(update_values->values[1].result_type.is_untyped_null);
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_update_nonsequential_column_indexes() {
+    int result = 1;
+
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_UPDATE };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    TestToken tokens[] = {
+        {"UPDATE", KEYWORD}, {"employees", IDENTIFIER}, {"SET", KEYWORD},
+        {"salary", IDENTIFIER}, {"=", OPERATOR}, {"5000.0", NUMBER},
+        {",", PUNCTUATION}, {"name", IDENTIFIER}, {"=", OPERATOR}, {"'Alice'", STRING},
+        {";", PUNCTUATION}
+    };
+
+    init_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_UPDATE);
+
+    ASSERT(bind_update(root, &binder.context, &bound_result.data.update));
+
+    BoundUpdateValues *update_values = &bound_result.data.update;
+    UpdateNode *update = &root->node_contents.update;
+
+    ASSERT(update->set != NULL);
+    ASSERT(update->set->num_assignments == 2);
+
+    ASSERT(update_values->table == &binder.tables[0]);
+    ASSERT(update_values->values != NULL);
+    ASSERT(update_values->num_values == 2);
+
+    ASSERT(update->set->assignments[0].column_ref->expression_data.column_value.column_index == 2);
+    ASSERT(update->set->assignments[1].column_ref->expression_data.column_value.column_index == 1);
+
+    ASSERT(update_values->values[0].column_index == 2);
+    ASSERT(update_values->values[1].column_index == 1);
+
+    ASSERT(update_values->values[0].expression == update->set->assignments[0].value);
+    ASSERT(update_values->values[1].expression == update->set->assignments[1].value);
+
+    ASSERT(update_values->values[0].result_type.type == NUMERIC);
+    ASSERT(!update_values->values[0].result_type.is_untyped_null);
+    ASSERT(!update_values->values[1].result_type.is_untyped_null);
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_update_unknown_table() {
+    int result = 1;
+
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_UPDATE };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    init_binder_fixture(&binder);
+
+    TestToken tokens[] = {
+        {"UPDATE", KEYWORD}, {"missing_table", IDENTIFIER}, {"SET", KEYWORD},
+        {"salary", IDENTIFIER}, {"=", OPERATOR}, {"2500.0", NUMBER}, {";", PUNCTUATION}
+    };
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_UPDATE);
+
+    ASSERT(!bind_update(root, &binder.context, &bound_result.data.update));
+
+    ASSERT(bound_result.data.update.table == NULL);
+    ASSERT(bound_result.data.update.values == NULL);
+    ASSERT(bound_result.data.update.num_values == 0);
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_update_unknown_column() {
+    int result = 1;
+
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_UPDATE };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    init_binder_fixture(&binder);
+
+    TestToken tokens[] = {
+        {"UPDATE", KEYWORD}, {"employees", IDENTIFIER}, {"SET", KEYWORD},
+        {"missing", IDENTIFIER}, {"=", OPERATOR}, {"2500.0", NUMBER}, {";", PUNCTUATION}
+    };
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_UPDATE);
+
+    ASSERT(!bind_update(root, &binder.context, &bound_result.data.update));
+
+    ASSERT(bound_result.data.update.table == NULL);
+    ASSERT(bound_result.data.update.values == NULL);
+    ASSERT(bound_result.data.update.num_values == 0);
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_update_unknown_rhs_column() {
+    int result = 1;
+
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_UPDATE };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    init_binder_fixture(&binder);
+
+    TestToken tokens[] = {
+        {"UPDATE", KEYWORD}, {"employees", IDENTIFIER}, {"SET", KEYWORD},
+        {"salary", IDENTIFIER}, {"=", OPERATOR}, {"missing", IDENTIFIER}, {"+", OPERATOR},
+        {"1000.0", NUMBER}, {";", PUNCTUATION}
+    };
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_UPDATE);
+
+    ASSERT(!bind_update(root, &binder.context, &bound_result.data.update));
+
+    ASSERT(bound_result.data.update.table == NULL);
+    ASSERT(bound_result.data.update.values == NULL);
+    ASSERT(bound_result.data.update.num_values == 0);
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_update_duplicate_destination() {
+    int result = 1;
+
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_UPDATE };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    init_binder_fixture(&binder);
+
+    TestToken tokens[] = {
+        {"UPDATE", KEYWORD}, {"employees", IDENTIFIER}, {"SET", KEYWORD},
+        {"salary", IDENTIFIER}, {"=", OPERATOR}, {"2500.0", NUMBER}, {",", PUNCTUATION},
+        {"employees", IDENTIFIER}, {".", PUNCTUATION}, {"salary", IDENTIFIER},
+        {"=", OPERATOR}, {"3000.0", NUMBER}, {";", PUNCTUATION}
+    };
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_UPDATE);
+
+    ASSERT(!bind_update(root, &binder.context, &bound_result.data.update));
+
+    ASSERT(bound_result.data.update.table == NULL);
+    ASSERT(bound_result.data.update.values == NULL);
+    ASSERT(bound_result.data.update.num_values == 0);
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_update_invalid_destination_qualifier() {
+    int result = 1;
+
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_UPDATE };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    init_binder_fixture(&binder);
+
+    TestToken tokens[] = {
+        {"UPDATE", KEYWORD}, {"employees", IDENTIFIER}, {"SET", KEYWORD},
+        {"other", IDENTIFIER}, {".", PUNCTUATION}, {"salary", IDENTIFIER}, 
+        {"=", OPERATOR}, {"2500.0", NUMBER}, {";", PUNCTUATION}
+    };
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_UPDATE);
+
+    ASSERT(!bind_update(root, &binder.context, &bound_result.data.update));
+
+    ASSERT(bound_result.data.update.table == NULL);
+    ASSERT(bound_result.data.update.values == NULL);
+    ASSERT(bound_result.data.update.num_values == 0);
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_update_incompatible_literal() {
+    int result = 1;
+
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_UPDATE };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    init_binder_fixture(&binder);
+
+    TestToken tokens[] = {
+        {"UPDATE", KEYWORD}, {"employees", IDENTIFIER}, {"SET", KEYWORD},
+        {"salary", IDENTIFIER}, {"=", OPERATOR}, {"'invalid'", STRING}, 
+        {";", PUNCTUATION}
+    };
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_UPDATE);
+
+    ASSERT(!bind_update(root, &binder.context, &bound_result.data.update));
+
+    ASSERT(bound_result.data.update.table == NULL);
+    ASSERT(bound_result.data.update.values == NULL);
+    ASSERT(bound_result.data.update.num_values == 0);
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_update_not_null_constraint() {
+    int result = 1;
+
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_UPDATE };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    Constraint not_null_constraint = {0};
+    Constraint *constraints[1] = { &not_null_constraint };
+
+    init_binder_fixture(&binder);
+
+    not_null_constraint.type = NOT_NULL;
+    not_null_constraint.constraint_data.not_null.column_ref = 1;
+
+    binder.schemas[0].constraints = constraints;
+    binder.schemas[0].num_constraints = 1;
+
+    TestToken tokens[] = {
+        {"UPDATE", KEYWORD}, {"employees", IDENTIFIER}, {"SET", KEYWORD},
+        {"name", IDENTIFIER}, {"=", OPERATOR}, {"NULL", KEYWORD}, 
+        {";", PUNCTUATION}
+    };
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_UPDATE);
+
+    ASSERT(!bind_update(root, &binder.context, &bound_result.data.update));
+
+    ASSERT(bound_result.data.update.table == NULL);
+    ASSERT(bound_result.data.update.values == NULL);
+    ASSERT(bound_result.data.update.num_values == 0);
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_update_primary_key_constraint() {
+    int result = 1;
+
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_UPDATE };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    Constraint primary_key_constraint = {0};
+    Constraint *constraints[1] = { &primary_key_constraint };
+    uint32_t primary_key_columns[1] = {0};
+
+    init_binder_fixture(&binder);
+
+    primary_key_constraint.type = PRIMARY_KEY;
+    primary_key_constraint.constraint_data.primary_key.amount_columns = 1;
+    primary_key_constraint.constraint_data.primary_key.primary_key_columns = primary_key_columns;
+
+    binder.schemas[0].constraints = constraints;
+    binder.schemas[0].num_constraints = 1;
+
+    TestToken tokens[] = {
+        {"UPDATE", KEYWORD}, {"employees", IDENTIFIER}, {"SET", KEYWORD},
+        {"id", IDENTIFIER}, {"=", OPERATOR}, {"NULL", KEYWORD}, 
+        {";", PUNCTUATION}
+    };
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_UPDATE);
+
+    ASSERT(!bind_update(root, &binder.context, &bound_result.data.update));
+
+    ASSERT(bound_result.data.update.table == NULL);
+    ASSERT(bound_result.data.update.values == NULL);
+    ASSERT(bound_result.data.update.num_values == 0);
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_update_invalid_aggregate_function() {
+    int result = 1;
+
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_UPDATE };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    init_binder_fixture(&binder);
+
+    TestToken tokens[] = {
+        {"UPDATE", KEYWORD}, {"employees", IDENTIFIER}, {"SET", KEYWORD},
+        {"salary", IDENTIFIER}, {"=", OPERATOR}, {"SUM", IDENTIFIER}, {"(", PUNCTUATION},
+        {"salary", IDENTIFIER}, {")", PUNCTUATION}, {";", PUNCTUATION}
+    };
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_UPDATE);
+
+    ASSERT(!bind_update(root, &binder.context, &bound_result.data.update));
+
+    ASSERT(bound_result.data.update.table == NULL);
+    ASSERT(bound_result.data.update.values == NULL);
+    ASSERT(bound_result.data.update.num_values == 0);
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_update_invalid_no_boolean_where() {
+    int result = 1;
+
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_UPDATE };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    init_binder_fixture(&binder);
+
+    TestToken tokens[] = {
+        {"UPDATE", KEYWORD}, {"employees", IDENTIFIER}, {"SET", KEYWORD},
+        {"salary", IDENTIFIER}, {"=", OPERATOR}, {"2500.0", NUMBER}, 
+        {"WHERE", KEYWORD}, {"name", IDENTIFIER}, {";", PUNCTUATION}
+    };
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_UPDATE);
+
+    ASSERT(!bind_update(root, &binder.context, &bound_result.data.update));
+
+    ASSERT(bound_result.data.update.table == NULL);
+    ASSERT(bound_result.data.update.values == NULL);
+    ASSERT(bound_result.data.update.num_values == 0);
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_update_incompatible_column_assignment() {
+    int result = 1;
+
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_UPDATE };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    TestToken tokens[] = {
+        {"UPDATE", KEYWORD}, {"employees", IDENTIFIER}, {"SET", KEYWORD},
+        {"salary", IDENTIFIER}, {"=", OPERATOR}, {"name", IDENTIFIER},
+        {";", PUNCTUATION}
+    };
+
+    init_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_UPDATE);
+
+    ASSERT(!bind_update(root, &binder.context, &bound_result.data.update));
+
+    ASSERT(bound_result.data.update.table == NULL);
+    ASSERT(bound_result.data.update.values == NULL);
+    ASSERT(bound_result.data.update.num_values == 0);
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_update_unknown_where_column() {
+    int result = 1;
+
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_UPDATE };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    TestToken tokens[] = {
+        {"UPDATE", KEYWORD}, {"employees", IDENTIFIER}, {"SET", KEYWORD},
+        {"salary", IDENTIFIER}, {"=", OPERATOR}, {"2500.0", NUMBER},
+        {"WHERE", KEYWORD}, {"missing", IDENTIFIER},
+        {"=", OPERATOR}, {"1", NUMBER},
+        {";", PUNCTUATION}
+    };
+
+    init_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_UPDATE);
+
+    ASSERT(!bind_update(root, &binder.context, &bound_result.data.update));
+
+    ASSERT(bound_result.data.update.table == NULL);
+    ASSERT(bound_result.data.update.values == NULL);
+    ASSERT(bound_result.data.update.num_values == 0);
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_update_aggregate_in_where() {
+    int result = 1;
+
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_UPDATE };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    TestToken tokens[] = {
+        {"UPDATE", KEYWORD}, {"employees", IDENTIFIER}, {"SET", KEYWORD},
+        {"salary", IDENTIFIER}, {"=", OPERATOR}, {"2500.0", NUMBER},
+        {"WHERE", KEYWORD},
+        {"SUM", IDENTIFIER}, {"(", PUNCTUATION},
+        {"salary", IDENTIFIER}, {")", PUNCTUATION},
+        {">", OPERATOR}, {"100.0", NUMBER},
+        {";", PUNCTUATION}
+    };
+
+    init_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_UPDATE);
+
+    ASSERT(!bind_update(root, &binder.context, &bound_result.data.update));
+
+    ASSERT(bound_result.data.update.table == NULL);
+    ASSERT(bound_result.data.update.values == NULL);
+    ASSERT(bound_result.data.update.num_values == 0);
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
 /* ---------- Logging Helper ---------- */
 
 void generate_output(int result, int test_num, char *test_desc) {
@@ -2870,6 +4063,54 @@ int main(int argc, char *argv[]) {
     generate_output(result, 46, "test_bind_insert_value_count_mismatch");
     result = test_bind_insert_invalid_arguments_and_output();
     generate_output(result, 47, "test_bind_insert_invalid_arguments_and_output");
+
+    /* ---------- bind_update unit tests ---------- */
+    result = test_bind_update_basic_binding();
+    generate_output(result, 48, "test_bind_update_basic_binding");
+    result = test_bind_update_multiple_assignments();
+    generate_output(result, 49, "test_bind_update_multiple_assignments");
+    result = test_bind_update_rhs_expression();
+    generate_output(result, 50, "test_bind_update_rhs_expression");
+    result = test_bind_update_where_binding();
+    generate_output(result, 51, "test_bind_update_where_binding");
+    result = test_bind_update_qualified_destination();
+    generate_output(result, 52, "test_bind_update_qualified_destination");
+    result = test_bind_update_set_where_resolution();
+    generate_output(result, 53, "test_bind_update_set_where_resolution");
+    result = test_bind_update_set_nullable_column();
+    generate_output(result, 54, "test_bind_update_set_nullable_column");
+    result = test_bind_update_mixed_null_assignments();
+    generate_output(result, 55, "test_bind_update_mixed_null_assignments");
+    result = test_bind_update_nonsequential_column_indexes();
+    generate_output(result, 56, "test_bind_update_nonsequential_column_indexes");
+
+    
+    result = test_bind_update_unknown_table();
+    generate_output(result, 57, "test_bind_update_unknown_table");
+    result = test_bind_update_unknown_column();
+    generate_output(result, 58, "test_bind_update_unknown_column");
+    result = test_bind_update_unknown_rhs_column();
+    generate_output(result, 59, "test_bind_update_unknown_rhs_column");
+    result = test_bind_update_duplicate_destination();
+    generate_output(result, 60, "test_bind_update_duplicate_destination");
+    result = test_bind_update_invalid_destination_qualifier();
+    generate_output(result, 61, "test_bind_update_invalid_destination_qualifier");
+    result = test_bind_update_incompatible_literal();
+    generate_output(result, 62, "test_bind_update_incompatible_literal");
+    result = test_bind_update_not_null_constraint();
+    generate_output(result, 63, "test_bind_update_not_null_constraint");
+    result = test_bind_update_primary_key_constraint();
+    generate_output(result, 64, "test_bind_update_primary_key_constraint");
+    result = test_bind_update_invalid_aggregate_function();
+    generate_output(result, 65, "test_bind_update_invalid_aggregate_function");
+    result = test_bind_update_invalid_no_boolean_where();
+    generate_output(result, 66, "test_bind_update_invalid_no_boolean_where");
+    result = test_bind_update_incompatible_column_assignment();
+    generate_output(result, 67, "test_bind_update_incompatible_column_assignment");
+    result = test_bind_update_unknown_where_column();
+    generate_output(result, 68, "test_bind_update_unknown_where_column");
+    result = test_bind_update_aggregate_in_where();
+    generate_output(result, 69, "test_bind_update_aggregate_in_where");
 
     return 0;
 }
