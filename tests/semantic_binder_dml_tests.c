@@ -3949,6 +3949,469 @@ cleanup:
     return result;
 }
 
+/* ---------- bind_delete unit tests ---------- */
+
+int test_bind_delete_without_where() {
+    int result = 1;
+
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_DELETE };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    TestToken tokens[] = {
+        {"DELETE", KEYWORD}, {"FROM", KEYWORD}, {"employees", IDENTIFIER}, {";", PUNCTUATION}
+    };
+
+    init_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_DELETE);
+
+    ASSERT(bind_delete(root, &binder.context, &bound_result.data.delete));
+
+    DeleteNode *delete = &root->node_contents.delete;
+
+    ASSERT(delete->from != NULL);
+    ASSERT(delete->from->num_expressions == 1);
+    ASSERT(delete->where == NULL);
+
+    ASSERT(bound_result.data.delete.table == &binder.tables[0]);
+    ASSERT(bound_result.data.delete.where == NULL);
+
+    ASSERT(binder.context.num_relations == 1);
+    ASSERT(binder.context.relations[0].table == &binder.tables[0]);
+    ASSERT(binder.context.relations[0].alias[0] == '\0');
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_delete_with_where() {
+    int result = 1;
+
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_DELETE };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    TestToken tokens[] = {
+        {"DELETE", KEYWORD}, {"FROM", KEYWORD}, {"employees", IDENTIFIER}, 
+        {"WHERE", KEYWORD}, {"id", IDENTIFIER}, {"=", OPERATOR}, {"1", NUMBER}, {";", PUNCTUATION}
+    };
+
+    init_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_DELETE);
+
+    ASSERT(bind_delete(root, &binder.context, &bound_result.data.delete));
+
+    DeleteNode *delete = &root->node_contents.delete;
+
+    ASSERT(delete->from != NULL);
+    ASSERT(delete->from->num_expressions == 1);
+    ASSERT(delete->where != NULL);
+
+    ASSERT(bound_result.data.delete.table == &binder.tables[0]);
+    ASSERT(bound_result.data.delete.where != NULL);
+
+    ASSERT(binder.context.num_relations == 1);
+    ASSERT(binder.context.relations[0].table == &binder.tables[0]);
+    ASSERT(binder.context.relations[0].alias[0] == '\0');
+
+    // Verify WHERE column references
+    ExpressionNode *where_expr = delete->where->expression;
+
+    ASSERT(where_expr != NULL);
+    ASSERT(where_expr->type == EXPR_BINARY);
+
+    ExpressionNode *column_expr = where_expr->expression_data.binary_expr.left_operand;
+    
+    ASSERT(column_expr->type == EXPR_COLUMN_REF);
+    ASSERT(column_expr->expression_data.column_value.relation_index == 0);
+    ASSERT(column_expr->expression_data.column_value.column_index == 0);
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_delete_with_alias() {
+    int result = 1;
+
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_DELETE };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    TestToken tokens[] = {
+        {"DELETE", KEYWORD}, {"FROM", KEYWORD}, {"employees", IDENTIFIER}, {"AS", KEYWORD},
+        {"e", IDENTIFIER}, {"WHERE", KEYWORD}, {"e", IDENTIFIER}, {".", PUNCTUATION},
+        {"id", IDENTIFIER}, {"=", OPERATOR}, {"1", NUMBER}, 
+        {";", PUNCTUATION}
+    };
+
+    init_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_DELETE);
+
+    ASSERT(bind_delete(root, &binder.context, &bound_result.data.delete));
+
+    DeleteNode *delete = &root->node_contents.delete;
+
+    ASSERT(delete->from != NULL);
+    ASSERT(delete->from->num_expressions == 1);
+    ASSERT(delete->where != NULL);
+
+    ASSERT(bound_result.data.delete.table == &binder.tables[0]);
+    ASSERT(bound_result.data.delete.where != NULL);
+
+    ASSERT(binder.context.num_relations == 1);
+    ASSERT(binder.context.relations[0].table == &binder.tables[0]);
+    ASSERT(strcmp(binder.context.relations[0].alias, "e") == 0);
+
+    // Verify WHERE column references
+    ExpressionNode *where_expr = delete->where->expression;
+
+    ASSERT(where_expr != NULL);
+    ASSERT(where_expr->type == EXPR_BINARY);
+
+    ExpressionNode *column_expr = where_expr->expression_data.binary_expr.left_operand;
+    
+    ASSERT(column_expr->type == EXPR_COLUMN_REF);
+    ASSERT(column_expr->expression_data.column_value.relation_index == 0);
+    ASSERT(column_expr->expression_data.column_value.column_index == 0);
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_delete_complex_where() {
+    int result = 1;
+
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_DELETE };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    TestToken tokens[] = {
+        {"DELETE", KEYWORD}, {"FROM", KEYWORD}, {"employees", IDENTIFIER},
+        {"WHERE", KEYWORD}, {"salary", IDENTIFIER}, {">", OPERATOR}, {"2500.0", NUMBER},
+        {"AND", OPERATOR}, {"department_id", IDENTIFIER}, {"IS", KEYWORD}, {"NOT", KEYWORD}, 
+        {"NULL", KEYWORD}, {";", PUNCTUATION}
+    };
+
+    init_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_DELETE);
+
+    ASSERT(bind_delete(root, &binder.context, &bound_result.data.delete));
+
+    DeleteNode *delete = &root->node_contents.delete;
+
+    ASSERT(delete->from != NULL);
+    ASSERT(delete->from->num_expressions == 1);
+    ASSERT(delete->where != NULL);
+
+    ASSERT(bound_result.data.delete.table == &binder.tables[0]);
+    ASSERT(bound_result.data.delete.where != NULL);
+
+    ASSERT(binder.context.num_relations == 1);
+    ASSERT(binder.context.relations[0].table == &binder.tables[0]);
+    ASSERT(binder.context.relations[0].alias[0] == '\0');
+
+    // Verify WHERE column references
+    ExpressionNode *where_expr = delete->where->expression;
+
+    ASSERT(where_expr != NULL);
+    ASSERT(where_expr->type == EXPR_BINARY);
+
+    ExpressionNode *left_where_expr = where_expr->expression_data.binary_expr.left_operand;
+    ExpressionNode *right_where_expr = where_expr->expression_data.binary_expr.right_operand;
+
+    ASSERT(left_where_expr != NULL);
+    ASSERT(right_where_expr != NULL);
+
+    ASSERT(left_where_expr->type == EXPR_BINARY);
+    ASSERT(right_where_expr->type == EXPR_IS_NOT_NULL);
+    
+    ExpressionNode *column_expr_1 = left_where_expr->expression_data.binary_expr.left_operand;
+    ExpressionNode *column_expr_2 = right_where_expr->expression_data.is_not_null_expr.operand;
+
+    ASSERT(column_expr_1 != NULL);
+    ASSERT(column_expr_2 != NULL);
+
+    ASSERT(column_expr_1->type == EXPR_COLUMN_REF);
+    ASSERT(column_expr_2->type == EXPR_COLUMN_REF);
+        
+    ASSERT(column_expr_1->expression_data.column_value.relation_index == 0);
+    ASSERT(column_expr_1->expression_data.column_value.column_index == 2);
+        
+    ASSERT(column_expr_2->expression_data.column_value.relation_index == 0);
+    ASSERT(column_expr_2->expression_data.column_value.column_index == 3);
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;   
+}
+
+int test_bind_delete_unknown_table() {
+    int result = 1;
+
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_DELETE };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    TestToken tokens[] = {
+        {"DELETE", KEYWORD}, {"FROM", KEYWORD}, {"nonexistent", IDENTIFIER},
+        {";", PUNCTUATION}
+    };
+
+    init_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_DELETE);
+
+    ASSERT(!bind_delete(root, &binder.context, &bound_result.data.delete));
+
+    ASSERT(bound_result.data.delete.table == NULL);
+    ASSERT(bound_result.data.delete.where == NULL);
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_delete_unknown_column() {
+    int result = 1;
+
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_DELETE };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    TestToken tokens[] = {
+        {"DELETE", KEYWORD}, {"FROM", KEYWORD}, {"employees", IDENTIFIER},
+        {"WHERE", KEYWORD}, {"missing_column", IDENTIFIER}, {"=", OPERATOR},
+        {"1", NUMBER}, {";", PUNCTUATION}
+    };
+
+    init_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_DELETE);
+
+    ASSERT(!bind_delete(root, &binder.context, &bound_result.data.delete));
+
+    ASSERT(bound_result.data.delete.table == NULL);
+    ASSERT(bound_result.data.delete.where == NULL);
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_delete_invalid_alias() {
+    int result = 1;
+
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_DELETE };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    TestToken tokens[] = {
+        {"DELETE", KEYWORD}, {"FROM", KEYWORD}, {"employees", IDENTIFIER}, {"AS", KEYWORD},
+        {"e", IDENTIFIER}, {"WHERE", KEYWORD}, {"employees", IDENTIFIER}, {".", PUNCTUATION},
+        {"id", IDENTIFIER}, {"=", OPERATOR}, {"1", NUMBER}, {";", PUNCTUATION}
+    };
+
+    init_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_DELETE);
+
+    ASSERT(!bind_delete(root, &binder.context, &bound_result.data.delete));
+
+    ASSERT(bound_result.data.delete.table == NULL);
+    ASSERT(bound_result.data.delete.where == NULL);
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_delete_non_boolean_where() {
+    int result = 1;
+
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_DELETE };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    TestToken tokens[] = {
+        {"DELETE", KEYWORD}, {"FROM", KEYWORD}, {"employees", IDENTIFIER}, {"WHERE", KEYWORD}, 
+        {"salary", IDENTIFIER}, {"+", OPERATOR}, {"100", NUMBER}, {";", PUNCTUATION}
+    };
+
+    init_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_DELETE);
+
+    ASSERT(!bind_delete(root, &binder.context, &bound_result.data.delete));
+
+    ASSERT(bound_result.data.delete.table == NULL);
+    ASSERT(bound_result.data.delete.where == NULL);
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}   
+
+int test_bind_delete_aggregate_in_where() {
+    int result = 1;
+
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_DELETE };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    TestToken tokens[] = {
+        {"DELETE", KEYWORD}, {"FROM", KEYWORD}, {"employees", IDENTIFIER}, {"WHERE", KEYWORD}, 
+        {"COUNT", IDENTIFIER}, {"(", PUNCTUATION}, {"id", IDENTIFIER}, {")", PUNCTUATION}, 
+        {">", OPERATOR}, {"1", NUMBER}, {";", PUNCTUATION}
+    };
+
+    init_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_DELETE);
+
+    ASSERT(!bind_delete(root, &binder.context, &bound_result.data.delete));
+
+    ASSERT(bound_result.data.delete.table == NULL);
+    ASSERT(bound_result.data.delete.where == NULL);
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_delete_invalid_inputs() {
+    int result = 1;
+
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_DELETE };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    TestToken tokens[] = {
+        {"DELETE", KEYWORD}, {"FROM", KEYWORD}, {"employees", IDENTIFIER}, {";", PUNCTUATION}
+    };
+
+    init_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_DELETE);
+
+    ASSERT(!bind_delete(NULL, &binder.context, &bound_result.data.delete));
+    ASSERT(!bind_delete(root, NULL, &bound_result.data.delete));
+    ASSERT(!bind_delete(root, &binder.context, NULL));
+
+    ASSERT(bound_result.data.delete.table == NULL);
+    ASSERT(bound_result.data.delete.where == NULL);
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
 /* ---------- Logging Helper ---------- */
 
 void generate_output(int result, int test_num, char *test_desc) {
@@ -4111,6 +4574,29 @@ int main(int argc, char *argv[]) {
     generate_output(result, 68, "test_bind_update_unknown_where_column");
     result = test_bind_update_aggregate_in_where();
     generate_output(result, 69, "test_bind_update_aggregate_in_where");
+
+    /* ---------- bind_delete unit tests ---------- */
+    result = test_bind_delete_without_where();
+    generate_output(result, 70, "test_bind_delete_without_where");
+    result = test_bind_delete_with_where();
+    generate_output(result, 71, "test_bind_delete_with_where");
+    result = test_bind_delete_with_alias();
+    generate_output(result, 72, "test_bind_delete_with_alias");
+    result = test_bind_delete_complex_where();
+    generate_output(result, 73, "test_bind_delete_complex_where");
+
+    result = test_bind_delete_unknown_table();
+    generate_output(result, 74, "test_bind_delete_unknown_table");
+    result = test_bind_delete_unknown_column();
+    generate_output(result, 75, "test_bind_delete_unknown_column");
+    result = test_bind_delete_invalid_alias();
+    generate_output(result, 76, "test_bind_delete_invalid_alias");
+    result = test_bind_delete_non_boolean_where();
+    generate_output(result, 77, "test_bind_delete_non_boolean_where");
+    result = test_bind_delete_aggregate_in_where();
+    generate_output(result, 78, "test_bind_delete_aggregate_in_where");
+    result = test_bind_delete_invalid_inputs();
+    generate_output(result, 79, "test_bind_delete_invalid_inputs");
 
     return 0;
 }
