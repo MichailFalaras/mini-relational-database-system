@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "data_types.h"
+#include "ast.h"
 
 typedef struct database Database;
 typedef struct table Table;
@@ -103,12 +104,20 @@ typedef struct bound_update_values {
     uint32_t num_values;
 } BoundUpdateValues;
 
+typedef struct bound_delete_values {
+    Table *table;
+
+    // Non-owning pointer of WHERE AST node
+    WhereNode *where;
+} BoundDeleteValues;
+
 // Final Bound Statement
 typedef enum bound_statement_type {
     BOUND_STATEMENT_NONE = 0,
     BOUND_STATEMENT_SELECT = 1,
     BOUND_STATEMENT_INSERT = 2,
     BOUND_STATEMENT_UPDATE = 3,
+    BOUND_STATEMENT_DELETE = 4
 } BoundStatementType;
 
 typedef struct bound_statement {
@@ -118,6 +127,7 @@ typedef struct bound_statement {
         BoundProjection projection;
         BoundInsertionValues insertion;
         BoundUpdateValues update;
+        BoundDeleteValues delete;
     } data;
 } BoundStatement;
 
@@ -131,6 +141,8 @@ extern void bound_projection_free(BoundProjection *projection);
 extern void bound_insertion_values_free(BoundInsertionValues *insertion);
 
 extern void bound_update_values_free(BoundUpdateValues *update);
+
+extern void bound_delete_values_free(BoundDeleteValues *delete);
 
 extern void bound_statement_free(BoundStatement *statement);
 

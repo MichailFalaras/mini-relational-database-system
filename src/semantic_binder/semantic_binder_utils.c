@@ -1240,7 +1240,68 @@ bool bind_update(ASTNode *root, BindingContext *context, BoundUpdateValues *out_
     return true;
 }
 
-bool bind_delete(ASTNode *root, BindingContext *context);
+// Bind DELETE query
+bool bind_delete(ASTNode *root, BindingContext *context, BoundDeleteValues *out_values) {
+    if (!root || root->type != AST_DELETE) {
+        printf("bind_delete: Invalid AST root node.\n");
+        return false;
+    }
+
+    if (!context || !context->db || !out_values) {
+        printf("bind_delete: Invalid context or output.\n");
+        return false;
+    }
+
+    // Empty context is required
+    if (context->relations || context->num_relations != 0 || 
+        context->aggregate_depth != 0 ||
+        out_values->table) {
+        printf("bind_delete: Expected fresh binding state.\n");
+        return false;
+    }
+
+    DeleteNode *delete = &root->node_contents.delete;    
+    
+    if (!delete->from || !delete->from->expressions || delete->from->num_expressions != 1) {
+        printf("bind_delete: Invalid DELETE FROM clause.\n");
+        return false;
+    }
+
+    if (!delete->from || !delete->from->expressions || !delete->from->aliases ||
+        delete->from->num_expressions != 1) {
+        printf("bind_delete: Invalid DELETE FROM clause.\n");
+        return false;
+    }
+
+    // Bind FROM clause
+    if (!bind_from(delete->from, context)) {
+        printf("bind_delete: FROM binding failed.\n");
+        return false;
+    }
+
+    // Bind optional WHERE clause
+    if (delete->where) {
+        BindingClause previous_clause = context->current_clause;
+        context->current_clause = BIND_CLAUSE_WHERE;
+
+        bool success = bind_where(delete->where, context);
+
+        context->current_clause = previous_clause;
+
+        if (!success) {
+            printf("bind_delete: WHERE binding failed.\n");
+            return false;
+        }
+    }
+
+    // Construct output
+    if (!build_bound_delete_values(delete->where, context, out_values)) {
+        printf("bind_delete: DELETE output could not be constructed.\n");
+        return false;
+    }
+
+    return true;
+}
 
 bool bind_create_table(ASTNode *root, BindingContext *context);
 
@@ -2815,6 +2876,37 @@ bool build_bound_update_values(SetNode *set, const BoundExpressionType *value_ty
     out_values->table = table;
     out_values->values = bound_values;
     out_values->num_values = num_assignments;
+
+    return true;
+}
+
+// Build delete output
+bool build_bound_delete_values(WhereNode *where, BindingContext *context, 
+    BoundDeleteValues *out_values) {
+    
+    if (!context || !context->db || 
+        !context->relations || 
+        context->num_relations != 1 ||
+        !context->relations[0].table) {
+        printf("build_bound_delete_values: Invalid binding context.\n");
+        return false;
+    }
+
+    if (!out_values) {
+        printf("build_bound_delete_values: Invalid output or value types.\n");
+        return false;
+    }
+
+    // Caller must provide an empty output
+    if (out_values->table || out_values->where) {
+        printf("build_bound_delete_values: Output must be empty.\n");
+        return false;
+    }
+
+    Table *table = context->relations[0].table;
+    
+    out_values->table = table;
+    out_values->where = where;
 
     return true;
 }

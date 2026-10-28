@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "../../include/semantic_binder.h"
+#include "./semantic_binder_utils.h"
 #include "../../include/database.h"
 #include "../../include/ast.h"
 
@@ -52,14 +53,30 @@ bool bind_statement(ASTNode *root, Database *db, BoundStatement *out_statement) 
             break;
         }
 
-        case AST_UPDATE:
-            success = bind_update(root, &context);
-            break;
+        case AST_UPDATE: {
+            BoundUpdateValues update = {0};
+            success = bind_update(root, &context, &update);
 
-        case AST_DELETE:
-            success = bind_delete(root, &context);
+            if (success) {
+                out_statement->type = BOUND_STATEMENT_UPDATE;
+                out_statement->data.update = update;
+            }
+            
             break;
+        }
 
+        case AST_DELETE: {
+            BoundDeleteValues delete = {0};
+            success = bind_delete(root, &context, &delete);
+
+            if (success) {
+                out_statement->type = BOUND_STATEMENT_DELETE;
+                out_statement->data.delete = delete; 
+            }
+
+            break;
+        }
+#if 0
         case AST_CREATE_TABLE:
             success = bind_create_table(root, &context);
             break;
@@ -83,7 +100,7 @@ bool bind_statement(ASTNode *root, Database *db, BoundStatement *out_statement) 
         case AST_DROP_INDEX:
             success = bind_drop_index(root, &context);
             break;
-            
+#endif           
         default:
             fprintf(stderr, "ASTNodeType does not match.\n");
             success = false;
@@ -118,6 +135,28 @@ void bound_insertion_values_free(BoundInsertionValues *insertion) {
     insertion->table = NULL;
 }
 
+/* Free UPDATE values metadata */
+void bound_update_values_free(BoundUpdateValues *update) {
+    if (!update) {
+        return;
+    }
+
+    free(update->values);
+
+    update->values = NULL;
+    update->num_values = 0;
+    update->table = NULL;
+}
+
+void bound_delete_values_free(BoundDeleteValues *delete) {
+    if (!delete) {
+        return;
+    }
+
+    delete->table = NULL;
+    delete->where = NULL;
+}
+
 /* Free bound statement metadata */
 void bound_statement_free(BoundStatement *statement) {
     if (!statement) {
@@ -131,6 +170,14 @@ void bound_statement_free(BoundStatement *statement) {
 
         case BOUND_STATEMENT_INSERT:
             bound_insertion_values_free(&statement->data.insertion);
+            break;
+
+        case BOUND_STATEMENT_UPDATE:
+            bound_update_values_free(&statement->data.update);
+            break;
+
+        case BOUND_STATEMENT_DELETE:
+            bound_delete_values_free(&statement->data.delete);
             break;
 
         default:

@@ -78,7 +78,7 @@ bool bind_insert(ASTNode *root, BindingContext *context, BoundInsertionValues *o
 
 bool bind_update(ASTNode *root, BindingContext *context, BoundUpdateValues *out_values);
 
-bool bind_delete(ASTNode *root, BindingContext *context);
+bool bind_delete(ASTNode *root, BindingContext *context, BoundDeleteValues *out_values);
 
 bool bind_create_table(ASTNode *root, BindingContext *context);
 
@@ -186,5 +186,9 @@ bool validate_update_assignments(SetNode *set, const BoundExpressionType *value_
 // Build updated values tuple
 bool build_bound_update_values(SetNode *set, const BoundExpressionType *value_types, 
     BindingContext *context, BoundUpdateValues *out_values);
+
+// Build delete output
+bool build_bound_delete_values(WhereNode *where, BindingContext *context, 
+    BoundDeleteValues *out_values);
 
 #endif
