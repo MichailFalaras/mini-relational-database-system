@@ -478,6 +478,10 @@ bool bind_binary(ExpressionNode *expr, BindingContext *context, BoundExpressionT
             (left_type == UNSIGNED_INTEGER && right_type == INTEGER)) {
             result_type = NUMERIC;
         }
+        else if ((left_type == FLOAT && right_type == NUMERIC) ||
+                 (left_type == NUMERIC && right_type == FLOAT)) {
+            result_type = DOUBLE;
+        }
         else if (left_type == right_type) {
             result_type = left_type;
         }

@@ -598,7 +598,7 @@ bool convert_to_text(Value *value) {
 
 // only DATE -> TIMESTAMP
 bool convert_to_timestamp(Value *value) {
-    if (!value) {
+    if (!value || value->type != DATE) {
         return false;
     }
 

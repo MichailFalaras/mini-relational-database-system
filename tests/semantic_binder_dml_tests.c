@@ -3430,6 +3430,84 @@ cleanup:
     return result;
 }
 
+int test_bind_update_numeric_arithmetic_assigned() {
+    int result = 1;
+
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_UPDATE };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    TestToken tokens[] = {
+        {"UPDATE", KEYWORD}, {"employees", IDENTIFIER}, {"SET", KEYWORD},
+        {"salary", IDENTIFIER}, {"=", OPERATOR},
+        {"2500.5", NUMBER}, {"+", OPERATOR}, {"100", NUMBER},
+        {"WHERE", KEYWORD}, {"id", IDENTIFIER},
+        {"=", OPERATOR}, {"1", NUMBER},
+        {";", PUNCTUATION}
+    };
+
+    init_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_UPDATE);
+
+    ASSERT(bind_update(root, &binder.context, &bound_result.data.update));
+
+    BoundUpdateValues *update_values = &bound_result.data.update;
+    UpdateNode *update = &root->node_contents.update;
+
+    // Verify registered relation
+    ASSERT(binder.context.relations != NULL);
+    ASSERT(binder.context.num_relations == 1);
+    ASSERT(binder.context.relations[0].table == &binder.tables[0]);
+
+    // Verify SET clause
+    ASSERT(update->set != NULL);
+    ASSERT(update->set->assignments != NULL);
+    ASSERT(update->set->num_assignments == 1);
+
+    ExpressionNode *column_expr = update->set->assignments[0].column_ref;
+    ExpressionNode *value_expr = update->set->assignments[0].value;
+
+    ASSERT(column_expr != NULL);
+    ASSERT(value_expr != NULL);
+
+    ASSERT(column_expr->type == EXPR_COLUMN_REF);
+    ASSERT(value_expr->type == EXPR_BINARY);
+
+    // Verify destination column resolution
+    ASSERT(column_expr->expression_data.column_value.relation_index == 0);
+    ASSERT(column_expr->expression_data.column_value.column_index == 2);
+
+    // Verify bound UPDATE metadata
+    ASSERT(update_values->table == &binder.tables[0]);
+    ASSERT(update_values->values != NULL);
+    ASSERT(update_values->num_values == 1);
+
+    ASSERT(update_values->values[0].column_index == 2);
+    ASSERT(update_values->values[0].expression == value_expr);
+
+    // NUMERIC + INTEGER -> NUMERIC
+    ASSERT(update_values->values[0].result_type.type == NUMERIC);
+    ASSERT(!update_values->values[0].result_type.is_untyped_null);
+
+    // Verify WHERE clause
+    ASSERT(update->where != NULL);
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
 int test_bind_update_unknown_table() {
     int result = 1;
 
@@ -3937,6 +4015,50 @@ int test_bind_update_aggregate_in_where() {
 
     ASSERT(!bind_update(root, &binder.context, &bound_result.data.update));
 
+    ASSERT(bound_result.data.update.table == NULL);
+    ASSERT(bound_result.data.update.values == NULL);
+    ASSERT(bound_result.data.update.num_values == 0);
+
+    result = 0;
+
+cleanup:
+    cleanup_binder_fixture(&binder, &bound_result);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_update_incompatible_arithmetic_assignment() {
+    int result = 1;
+
+    BinderTestFixture binder = {0};
+    BoundStatement bound_result = { .type = BOUND_STATEMENT_UPDATE };
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    TestToken tokens[] = {
+        {"UPDATE", KEYWORD}, {"employees", IDENTIFIER}, {"SET", KEYWORD},
+        {"department_id", IDENTIFIER}, {"=", OPERATOR},
+        {"salary", IDENTIFIER}, {"+", OPERATOR}, {"100.5", NUMBER},
+        {"WHERE", KEYWORD}, {"id", IDENTIFIER},
+        {"=", OPERATOR}, {"1", NUMBER},
+        {";", PUNCTUATION}
+    };
+
+    init_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_UPDATE);
+
+    // DOUBLE + NUMERIC -> DOUBLE.
+    // DOUBLE cannot be implicitly assigned to INTEGER.
+    ASSERT(!bind_update(root, &binder.context, &bound_result.data.update));
+
+    // Verify that unsuccessful binding leaves no bound UPDATE values
     ASSERT(bound_result.data.update.table == NULL);
     ASSERT(bound_result.data.update.values == NULL);
     ASSERT(bound_result.data.update.num_values == 0);
@@ -4546,57 +4668,61 @@ int main(int argc, char *argv[]) {
     generate_output(result, 55, "test_bind_update_mixed_null_assignments");
     result = test_bind_update_nonsequential_column_indexes();
     generate_output(result, 56, "test_bind_update_nonsequential_column_indexes");
+    result = test_bind_update_numeric_arithmetic_assigned();
+    generate_output(result, 57, "test_bind_update_numeric_arithmetic_assigned");
 
     
     result = test_bind_update_unknown_table();
-    generate_output(result, 57, "test_bind_update_unknown_table");
+    generate_output(result, 58, "test_bind_update_unknown_table");
     result = test_bind_update_unknown_column();
-    generate_output(result, 58, "test_bind_update_unknown_column");
+    generate_output(result, 59, "test_bind_update_unknown_column");
     result = test_bind_update_unknown_rhs_column();
-    generate_output(result, 59, "test_bind_update_unknown_rhs_column");
+    generate_output(result, 60, "test_bind_update_unknown_rhs_column");
     result = test_bind_update_duplicate_destination();
-    generate_output(result, 60, "test_bind_update_duplicate_destination");
+    generate_output(result, 61, "test_bind_update_duplicate_destination");
     result = test_bind_update_invalid_destination_qualifier();
-    generate_output(result, 61, "test_bind_update_invalid_destination_qualifier");
+    generate_output(result, 62, "test_bind_update_invalid_destination_qualifier");
     result = test_bind_update_incompatible_literal();
-    generate_output(result, 62, "test_bind_update_incompatible_literal");
+    generate_output(result, 63, "test_bind_update_incompatible_literal");
     result = test_bind_update_not_null_constraint();
-    generate_output(result, 63, "test_bind_update_not_null_constraint");
+    generate_output(result, 64, "test_bind_update_not_null_constraint");
     result = test_bind_update_primary_key_constraint();
-    generate_output(result, 64, "test_bind_update_primary_key_constraint");
+    generate_output(result, 65, "test_bind_update_primary_key_constraint");
     result = test_bind_update_invalid_aggregate_function();
-    generate_output(result, 65, "test_bind_update_invalid_aggregate_function");
+    generate_output(result, 66, "test_bind_update_invalid_aggregate_function");
     result = test_bind_update_invalid_no_boolean_where();
-    generate_output(result, 66, "test_bind_update_invalid_no_boolean_where");
+    generate_output(result, 67, "test_bind_update_invalid_no_boolean_where");
     result = test_bind_update_incompatible_column_assignment();
-    generate_output(result, 67, "test_bind_update_incompatible_column_assignment");
+    generate_output(result, 68, "test_bind_update_incompatible_column_assignment");
     result = test_bind_update_unknown_where_column();
-    generate_output(result, 68, "test_bind_update_unknown_where_column");
+    generate_output(result, 69, "test_bind_update_unknown_where_column");
     result = test_bind_update_aggregate_in_where();
-    generate_output(result, 69, "test_bind_update_aggregate_in_where");
+    generate_output(result, 70, "test_bind_update_aggregate_in_where");
+    result = test_bind_update_incompatible_arithmetic_assignment();
+    generate_output(result, 71, "test_bind_update_incompatible_arithmetic_assignment");
 
     /* ---------- bind_delete unit tests ---------- */
     result = test_bind_delete_without_where();
-    generate_output(result, 70, "test_bind_delete_without_where");
+    generate_output(result, 72, "test_bind_delete_without_where");
     result = test_bind_delete_with_where();
-    generate_output(result, 71, "test_bind_delete_with_where");
+    generate_output(result, 73, "test_bind_delete_with_where");
     result = test_bind_delete_with_alias();
-    generate_output(result, 72, "test_bind_delete_with_alias");
+    generate_output(result, 74, "test_bind_delete_with_alias");
     result = test_bind_delete_complex_where();
-    generate_output(result, 73, "test_bind_delete_complex_where");
+    generate_output(result, 75, "test_bind_delete_complex_where");
 
     result = test_bind_delete_unknown_table();
-    generate_output(result, 74, "test_bind_delete_unknown_table");
+    generate_output(result, 76, "test_bind_delete_unknown_table");
     result = test_bind_delete_unknown_column();
-    generate_output(result, 75, "test_bind_delete_unknown_column");
+    generate_output(result, 77, "test_bind_delete_unknown_column");
     result = test_bind_delete_invalid_alias();
-    generate_output(result, 76, "test_bind_delete_invalid_alias");
+    generate_output(result, 78, "test_bind_delete_invalid_alias");
     result = test_bind_delete_non_boolean_where();
-    generate_output(result, 77, "test_bind_delete_non_boolean_where");
+    generate_output(result, 79, "test_bind_delete_non_boolean_where");
     result = test_bind_delete_aggregate_in_where();
-    generate_output(result, 78, "test_bind_delete_aggregate_in_where");
+    generate_output(result, 80, "test_bind_delete_aggregate_in_where");
     result = test_bind_delete_invalid_inputs();
-    generate_output(result, 79, "test_bind_delete_invalid_inputs");
+    generate_output(result, 81, "test_bind_delete_invalid_inputs");
 
     return 0;
 }
