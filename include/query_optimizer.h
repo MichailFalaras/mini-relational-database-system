@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+
 typedef struct database Database;
 typedef struct table Table;
 typedef struct schema Schema;
@@ -11,38 +12,10 @@ typedef struct constraint Constraint;
 typedef struct index Index;
 typedef struct expression_node ExpressionNode;
 typedef struct row Row;
-
-/* Forward Declarations. */
 typedef struct statement Statement;
-typedef struct ast_node ASTNode;
-typedef struct ast_create_table CreateTableNode;
-typedef struct ast_drop_table DropTableNode;
-typedef struct ast_truncate_table TruncateTableNode;
-typedef struct ast_alter_table AlterTableNode;
-typedef struct ast_alter_add AlterAddNode;
-typedef struct ast_alter_drop AlterDropNode;
-typedef struct ast_alter_rename_table AlterRenameTableNode;
-typedef struct ast_alter_rename_col AlterRenameColNode;
-typedef struct ast_alter_modify AlterModifyNode;
-typedef struct ast_add_constraint AlterAddConstraintNode;
-typedef struct ast_drop_constraint AlterDropConstraintNode;
-typedef struct ast_create_index CreateIndexNode;
-typedef struct ast_drop_index DropIndexNode;
-typedef struct ast_where WhereNode;
-typedef struct ast_select SelectNode;
-typedef struct ast_join JoinNode;
-typedef struct ast_insert InsertNode;
-typedef struct ast_delete DeleteNode;
-typedef struct ast_update UpdateNode;
-typedef struct ast_group_by GroupByNode;
-typedef struct ast_order_by OrderByNode;
-typedef struct ast_having HavingNode;
-typedef struct ast_limit LimitNode;
-typedef struct ast_offset OffsetNode;
-typedef enum order_by_types OrderByTypes;
 
 /* Operation Types. */
-typedef enum operation_type {
+typedef enum plan_node_types {
     PLAN_CREATE_TABLE,
     PLAN_DROP_TABLE,
     PLAN_ALTER_RENAME_TABLE,
@@ -67,14 +40,19 @@ typedef enum operation_type {
     
     PLAN_INSERT,
     PLAN_UPDATE,
-    PLAN_DELETE
-} OperationType;
+    PLAN_DELETE,
+
+    PLAN_GROUP_BY,
+    PLAN_ORDER_BY,
+    PLAN_LIMIT,
+    PLAN_OFFSET
+} PlanNodeTypes;
 
 /* Help Struct for JOIN Projection. */
-typedef struct column_ref {
+typedef struct projection_column {
     Table *table;
     uint32_t column_index;
-} ColumnRef;
+} ProjectionColumn;
 
 /* Operation-Specific Data. */
 typedef struct plan_create_table {
@@ -104,16 +82,16 @@ typedef struct plan_alter_add_column {
 } AlterAddColumn;
 
 typedef struct plan_alter_drop_column {
-    ColumnRef column;
+    ProjectionColumn column;
 } AlterDropColumn;
 
 typedef struct plan_alter_rename_column {
-    ColumnRef column;
+    ProjectionColumn column;
     char new_col_name[64];
 } AlterRenameColumn;
 
 typedef struct plan_alter_modify_column {
-    ColumnRef column;
+    ProjectionColumn column;
     Column *new_column_definition;
 } AlterModifyColumn;
 
@@ -152,8 +130,8 @@ typedef struct plan_index_scan {
 typedef struct plan_filter {
     ExpressionNode *expression;
     /* Direct access to columns used in expression. */
-    ColumnRef *columns;
-    uint32_t amount_column_refs;
+    ProjectionColumn **columns;
+    uint32_t amount_column;
 } Filter;
 
 /* SELECT Columns */
@@ -162,34 +140,38 @@ typedef struct plan_project {
     ExpressionNode **expressions;
     uint32_t num_expressions;
 
-    ColumnRef *columns;
+    ProjectionColumn **columns;
     uint32_t amount_columns;
 } Project;
 
 typedef enum plan_join_types {
-    INNER,
-    LEFT,
-    RIGHT,
-    OUTER
-} PlanTypes;
+    PLAN_JOIN_INNER,
+    PLAN_JOIN_LEFT,
+    PLAN_JOIN_RIGHT,
+    PLAN_JOIN_OUTER
+} PlanJoinTypes;
 
 typedef struct plan_join {
     Table *left_table;
     Table *right_table;
-    PlanTypes join_type;
+    PlanJoinTypes join_type;
     Filter *on_node;
 } Join;
 
 typedef struct plan_insert {
-    ColumnRef *columns;
+    Table *table;
+    ProjectionColumn **columns;
     uint32_t num_columns;
-    Row *rows;
+    Row **rows;
+    uint32_t num_rows;
 } Insert;
 
 typedef struct plan_update {
-    ColumnRef *columns;
-    Row *new_values;
+    Table *table;
+    ProjectionColumn **columns;
     uint32_t num_columns;
+    Row **new_values;
+    uint32_t num_rows;
     Filter *filter;
 } Update;
 
@@ -199,14 +181,21 @@ typedef struct plan_delete {
 } Delete;
 
 typedef struct plan_group_by {
-    ColumnRef *columns;
+    ProjectionColumn **columns;
+    uint32_t num_columns;
 } GroupBy;
+
+typedef enum plan_order_by_types {
+    PLAN_ORDER_BY_ASC,
+    PLAN_ORDER_BY_DESC
+} PlanOrderByTypes;
 
 typedef struct plan_order_by {
     ExpressionNode *expr;
-    uint32_t amount_expr;
-    ColumnRef *columns;
-    OrderByTypes *type;
+    ProjectionColumn **columns;
+    uint32_t num_columns;
+    PlanOrderByTypes *types;
+    uint32_t num_order_by_types;
 } OrderBy;
 
 typedef struct plan_limit {
@@ -224,7 +213,7 @@ typedef struct plan_offset {
  * important data for each operation
  * next: pointer to next plan node in the query plan. */
 typedef struct plan_node {
-    OperationType type;
+    PlanNodeTypes type;
     double estimated_cost;
     union {
         CreateTable plan_create_table;
@@ -263,40 +252,7 @@ typedef struct query_plan {
     uint32_t amount_plan_nodes;
 } QueryPlan;
 
-extern QueryPlan *query_plan_init();
-
-extern bool query_planner(Statement *statement, Database *db);
-
-/* TODO: static functions in .c file */
-PlanNode *plan_node_create(ASTNode *node, Database *db);
-PlanNode *plan_node_create_table(CreateTableNode node, Database *db);
-PlanNode *plan_node_drop_table(DropTableNode node, Database *db);
-PlanNode *plan_node_truncate_table(TruncateTableNode node, Database *db);
-PlanNode *plan_node_alter_action(AlterTableNode node, Database *db);
-PlanNode *plan_node_alter_add_column(AlterAddNode node, Database *db);
-PlanNode *plan_node_alter_drop_column(AlterDropNode node, Database *db);
-PlanNode *plan_node_alter_rename_table(AlterRenameTableNode node, Database *db);
-PlanNode *plan_node_alter_rename_column(AlterRenameColNode node, Database *db);
-PlanNode *plan_node_alter_modify_column(AlterModifyNode node, Database *db);
-PlanNode *plan_node_alter_add_constraint(AlterAddConstraintNode node, Database *db);
-PlanNode *plan_node_alter_drop_constraint(AlterDropConstraint node, Database *db);
-PlanNode *plan_node_create_index(CreateIndexNode node, Database *db);
-PlanNode *plan_node_drop_index(DropIndexNode node, Database *db);
-PlanNode *plan_node_filter(WhereNode node, Database *db);
-PlanNode *plan_node_project(SelectNode node, Database *db);
-PlanNode *plan_node_join(JoinNode node, Database *db);
-PlanNode *plan_node_insert(InsertNode node, Database *db);
-PlanNode *plan_node_delete(DeleteNode node, Database *db);
-PlanNode *plan_node_update(UpdateNode node, Database *db);
-PlanNode *plan_node_group_by(GroupByNode node, Database *db);
-PlanNode *plan_node_order_by(OrderByNode node, Database *db);
-PlanNode *plan_node_having(HavingNode node, Database *db);
-PlanNode *plan_node_limit(LimitNode node, Database *db);
-PlanNode *plan_node_offset(OffsetNode node, Database *db);
-PlanNode *plan_node_seq_scan(Database *db);
-PlanNode *plan_node_index_scan(Database *db);
-
-extern bool query_plan_connect_node(QueryPlan *query_plan, PlanNode *new_node);
+extern QueryPlan *query_plan_create(void);
 
 extern void query_plan_free(QueryPlan *query_plan);
 
