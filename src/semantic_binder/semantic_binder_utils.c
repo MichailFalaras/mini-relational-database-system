@@ -1342,8 +1342,8 @@ bool bind_joins(JoinNode **joins, uint32_t num_joins, BindingContext *context) {
         }
 
         // Validate JOIN type
-        if (join->join_type != INNER && join->join_type != LEFT &&
-            join->join_type != RIGHT && join->join_type != OUTER) {
+        if (join->join_type != AST_JOIN_INNER && join->join_type != AST_JOIN_LEFT &&
+            join->join_type != AST_JOIN_RIGHT && join->join_type != AST_JOIN_OUTER) {
             printf("bind_joins: Unsupported JOIN type.\n");
             return false;
         }
@@ -1623,7 +1623,7 @@ bool bind_order_by(OrderByNode *order_by, BindingContext *context) {
 
     for (uint32_t i = 0; i < order_by->num_column_refs; i++) {
         ExpressionNode *expr = order_by->column_refs[i];
-        OrderByType direction = order_by->types[i];
+        ASTOrderByTypes direction = order_by->types[i];
 
         if (!expr) {
             printf("bind_order_by: Invalid ORDER BY expression.\n");
@@ -1631,7 +1631,7 @@ bool bind_order_by(OrderByNode *order_by, BindingContext *context) {
         }
 
         // Validate sorting direction
-        if (direction != ASC && direction != DESC) {
+        if (direction != AST_ORDER_BY_ASC && direction != AST_ORDER_BY_DESC) {
             printf("bind_order_by: Unsupported ORDER BY direction.\n");
             return false;
         }
