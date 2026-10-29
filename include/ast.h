@@ -48,22 +48,22 @@ typedef struct ast_having {
 } HavingNode;
 
 typedef enum order_by_types {
-    ASC,
-    DESC
-} OrderByType;
+    AST_ORDER_BY_ASC,
+    AST_ORDER_BY_DESC
+} ASTOrderByTypes;
 
 typedef struct ast_order_by {
     uint32_t num_column_refs;
     ExpressionNode **column_refs;
-    OrderByType *types;
+    ASTOrderByTypes *types;
 } OrderByNode;
 
 typedef enum ast_join_types {
-    INNER,
-    LEFT,
-    RIGHT,
-    OUTER
-} JoinType;
+    AST_JOIN_INNER,
+    AST_JOIN_LEFT,
+    AST_JOIN_RIGHT,
+    AST_JOIN_OUTER
+} ASTJoinTypes;
 
 typedef struct ast_on {
     ExpressionNode *expression;
@@ -72,7 +72,7 @@ typedef struct ast_on {
 typedef struct ast_join {
     char secondary_table_name[64];
     AsNode alias;
-    JoinType join_type;
+    ASTJoinTypes join_type;
     OnNode *on;
 } JoinNode;
 

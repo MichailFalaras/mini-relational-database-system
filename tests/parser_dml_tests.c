@@ -238,7 +238,7 @@ int test_parse_select_inner_join() {
 
     JoinNode *join = select->joins[0];
 
-    ASSERT(join->join_type == INNER);
+    ASSERT(join->join_type == AST_JOIN_INNER);
     ASSERT(strcmp(join->secondary_table_name, "orders") == 0);
     ASSERT(join->on != NULL);
     ASSERT(join->on->expression != NULL);
@@ -285,8 +285,8 @@ int test_parse_select_multiple_joins() {
     ASSERT(select->joins[0] != NULL);
     ASSERT(select->joins[1] != NULL);
 
-    ASSERT(select->joins[0]->join_type == INNER);
-    ASSERT(select->joins[1]->join_type == LEFT);
+    ASSERT(select->joins[0]->join_type == AST_JOIN_INNER);
+    ASSERT(select->joins[1]->join_type == AST_JOIN_LEFT);
 
     ASSERT(strcmp(select->joins[0]->secondary_table_name, "orders") == 0);
     ASSERT(strcmp(select->joins[1]->secondary_table_name, "payments") == 0);
@@ -375,8 +375,8 @@ int test_parse_select_order_by() {
     ASSERT(select->order_by->column_refs[0]->type == EXPR_COLUMN_REF);
     ASSERT(select->order_by->column_refs[1]->type == EXPR_COLUMN_REF);
 
-    ASSERT(select->order_by->types[0] == DESC);
-    ASSERT(select->order_by->types[1] == ASC);
+    ASSERT(select->order_by->types[0] == AST_ORDER_BY_DESC);
+    ASSERT(select->order_by->types[1] == AST_ORDER_BY_ASC);
 
     free_test_parser(parser, root);
     return 0;
@@ -585,7 +585,7 @@ int test_parse_select_join_alias() {
 
     JoinNode *join = select->joins[0];
 
-    ASSERT(join->join_type == INNER);
+    ASSERT(join->join_type == AST_JOIN_INNER);
     ASSERT(strcmp(join->secondary_table_name, "orders") == 0);
     ASSERT(strcmp(join->alias.alias, "o") == 0);
 
