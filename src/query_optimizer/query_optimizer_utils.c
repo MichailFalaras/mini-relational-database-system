@@ -6,6 +6,24 @@
 #include "../../include/index.h"
 #include "../../include/expressions.h"
 
+/* Create PlanNode struct and initialize common values. */
+PlanNode *plan_node_create(PlanNodeTypes type) {
+    if (type > PLAN_OFFSET) {
+        return NULL;
+    }
+
+    PlanNode *plan_node = (PlanNode *) calloc(1, sizeof(PlanNode));
+    if (!plan_node) {
+        return NULL;
+    }
+
+    plan_node->type = type;
+    plan_node->estimated_cost = 0;
+    plan_node->next = NULL;
+
+    return plan_node;
+}
+
 /* A PlanNode only stores the references to objects.
  * Should not actually free those objects, just nullify the pointer
  * referencing them. */
