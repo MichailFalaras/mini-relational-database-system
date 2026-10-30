@@ -1,4 +1,7 @@
 import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
+import { isValidResponse, isValidReadyMessage, isValidRequest } from "./dbmsProtocol.js";
+
 
 // All states the C DBMS Process Manager can be in
 const DBMS_STATES = Object.freeze({
@@ -9,12 +12,17 @@ const DBMS_STATES = Object.freeze({
 	FAILED: "failed"
 });
 
+const MAX_FRAME_SIZE = 8 * 1024 * 1024;
+
 // Process Manager Definition
 export class DBMSProcessManager {
+
 	constructor(executablePath) {
 		this.executablePath = executablePath;
 		this.child = null;
 		this.state = DBMS_STATES.STOPPED;
+		this.pendingStartup = null;
+		this.pendingRequest = null;
 	}
 
 	// Initiate DBMS child process
@@ -31,32 +39,125 @@ export class DBMSProcessManager {
 		this.child = child;
 		this.state = DBMS_STATES.STARTING;
 
-		// Standard output streams event handers
-		child.stdout.on("data", (chunk) => {
-			console.log("DBMS stdout:", chunk.toString());
+		const startupPromise = new Promise((resolve, reject) => {
+			this.pendingStartup = {
+				resolve,
+				reject,
+				timeout: null
+			};
 		});
 
+		// The protocol specifies MiniDB has 5sec to send the 'ready' message upon startup, or fail
+		this.pendingStartup.timeout = setTimeout(() => {
+			if (this.state === DBMS_STATES.STARTING) {
+				this.failProcess(new Error("DBMS startup timed out"));
+				this.terminateFailedProcess(child);
+			}
+		}, 5000);
+
+
+		// Node.js process receives output on the child process' stdout stream
+		const decoder = new StringDecoder("utf8");
+		let stdoutBuffer = "";
+
+		child.stdout.on("data", (chunk) => {
+			stdoutBuffer += decoder.write(chunk);
+
+			let newlineIndex;
+
+			while ((newlineIndex = stdoutBuffer.indexOf("\n")) !== -1) {
+				let line = stdoutBuffer.slice(0, newlineIndex);
+				stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
+
+				// Support optional CRLF line endings
+				if (line.endsWith("\r")) {
+					line = line.slice(0, -1);
+				}
+
+				// Validate JSONL line length < 8MB
+				if (Buffer.byteLength(line, "utf8") > MAX_FRAME_SIZE) {
+					this.failProcess(new Error("DBMS response exceeds 8MB"));
+					this.terminateFailedProcess(child);
+					return;
+				}
+
+				let message;
+
+				try {
+					message = JSON.parse(line);
+				} catch (error) {
+					this.failProcess(new Error("Invalid JSON received from MiniDB"));
+					this.terminateFailedProcess(child);
+					return;
+				}
+
+				if (message === null || typeof message !== "object" || Array.isArray(message)) {
+					this.failProcess(new Error("Invalid DBMS protocol message"));
+					this.terminateFailedProcess(child);
+					return;
+				}
+
+				console.log("DBMS stdout:", message);
+
+				if (this.state === DBMS_STATES.STARTING) {
+					if (!isValidReadyMessage(message)) {
+						this.failProcess(new Error("Invalid READY message"));
+						this.terminateFailedProcess(child);
+						return;
+					}
+
+					this.state = DBMS_STATES.READY;
+					this.resolveStartup();
+				}
+				else if (this.state === DBMS_STATES.READY) {
+					const pending = this.pendingRequest;
+
+					if (pending === null || !isValidResponse(message, pending.id)) {
+						this.failProcess(new Error("Invalid DBMS response"));
+						this.terminateFailedProcess(child);
+						return;
+					}
+
+					this.pendingRequest = null;
+					pending.resolve(message);
+				}
+			}
+
+			// Validate buffer length < 8MB, when no '\n' is received yet
+			if (Buffer.byteLength(stdoutBuffer, "utf8") > MAX_FRAME_SIZE) {
+				this.failProcess(new Error("DBMS response exceeds 8BM"));
+				this.terminateFailedProcess(child);
+				return;
+			}
+		});
+
+		// Node.js process receives output on the child process' stderr stream
 		child.stderr.on("data", (chunk) => {
 			console.error("DBMS stderr:", chunk.toString());
 		});
 
+		// Listen for errors on the child process' input stream
+		child.stdin.on("error", (error) => {
+			if (this.child !== child) return;
+
+			this.failProcess(error);
+			this.terminateFailedProcess(child);
+		})
+
 		// Process event handlers
-		// An error occurred during a child process operation (spawn, kill, communication)
+
+		// An error occurred during a child process operation
 		child.on("error", (error) => {
-			this.state = DBMS_STATES.FAILED;
-			console.error("DBMS process error:", error);
+			if (this.child !== child) return;
+
+			this.failProcess(error);
 		});
 
 		// The child process has terminated
 		child.on("exit", (code, signal) => {
-			console.log("DBMS exited:", { code, signal });
-
 			if (this.child !== child) return;
-			
-			// Checking for abnormal termination (!= STOPPING)
-			if (this.state !== DBMS_STATES.STOPPING) {
-				this.state = DBMS_STATES.FAILED;
-			}
+
+			console.log("DBMS exited:", { code, signal });
 		});
 
 		// Cleanup - The child process' has terminated (or failed to start) 
@@ -64,22 +165,120 @@ export class DBMSProcessManager {
 		child.on("close", (code, signal) => {
 			if (this.child !== child) return;
 
-			this.child = null;
+			// Flush any remaining decoded UTF-8 characters
+			stdoutBuffer += decoder.end();
 
-			if (this.state === DBMS_STATES.STOPPING && code === 0) {
+			// Any remaining bytes without a '\n' form an incomplete JSONL frame
+			const hasIncompleteFrame = stdoutBuffer.length > 0;
+
+			if (hasIncompleteFrame) {
+				this.failProcess(new Error("Incomplete DBMS JSONL frame at EOF"));
+			}
+			else if (this.state === DBMS_STATES.STOPPING && code === 0) {
 				this.state = DBMS_STATES.STOPPED;
 			}
-			else {
-				this.state = DBMS_STATES.FAILED;
+			else if (this.state !== DBMS_STATES.FAILED) {
+				this.failProcess(new Error(`DBMS process closed unexpectedly: ${code} ${signal}`));
+			}
+
+			this.child = null;
+		});
+
+		return startupPromise;
+	}
+
+	resolveStartup() {
+		const pending = this.pendingStartup;
+
+		if (pending === null) return;
+
+		this.pendingStartup = null;
+		clearTimeout(pending.timeout);
+		pending.resolve();
+	}
+
+	// Send request to the DBMS child process
+	async sendRequest(request) {
+		if (this.state !== DBMS_STATES.READY || this.child === null) {
+			return Promise.reject(new Error("DBMS process is not available"));
+		}
+
+		if (this.pendingRequest !== null) {
+			return Promise.reject(new Error("Another DBMS request is pending"));
+		}
+
+		if (!isValidRequest(request)) {
+			return Promise.reject(new Error("Invalid DBMS request"));
+		}
+
+		// Validate input JSONL is < 8MB
+		let serialized;
+
+		try {
+			serialized = JSON.stringify(request);
+		} catch (error) {
+			throw new Error("Failed to serialize DBMS request", { cause: error });
+		}
+
+		if (Buffer.byteLength(serialized, "utf8") > MAX_FRAME_SIZE) {
+			return Promise.reject(new Error("DBMS request exceeds 8MB"));
+		}
+
+		return new Promise((resolve, reject) => {
+			this.pendingRequest = {
+				id: request.id,
+				resolve,
+				reject
+			};
+
+			const child = this.child;
+
+			try {
+				child.stdin.write(serialized + "\n", (error) => {
+					if (error && this.child === child) {
+						this.failProcess(error);
+						this.terminateFailedProcess(child);
+					}
+				});
+			} catch (error) {
+				this.failProcess(error);
+				this.terminateFailedProcess(child);
 			}
 		});
 	}
 
-	async sendRequest(request) {
+	async shutdown() {
 		throw new Error("Not implemented yet");
 	}
 
-	async shutdown() {
-		throw new Error("Not implemented yet");
+	// Centralized error handling that handles potential startup failures
+	// and failures during pending requests
+	failProcess(error) {
+		this.state = DBMS_STATES.FAILED;
+
+		// Reject pending startup
+		if (this.pendingStartup !== null) {
+			const pending = this.pendingStartup;
+			this.pendingStartup = null;
+
+			clearTimeout(pending.timeout);
+			pending.reject(error);
+		}
+
+		// Reject pending request
+		if (this.pendingRequest !== null) {
+			const pending = this.pendingRequest;
+			this.pendingRequest = null;
+
+			pending.reject(error);
+		}
+	}
+
+	terminateFailedProcess(child) {
+		if (this.child !== child) return;
+
+		if (child.exitCode === null && child.signalCode === null) {
+			child.kill();
+		}
 	}
 }
