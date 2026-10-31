@@ -46,7 +46,7 @@ typedef enum plan_node_types {
     PLAN_ORDER_BY,
     PLAN_LIMIT,
     PLAN_OFFSET
-} PlanNodeTypes;
+} PlanNodeType;
 
 /* Help Struct for JOIN Projection. */
 typedef struct projection_column {
@@ -149,12 +149,12 @@ typedef enum plan_join_types {
     PLAN_JOIN_LEFT,
     PLAN_JOIN_RIGHT,
     PLAN_JOIN_OUTER
-} PlanJoinTypes;
+} PlanJoinType;
 
 typedef struct plan_join {
     Table *left_table;
     Table *right_table;
-    PlanJoinTypes join_type;
+    PlanJoinType join_type;
     Filter *on_node;
 } Join;
 
@@ -188,13 +188,13 @@ typedef struct plan_group_by {
 typedef enum plan_order_by_types {
     PLAN_ORDER_BY_ASC,
     PLAN_ORDER_BY_DESC
-} PlanOrderByTypes;
+} PlanOrderByType;
 
 typedef struct plan_order_by {
     ExpressionNode *expr;
     ProjectionColumn **columns;
     uint32_t num_columns;
-    PlanOrderByTypes *types;
+    PlanOrderByType *types;
     uint32_t num_order_by_types;
 } OrderBy;
 
@@ -213,7 +213,7 @@ typedef struct plan_offset {
  * important data for each operation
  * next: pointer to next plan node in the query plan. */
 typedef struct plan_node {
-    PlanNodeTypes type;
+    PlanNodeType type;
     double estimated_cost;
     union {
         CreateTable plan_create_table;

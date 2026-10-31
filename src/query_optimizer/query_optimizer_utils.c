@@ -1,10 +1,71 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include "../../include/query_optimizer.h"
 #include "../../include/schema.h"
 #include "../../include/constraints.h"
 #include "../../include/index.h"
 #include "../../include/expressions.h"
+
+/* Create PlanNode struct and initialize common values. */
+PlanNode *plan_node_create(PlanNodeType type) {
+    if (type > PLAN_OFFSET) {
+        return NULL;
+    }
+
+    PlanNode *plan_node = (PlanNode *) calloc(1, sizeof(PlanNode));
+    if (!plan_node) {
+        return NULL;
+    }
+
+    plan_node->type = type;
+    plan_node->estimated_cost = 0;
+    plan_node->next = NULL;
+
+    return plan_node;
+}
+
+/* Append PlanNode to QueryPlan's PlanNode list.
+ *
+ * (NOTE: if PlanNode getting appended is already connected to other
+ *  PlanNodes, it's currently denied. Each PlanNode should only be appended
+ *  and connected to QueryPlan's list) */
+bool query_plan_append_node(QueryPlan *query_plan, PlanNode *new_node) {
+    if (!query_plan || !new_node
+        || new_node->type > PLAN_OFFSET
+        || new_node->next != NULL) {
+        return false;
+    }
+
+    /* Empty list. */
+    PlanNode *curr = query_plan->head;
+    if (!curr) {
+        query_plan->head = new_node;
+        query_plan->amount_plan_nodes++;
+        return true;
+    }
+
+    PlanNode *fast = curr;
+    while (curr->next != NULL) {
+        curr = curr->next;
+
+        /* To prevent against list becoming cyclic
+         * and running in an infinite loop. */
+        if (fast != NULL && fast->next != NULL) {
+            fast = fast->next->next;
+        }
+
+        if (fast != NULL && fast == curr) {
+            return false;
+        }
+    }
+
+    /* Append and update QueryPlan metadata. */
+    curr->next = new_node;
+    query_plan->amount_plan_nodes++;
+
+    return true;
+}
 
 /* A PlanNode only stores the references to objects.
  * Should not actually free those objects, just nullify the pointer

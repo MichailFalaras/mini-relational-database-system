@@ -141,8 +141,8 @@ DataType token_str_to_data_type(char *token_str) {
 }
 
 
-/* Token string to ASTJoinTypes */
-ASTJoinTypes token_str_to_join_type(char *token_str) {
+/* Token string to ASTJoinType */
+ASTJoinType token_str_to_join_type(char *token_str) {
     if (!token_str) {
         return -1;
     }
@@ -2142,7 +2142,7 @@ JoinNode **parse_joins(Parser *parser, uint32_t *num_joins) {
 
     // Parse multiple JOIN clauses
     while (true) {
-        ASTJoinTypes join_type = AST_JOIN_INNER;
+        ASTJoinType join_type = AST_JOIN_INNER;
 
         Token *current = get_current_token(parser);
 
@@ -2642,7 +2642,7 @@ OrderByNode *parse_order_by(Parser *parser) {
 
         order_by->column_refs = new_expressions;
 
-        ASTOrderByTypes *new_types = (ASTOrderByTypes *) realloc(
+        ASTOrderByType *new_types = (ASTOrderByType *) realloc(
             order_by->types,
             (order_by->num_column_refs + 1) * sizeof(*new_types)
         );
@@ -2655,7 +2655,7 @@ OrderByNode *parse_order_by(Parser *parser) {
 
         order_by->types = new_types;
 
-        ASTOrderByTypes order_type = AST_ORDER_BY_ASC;
+        ASTOrderByType order_type = AST_ORDER_BY_ASC;
         Token *current = get_current_token(parser);
 
         if (current && current->type == KEYWORD) {
