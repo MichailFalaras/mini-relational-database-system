@@ -8,7 +8,7 @@
 #include "../../include/expressions.h"
 
 /* Create PlanNode struct and initialize common values. */
-PlanNode *plan_node_create(PlanNodeTypes type) {
+PlanNode *plan_node_create(PlanNodeType type) {
     if (type > PLAN_OFFSET) {
         return NULL;
     }

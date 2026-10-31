@@ -1623,7 +1623,7 @@ bool bind_order_by(OrderByNode *order_by, BindingContext *context) {
 
     for (uint32_t i = 0; i < order_by->num_column_refs; i++) {
         ExpressionNode *expr = order_by->column_refs[i];
-        ASTOrderByTypes direction = order_by->types[i];
+        ASTOrderByType direction = order_by->types[i];
 
         if (!expr) {
             printf("bind_order_by: Invalid ORDER BY expression.\n");

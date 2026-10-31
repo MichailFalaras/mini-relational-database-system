@@ -33,7 +33,7 @@ typedef enum ast_node_type ASTNodeType;
 typedef struct abstract_syntax_tree_node ASTNode;
 
 typedef enum operator_type OperatorType;
-typedef enum ast_join_types ASTJoinTypes;
+typedef enum ast_join_types ASTJoinType;
 typedef struct expression_node ExpressionNode;
 
 typedef enum postfix_parse_status {
@@ -51,8 +51,8 @@ OperatorType token_str_to_operator_type(char *token_str);
 /* Token string to DataType */
 DataType token_str_to_data_type(char *token_str);
 
-/* Token string to ASTJoinTypes */
-ASTJoinTypes token_str_to_join_type(char *token_str);
+/* Token string to ASTJoinType */
+ASTJoinType token_str_to_join_type(char *token_str);
 
 /* Check if Token string is a specific OperatorType. */
 bool is_token_operator(char *token_str, OperatorType type);

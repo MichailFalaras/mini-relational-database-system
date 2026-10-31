@@ -4,13 +4,13 @@
 #include <stdbool.h>
 
 typedef struct plan_node PlanNode;
-typedef enum plan_node_types PlanNodeTypes;
+typedef enum plan_node_types PlanNodeType;
 typedef struct filter Filter;
 
 /* ---------- PlanNode Utilities ---------- */
 
 /* Create PlanNode struct and initialize common values. */
-PlanNode *plan_node_create(PlanNodeTypes type);
+PlanNode *plan_node_create(PlanNodeType type);
 
 /* Append PlanNode to QueryPlan's PlanNode list
  * (NOTE: PlanNode->next should be NULL) */
