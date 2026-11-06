@@ -45,11 +45,11 @@ Catalog *catalog_create(Pager *pager, uint32_t *root_page_num) {
     }
 
     Column *columns[3] = {0};
-    columns[0] = column_alloc("table_name", CHAR, 64, 0, 0);
+    columns[0] = column_alloc("table_name", CHAR, (DataTypeArgs){ .length = 64 }, 0, 0);
     if (!columns[0]) { goto cleanup; }
-    columns[1] = column_alloc("object_type", UNSIGNED_INTEGER, 0, 0, 0);
+    columns[1] = column_alloc("object_type", UNSIGNED_INTEGER, (DataTypeArgs){0}, 0, 0);
     if (!columns[1]) { goto cleanup; }
-    columns[2] = column_alloc("object_name", CHAR, 64, 0, 0);
+    columns[2] = column_alloc("object_name", CHAR, (DataTypeArgs){ .length = 64 }, 0, 0);
     if (!columns[2]) { goto cleanup; }
 
     // Pseudo-schema to allow for B+Tree Operations

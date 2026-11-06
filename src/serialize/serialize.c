@@ -414,7 +414,7 @@ bool serialize_value_data(Value *value, Column *column, void *serialized_output)
 
             size_t len = strlen(value->value.char_val.string);
 
-            if (len > column->type_parameter) {
+            if (len > column->type_args.length) {
                 return false;
             }
 
@@ -429,7 +429,7 @@ bool serialize_value_data(Value *value, Column *column, void *serialized_output)
 
             size_t len = strlen(value->value.varchar_val.string);
 
-            if (len > column->type_parameter) {
+            if (len > column->type_args.length) {
                 return false;
             }
 
@@ -524,7 +524,7 @@ Value *deserialize_value_data(Column *column, bool is_null, void *offset) {
             }
 
             memcpy(string, read_offset, column->serialized_size);
-            value->value.char_val.n = column->type_parameter;
+            value->value.char_val.n = column->type_args.length;
             value->value.char_val.string = string;
             break;
         }
@@ -536,7 +536,7 @@ Value *deserialize_value_data(Column *column, bool is_null, void *offset) {
             }
 
             memcpy(string, read_offset, column->serialized_size);
-            value->value.varchar_val.max_n = column->type_parameter;
+            value->value.varchar_val.max_n = column->type_args.length;
             value->value.varchar_val.string = string;
             break;
         }
@@ -792,7 +792,13 @@ bool serialize_column(uint8_t **write_offset, const Column *column) {
     store_u8_le(*write_offset, data_type);
     *write_offset += sizeof(uint8_t);
 
-    store_u32_le(*write_offset, column->type_parameter);
+    store_u32_le(*write_offset, column->type_args.length);
+    *write_offset += sizeof(uint32_t);
+
+    store_u32_le(*write_offset, column->type_args.precision);
+    *write_offset += sizeof(uint32_t);
+
+    store_u32_le(*write_offset, column->type_args.scale);
     *write_offset += sizeof(uint32_t);
 
     // Reconstructed during Column allocation
@@ -1353,8 +1359,15 @@ Column *deserialize_column(uint8_t **read_offset) {
         return NULL;
     }
 
-    uint32_t type_parameter;
-    type_parameter = load_u32_le(*read_offset);
+    DataTypeArgs type_args = {0};
+
+    type_args.length = load_u32_le(*read_offset);
+    *read_offset += sizeof(uint32_t);
+
+    type_args.precision = load_u32_le(*read_offset);
+    *read_offset += sizeof(uint32_t);
+
+    type_args.scale = load_u32_le(*read_offset);
     *read_offset += sizeof(uint32_t);
 
     // Reconstructed during Column allocation
@@ -1367,13 +1380,9 @@ Column *deserialize_column(uint8_t **read_offset) {
     null_rows = load_u32_le(*read_offset);
     *read_offset += sizeof(uint32_t);
 
-    Column *column = column_alloc(
-        column_name,
-        (DataType) data_type,
-        type_parameter,
-        non_null_rows,
-        null_rows
-    );
+    Column *column = column_alloc(column_name, (DataType) data_type, type_args,
+        non_null_rows, null_rows);
+
     if (!column) {
         return NULL;
     }
@@ -2003,15 +2012,11 @@ size_t serialized_column_size(Column *column) {
     if (!column) {
         return (size_t) 0;
     }
-    size_t size = 0;
 
-    size += 64*sizeof(uint8_t)
-            + sizeof(uint8_t)
-            + sizeof(uint32_t)
-            + sizeof(uint32_t)
-            + sizeof(uint32_t);
-
-    return size;
+    return  64 * sizeof(uint8_t) // name
+            + sizeof(uint8_t) // DataType
+            + 3 * sizeof(uint32_t) // DataTypeArgs (length, precision, scale)
+            + 2 * sizeof(uint32_t); // non NULL rows, NULL rows
 }
 
 size_t serialized_constraint_size(Constraint *constraint) {

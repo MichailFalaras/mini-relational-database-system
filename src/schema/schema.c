@@ -18,17 +18,33 @@
 #define ERR_CODE_COL_MULTIPLE -2
 
 /* Allocate column memory. */
-Column *column_alloc(char *column_name, DataType type, uint32_t type_parameter, uint32_t not_null_rows,
+Column *column_alloc(char *column_name, DataType type, DataTypeArgs type_args, uint32_t not_null_rows,
     uint32_t null_rows) {
-    if (type_parameter == 0
-        && (type == CHAR || type == VARCHAR)) {
+    if (!column_name || column_name[0] == '\0' || type < INTEGER || type > JSONB) {
         return NULL;
     }
 
-    if (type_parameter != 0
-        && type != CHAR
-        && type != VARCHAR) {
-        return NULL;
+    // Validate type parameters for the required data types
+    switch (type) {
+        case CHAR:
+        case VARCHAR:
+            if (type_args.length == 0 || type_args.precision != 0 || type_args.scale != 0) {
+                return NULL;
+            }
+            break;
+
+        case NUMERIC:
+            if (type_args.length != 0 || type_args.precision == 0 || 
+                type_args.scale > type_args.precision) {
+                return NULL;
+            }
+            break;
+
+        default:
+            if (type_args.length != 0 || type_args.precision != 0 || type_args.scale != 0) {
+                return NULL;
+            }
+            break;
     }
 
     Column *column = (Column *) calloc(1, sizeof(Column));
@@ -41,8 +57,8 @@ Column *column_alloc(char *column_name, DataType type, uint32_t type_parameter, 
     column->name[63] = '\0'; 
     column->type = type;
 
-    column->type_parameter = type_parameter;
-    column->serialized_size = get_serialized_value_size(type, type_parameter);
+    column->type_args = type_args;
+    column->serialized_size = get_serialized_value_size(type, type_args);
 
     column->non_null_rows = not_null_rows;
     column->null_rows = null_rows;
@@ -68,8 +84,13 @@ Schema *schema_create(Column **columns, Constraint **constraints, uint32_t num_c
             exit(1);
         }
         for (uint32_t i = 0; i < schema->num_columns; i++) {
-            schema->columns[i] = column_alloc(columns[i]->name, columns[i]->type, columns[i]->type_parameter, columns[i]->non_null_rows,
-                                            columns[i]->null_rows);
+            schema->columns[i] = column_alloc(
+                columns[i]->name, 
+                columns[i]->type, 
+                columns[i]->type_args, 
+                columns[i]->non_null_rows,
+                columns[i]->null_rows
+            );
         }
     }
     
@@ -286,8 +307,14 @@ bool schema_add_column(Schema *schema, Column *new_column) {
 
     schema->num_columns++;
     schema->columns = (Column **) resize_array((void **) schema->columns, schema->num_columns);
-    schema->columns[schema->num_columns-1] = column_alloc(new_column->name, new_column->type, new_column->type_parameter,
-                                            new_column->non_null_rows, new_column->null_rows);
+    schema->columns[schema->num_columns-1] = 
+        column_alloc(
+            new_column->name, 
+            new_column->type, 
+            new_column->type_args,
+            new_column->non_null_rows, 
+            new_column->null_rows
+        );
 
     return true;
 }
@@ -598,7 +625,7 @@ bool schema_modify_column(Schema *schema, const Database *db, const char *old_co
     Column *replacement = column_alloc(
         schema->columns[column_index]->name, 
         new_column->type,
-        new_column->type_parameter,
+        new_column->type_args,
         new_column->non_null_rows,
         new_column->null_rows
     );

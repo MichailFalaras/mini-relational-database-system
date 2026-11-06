@@ -24,6 +24,14 @@ typedef enum data_types {
     JSONB = 12
 } DataType;
 
+
+// Data type arguments for CHAR(length), VARCHAR(length), NUMERIC(precision, scale)
+typedef struct data_type_args {
+    uint32_t length;
+    uint32_t precision;
+    uint32_t scale;
+} DataTypeArgs;
+
 /* NUMERIC/DECIMAL Data Type. */
 typedef struct numeric {
     int64_t val;

@@ -195,17 +195,11 @@ typedef struct ast_constraint {
 
 } ConstraintNode;
 
-// Data type arguments for CHAR(length), VARCHAR(length), NUMERIC(precision, scale)
-typedef struct type_node_args {
-    uint32_t length;
-    uint32_t precision;
-    uint32_t scale;
-} TypeNodeArgs;
 
 typedef struct ast_column_def {
     char column_name[64];
     DataType type;
-    TypeNodeArgs type_args;
+    DataTypeArgs type_args;
 
     ConstraintNode **constraints;
     uint32_t num_constraints;
@@ -247,7 +241,7 @@ typedef struct ast_alter_rename_col {
 typedef struct ast_alter_modify {
     char column_name[64];
     DataType new_type;
-    TypeNodeArgs type_args;
+    DataTypeArgs type_args;
 } AlterModifyNode;
 
 typedef struct ast_alter_add_constraint {
