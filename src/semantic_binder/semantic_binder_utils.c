@@ -128,6 +128,48 @@ bool bind_column_ref(ExpressionNode *expr, BindingContext *context, BoundExpress
         return false;
     }
 
+    // Validate Column Reference in a CHECK constraint context
+    if (context->current_clause == BIND_CLAUSE_CHECK) {
+        if (context->num_relations != 1 || 
+            context->relations[0].table ||
+            !context->relations[0].create_table) {
+            printf("bind_column_ref: Invalid CHECK binding clause data.\n");
+            return false;
+        }
+
+        const CreateTableNode *proposed = context->relations[0].create_table;
+
+        if (column_ref->table_name[0] != '\0' && 
+            strcmp(column_ref->table_name, proposed->table_name)) {
+            printf("bind_column_ref: Invalid CHECK table qualifier.\n");
+            return false;
+        }
+
+        uint32_t index;
+
+        if (!resolve_create_table_column(proposed, column_ref->column_name, &index)) {
+            printf("bind_column_ref: CHECK column not found.\n");
+            return false;
+        }
+
+        if (index > INT32_MAX) {
+            printf("bind_column_ref: column index exceeds maximum limit.\n");
+            return false;
+        }
+
+        ColumnDefNode *column = proposed->columns->column_defs[index];
+
+        if (!column) {
+            printf("bind_column_ref: Invalid Column definition node.\n");
+            return false;
+        }
+
+        out_type->type = column->type;
+        out_type->is_untyped_null = false;
+
+        return true;
+    }
+
     uint32_t column_matches = 0;
     int32_t relation_index = -1;
     int32_t column_index = -1;
@@ -803,6 +845,7 @@ bool bind_function(ExpressionNode *expr, BindingContext *context, BoundExpressio
         context->current_clause == BIND_CLAUSE_GROUP_BY ||
         context->current_clause == BIND_CLAUSE_INSERT_VALUES ||
         context->current_clause == BIND_CLAUSE_SET ||
+        context->current_clause == BIND_CLAUSE_CHECK ||
         context->current_clause == BIND_CLAUSE_DEFAULT) {
         printf("bind_function: Aggregate functions are not allowed in this clause.\n");
         return false;
@@ -1307,7 +1350,78 @@ bool bind_delete(ASTNode *root, BindingContext *context, BoundDeleteValues *out_
     return true;
 }
 
-bool bind_create_table(ASTNode *root, BindingContext *context);
+// Bind CREATE TABLE
+bool bind_create_table(ASTNode *root, BindingContext *context) {
+    if (!root || root->type != AST_CREATE_TABLE) {
+        printf("bind_create_table: Invalid AST root node.\n");
+        return false;
+    }
+
+    if (!context || !context->db) {
+        printf("bind_create_table: Invalid binding context.\n");
+        return false;
+    }
+
+    // Empty context is required
+    if (context->relations || context->num_relations != 0 || context->aggregate_depth != 0) {
+        printf("bind_create_table: Expected fresh binding state.\n");
+        return false;
+    }
+
+    CreateTableNode *create_table = &root->node_contents.create_table;
+
+    if (!create_table || create_table->table_name[0] == '\0' || 
+        !create_table->columns || !create_table->columns->column_defs ||
+        create_table->columns->num_column_defs == 0 ||
+        (create_table->num_constraints > 0 && !create_table->constraints)) {
+        printf("bind_create_table: Invalid CREATE TABLE node.\n");
+        return false;
+    }
+
+    // Check for potential duplicate table name
+    if (database_find_table(context->db, create_table->table_name)) {
+        printf("bind_create_table: Duplicate table name.\n");
+        return false;
+    }
+
+    // Validate column definitions and column-level constraints
+    if (!bind_columns(create_table->columns, create_table, context)) {
+        printf("bind_create_table: Columns binding failed.\n");
+        return false;
+    }
+
+    // Validate table-level constraints
+    for (uint32_t i = 0; i < create_table->num_constraints; i++) {
+        if (!bind_constraint(create_table->constraints[i], create_table, context, -1)) {
+            printf("bind_create_table: Table-level constraint failed.\n");
+            return false;
+        }
+    }
+
+    // Validate rules spanning multiple columns
+    if (!validate_primary_key_count(create_table)) {
+        printf("bind_create_table: Multiple PRIMARY KEY constraints.\n");
+        return false;
+    }
+
+    if (!validate_create_table_constraint_names(create_table)) {
+        printf("bind_create_table: Duplicate constraint names.\n");
+        return false;
+    }
+
+    if (!validate_create_table_defaults(create_table)) {
+        printf("bind_create_table: Conflicting DEFAULT NULL among column-level and table-level constraints.\n");
+        return false;
+    }
+
+    // Publish resolved indexes after all validation succeeds
+    if (!commit_create_table_references(create_table, context->db)) {
+        printf("bind_create_table: Reference finalization failed.\n");
+        return false;
+    }
+
+    return true;
+}
 
 bool bind_drop_table(ASTNode *root, BindingContext *context);
 
@@ -1807,23 +1921,599 @@ bool bind_set(SetNode *set, BindingContext *context, BoundExpressionType *out_ty
     return true;
 }
 
-bool bind_columns(ColumnsNode *columns, BindingContext *context);
+// Bind a Columns Node
+bool bind_columns(ColumnsNode *columns, CreateTableNode *create_table, BindingContext *context) {
+    if (!columns || !columns->column_defs || columns->num_column_defs == 0 || !create_table) {
+        printf("bind_columns: Invalid Columns AST node.\n");
+        return false;
+    }
 
-bool bind_column_def(ColumnDefNode *column_def, BindingContext *context);
 
-bool bind_constraint(ConstraintNode *constraint, BindingContext *context);
+    if (!context || !context->db) {
+        printf("bind_columns: Invalid binding context.\n");
+        return false;
+    }
 
-bool bind_primary_key_constraint(ConstraintNode *constraint, BindingContext *context);
+    // Validate each column definition
+    for (uint32_t i = 0; i < columns->num_column_defs; i++) {
+        ColumnDefNode *curr_column_def = columns->column_defs[i];
 
-bool bind_unique_constraint(ConstraintNode *constraint, BindingContext *context);
+        if (!curr_column_def || curr_column_def->column_name[0] == '\0') {
+            printf("bind_columns: Invalid column definition.\n");
+            return false;
+        }
 
-bool bind_not_null_constraint(ConstraintNode *constraint, BindingContext *context);
+        // Compare with all previously encountered column names.
+        for (uint32_t j = 0; j < i; j++) {
+            ColumnDefNode *prev_column_def = columns->column_defs[j];
 
-bool bind_foreign_key_constraint(ConstraintNode *constraint, BindingContext *context);
+            if (!prev_column_def) {
+                return false;
+            }
 
-bool bind_check_constraint(ConstraintNode *constraint, BindingContext *context);
+            if (!strcmp(curr_column_def->column_name, prev_column_def->column_name)) {
+                printf("bind_columns: Duplicate column name.\n");
+                return false;
+            }
+        }
+    }
 
-bool bind_default_constraint(ConstraintNode *constraint, BindingContext *context);
+    // Bind only after checking all column names for duplicates
+    for (uint32_t i = 0; i < columns->num_column_defs; i++) {
+        if (!bind_column_def(columns->column_defs[i], create_table, context, i)) {
+            printf("bind_columns: Invalid column definition.\n");
+            return false;
+        }
+    }
+
+    return true;
+}
+
+// Bind a Column definition node
+bool bind_column_def(ColumnDefNode *column_def, CreateTableNode *create_table,
+    BindingContext *context, uint32_t owner_column_index) {
+    if (!context || !context->db || !create_table) {
+        printf("bind_column_def: Invalid binding context or input Create Table node.\n");
+        return false;
+    }
+
+    if (!column_def || column_def->column_name[0] == '\0' ||
+        (column_def->num_constraints > 0 && !column_def->constraints) ||
+        column_def->type < INTEGER || column_def->type > JSONB) {
+        printf("bind_column_def: Invalid column reference.\n");
+        return false;
+    }
+
+    if ((column_def->type == CHAR && column_def->type_args.length == 0) ||
+        (column_def->type == VARCHAR && column_def->type_args.length == 0) ||
+        (column_def->type == NUMERIC && 
+        (column_def->type_args.precision == 0 ||
+         column_def->type_args.scale > column_def->type_args.precision))) {
+        printf("bind_column_def: Invalid column data type arguments.\n");
+        return false;
+    }
+
+    // Validate each column-level constraint
+    for (uint32_t i = 0; i < column_def->num_constraints; i++) {
+        ConstraintNode *constraint = column_def->constraints[i];
+
+        if (!constraint || 
+            constraint->type < AST_CONSTRAINT_PRIMARY_KEY ||
+            constraint->type > AST_CONSTRAINT_DEFAULT) {
+            printf("bind_column_def: Invalid column-level constraint.\n");
+            return false;
+        }
+
+        if (!bind_constraint(
+                column_def->constraints[i], 
+                create_table, 
+                context, 
+                (uint32_t)owner_column_index)) {
+            printf("bind_column_def: Column-level constraint binding failed.\n");
+            return false;
+        }
+    }
+
+    return true;
+}
+
+// Validate column-level and table-level constraints
+bool bind_constraint(ConstraintNode *constraint, CreateTableNode *create_table, 
+    BindingContext *context, int32_t owner_column_index) {
+    if (!constraint || !create_table) {
+        printf("bind_constraint: Invalid table and constraint metadata.\n");
+        return false;
+    }
+
+    if (!context || !context->db) {
+        printf("bind_constraint: Invalid binding context.\n");
+        return false;
+    }
+
+    switch (constraint->type) {
+        case AST_CONSTRAINT_PRIMARY_KEY:
+            return bind_primary_key_constraint(constraint, create_table, context, owner_column_index);
+
+        case AST_CONSTRAINT_FOREIGN_KEY:
+            return bind_foreign_key_constraint(constraint, create_table, context, owner_column_index);
+
+        case AST_CONSTRAINT_UNIQUE:
+            return bind_unique_constraint(constraint, create_table, context, owner_column_index);
+
+        case AST_CONSTRAINT_CHECK:
+            return bind_check_constraint(constraint, create_table, context, owner_column_index);
+
+        case AST_CONSTRAINT_NOT_NULL:
+            return bind_not_null_constraint(constraint, create_table, context, owner_column_index);
+
+        case AST_CONSTRAINT_DEFAULT:
+            return bind_default_constraint(constraint, create_table, context, owner_column_index);
+
+        default:
+            printf("bind_constraint: Invalid constraint type.\n");
+            return false;
+    }
+}
+
+// Bind PRIMARY KEY constraint
+bool bind_primary_key_constraint(ConstraintNode *constraint, CreateTableNode *create_table,
+    BindingContext *context, int32_t owner_column_index) {
+    if (!constraint || constraint->type != AST_CONSTRAINT_PRIMARY_KEY || !create_table) {
+        printf("bind_primary_key_constraint: Invalid Constraint AST node.\n");
+        return false;
+    }
+    
+    if (!context || !context->db) {
+        printf("bind_primary_key_constraint: Invalid binding context.\n");
+        return false;
+    }
+
+    PrimaryKeyConstraintNode *primary = &constraint->constraint_data.primary_key;
+
+    if (!primary || !primary->column_refs || primary->num_columns == 0) {
+        printf("bind_primary_key_constraint: Invalid Primary Key constraint.\n");
+        return false;
+    }
+
+    if (owner_column_index >= 0 && primary->num_columns != 1) {
+        printf("bind_primary_key_constraint: Invalid column references in primary key.\n");
+        return false;
+    }
+
+    if (!validate_constraint_columns(primary->column_refs, primary->num_columns, create_table)) {
+        printf("bind_primary_key_constraint: Constraint column binding failed.\n");
+        return false;
+    }
+
+    // If the PRIMARY KEY is a column-level constraint, validate its column reference
+    if (owner_column_index >= 0) {
+        uint32_t index;
+
+        if (!resolve_create_table_column(
+                create_table, 
+                primary->column_refs[0]->expression_data.column_value.column_name,
+                &index) ||
+            index != (uint32_t)owner_column_index) {
+            printf("bind_primary_key_constraint: Constraint column resolution failed or column index mismatch.\n");
+            return false;
+        }
+    }   
+    
+    return true;
+}
+
+// Bind FOREIGN KEY constraint
+bool bind_foreign_key_constraint(ConstraintNode *constraint, CreateTableNode *create_table,
+    BindingContext *context, int32_t owner_column_index) {
+    if (!constraint || constraint->type != AST_CONSTRAINT_FOREIGN_KEY || !create_table) {
+        printf("bind_foreign_key_constraint: Invalid Constraint AST node.\n");
+        return false;
+    }
+
+    if (!context || !context->db) {
+        printf("bind_foreign_key_constraint: Invalid binding context.\n");
+        return false;
+    }
+
+    ForeignKeyConstraintNode *foreign = &constraint->constraint_data.foreign_key;
+
+    if (!foreign || foreign->referenced_table_name[0] == '\0' ||
+        !foreign->local_column_refs || foreign->num_local_columns == 0 ||
+        !foreign->referenced_column_refs || foreign->num_referenced_columns == 0 ||
+        foreign->num_local_columns != foreign->num_referenced_columns) {
+        printf("bind_foreign_key_constraint: Invalid Foreign Key constraint.\n");
+        return false;
+    }
+
+    if (!validate_constraint_columns(
+            foreign->local_column_refs, 
+            foreign->num_local_columns,
+            create_table)) {
+        printf("bind_foreign_constraint: Constraint column binding failed.\n");
+        return false;
+    }
+
+    // If the FOREIGN KEY is a column-level constraint, validate its column reference
+    if (owner_column_index >= 0) {
+        if (foreign->num_local_columns != 1) {
+            printf("bind_foreign_constraint: Invalid multiple columns in column-level foreign key.\n");
+            return false;
+        }
+
+        uint32_t index;
+
+        if (!resolve_create_table_column(
+                create_table,
+                foreign->local_column_refs[0]->expression_data.column_value.column_name,
+                &index) ||
+            index != (uint32_t)owner_column_index) {
+            printf("bind_foreign_key_constraint: Constraint column resolution failed or column index mismatch.\n");
+            return false;
+        }
+    }
+
+    // Determine if FOREIGN KEY references the same table
+    bool self_reference = strcmp(foreign->referenced_table_name, create_table->table_name) == 0;
+
+    Table *referenced_table = NULL;
+
+    // If it references another existing table, find that table
+    if (!self_reference) {
+        referenced_table = database_find_table(context->db, foreign->referenced_table_name);
+
+        if (!referenced_table || 
+            !referenced_table->table_schema ||
+            !referenced_table->table_schema->columns) {
+            printf("bind_foreign_key_constraint: Referenced table not found.\n");
+            return false;
+        }
+    }
+
+    uint32_t *referenced_indexes = calloc(foreign->num_referenced_columns, sizeof(uint32_t));
+
+    if (!referenced_indexes) {
+        printf("bind_foreign_key_constraint: Referenced indexes array could not be allocated.\n");
+        return false;
+    }
+
+    // Validate every local/referenced column pair
+    for (uint32_t i = 0; i < foreign->num_local_columns; i++) {
+        ExpressionNode *local_expr = foreign->local_column_refs[i];
+        ExpressionNode *referenced_expr = foreign->referenced_column_refs[i];
+
+        if (!local_expr || !referenced_expr ||
+            local_expr->type != EXPR_COLUMN_REF || referenced_expr->type != EXPR_COLUMN_REF) {
+            printf("bind_foreign_key_constraint: Invalid local/ref. column expressions.\n");
+            free(referenced_indexes);
+            return false;
+        }
+
+        ColumnRef *local_ref = &local_expr->expression_data.column_value;
+        ColumnRef *referenced_ref = &referenced_expr->expression_data.column_value;
+
+        uint32_t local_index;
+        uint32_t referenced_index;
+        DataType referenced_type;
+
+        // Resolve local column index
+        if (!resolve_create_table_column(create_table, local_ref->column_name, &local_index)) {
+            printf("bind_foreign_key_constraint: Local column index resolution failed.\n");
+            free(referenced_indexes);
+            return false;
+        }
+
+        if (local_index > INT32_MAX) {
+            printf("bind_foreign_key_constraint: Local column index exceeds max limit.\n");
+            free(referenced_indexes);
+            return false;
+        }
+
+        // Resolve referenced column index
+        if (!resolve_fk_referenced_column(
+                foreign, 
+                create_table,
+                referenced_table,
+                referenced_ref,
+                &referenced_index,
+                &referenced_type)) {
+            printf("bind_foreign_key_constraint: Local column index exceeds max limit.\n");
+            free(referenced_indexes);
+            return false;
+        }
+
+        referenced_indexes[i] = referenced_index;
+
+        const ColumnDefNode *local_column = create_table->columns->column_defs[local_index];
+        bool comparison_success = false;
+
+        // Compare data types between local and corresponding referenced column
+        if (self_reference) {
+            const ColumnDefNode *referenced_column = create_table->columns->column_defs[referenced_index];
+
+            comparison_success = fk_column_types_compatible(
+                local_column,
+                referenced_column,
+                NULL
+            );
+        }
+        else {
+            const Column *referenced_column = referenced_table->table_schema->columns[referenced_index];
+
+            comparison_success = fk_column_types_compatible(
+                local_column,
+                NULL,
+                referenced_column
+            );
+        }
+
+        if (!comparison_success) {
+            printf("bind_foreign_key_constraint: Data type mismatch between local and referenced columns.\n");
+            free(referenced_indexes);
+            return false;
+        }
+
+        // Reject duplicate referenced column names
+        for (uint32_t j = 0; j < i; j++) {
+            const ColumnRef *previous = 
+                &foreign->referenced_column_refs[j]->expression_data.column_value;
+
+            if (!strcmp(previous->column_name, referenced_ref->column_name)) {
+                printf("bind_foreign_key_constraint: Duplicate referenced column names.\n");
+                free(referenced_indexes);
+                return false;
+            }
+        }
+    }
+
+    // Verify that the referenced columns match a PRIMARY KEY or UNIQUE constraint's columns
+    bool valid_referenced_key = false;
+
+    if (self_reference) {
+        valid_referenced_key = fk_matches_create_table_key(
+            create_table,
+            foreign->referenced_column_refs,
+            foreign->num_referenced_columns
+        );
+    }
+    else {
+        valid_referenced_key = fk_matches_schema_key(
+            referenced_table->table_schema,
+            referenced_indexes,
+            foreign->num_referenced_columns
+        );
+    }
+
+    free(referenced_indexes);
+
+    if (!valid_referenced_key) {
+        printf("bind_foreign_key_constraint: Referenced columns are not a PRIMARY KEY or UNIQUE key.\n");
+        return false;
+    }
+
+    return true;
+}
+
+// Bind UNIQUE constraint
+bool bind_unique_constraint(ConstraintNode *constraint, CreateTableNode *create_table,
+    BindingContext *context, int32_t owner_column_index) {
+    if (!constraint || constraint->type != AST_CONSTRAINT_UNIQUE || !create_table) {
+        printf("bind_unique_constraint: Invalid Constraint AST node.\n");
+        return false;
+    }
+
+    if (!context || !context->db) {
+        printf("bind_unique_constraint: Invalid binding context.\n");
+        return false;
+    }
+
+    UniqueConstraintNode *unique = &constraint->constraint_data.unique;
+
+    if (!unique || !unique->column_refs || unique->num_columns == 0) {
+        printf("bind_unique_constraint: Invalid Unique constraint.\n");
+        return false;
+    }
+
+    if (owner_column_index >= 0 && unique->num_columns != 1) {
+        printf("bind_unique_constraint: Invalid column references in primary key.\n");
+        return false;
+    }
+
+    if (!validate_constraint_columns(unique->column_refs, unique->num_columns, create_table)) {
+        printf("bind_unique_constraint: Constraint column binding failed.\n");
+        return false;
+    }
+
+    // If the UNIQUE is a column-level constraint, validate its column reference
+    if (owner_column_index >= 0) {
+        uint32_t index;
+
+        if (!resolve_create_table_column(
+                create_table, 
+                unique->column_refs[0]->expression_data.column_value.column_name,
+                &index) ||
+            index != (uint32_t)owner_column_index) {
+            printf("bind_unique_constraint: Constraint column resolution failed or column index mismatch.\n");
+            return false;
+        }
+    }   
+
+    return true;
+}
+
+// Bind CHECK constraint
+bool bind_check_constraint(ConstraintNode *constraint, CreateTableNode *create_table,
+    BindingContext *context, int32_t owner_column_index) {
+    if (!constraint || constraint->type != AST_CONSTRAINT_CHECK || !create_table) {
+        printf("bind_check_constraint: Invalid Constraint AST node.\n");
+        return false;
+    }
+
+    if (!context || !context->db) {
+        printf("bind_check_constraint: Invalid binding context.\n");
+        return false;
+    }
+
+    CheckConstraintNode *check = &constraint->constraint_data.check;
+
+    if (!check || !check->check_expr) {
+        printf("bind_check_constraint: Invalid Check constraint.\n");
+        return false;
+    }
+
+    BindingRelation relation = {0};
+    relation.create_table = create_table;
+
+    BindingContext check_context = {0};
+    check_context.db = context->db;
+    check_context.relations = &relation;
+    check_context.num_relations = 1;
+    check_context.current_clause = BIND_CLAUSE_CHECK;
+
+    BoundExpressionType result_type = {0};
+
+    if (!bind_scalar_expression(check->check_expr, &check_context, &result_type)) {
+        printf("bind_check_constraint: CHECK expression binding failed.\n");
+        return false;
+    }
+
+    if (result_type.is_untyped_null || result_type.type != BOOL) {
+        printf("bind_check_constraint: CHECK expression must be boolean.\n");
+        return false;
+    }
+
+    return true;
+}
+
+// Bind NOT NULL constraint
+bool bind_not_null_constraint(ConstraintNode *constraint, CreateTableNode *create_table,
+    BindingContext *context, int32_t owner_column_index) {
+    if (!constraint || constraint->type != AST_CONSTRAINT_NOT_NULL || !create_table) {
+        printf("bind_not_null_constraint: Invalid Constraint AST node.\n");
+        return false;
+    }
+
+    if (!context || !context->db) {
+        printf("bind_not_null_constraint: Invalid binding context.\n");
+        return false;
+    }
+
+    NotNullConstraintNode *not_null = &constraint->constraint_data.not_null;
+
+    if (!not_null || !not_null->column_ref || not_null->column_ref->type != EXPR_COLUMN_REF) {
+        printf("bind_not_null_constraint: Invalid NOT NULL constraint.\n");
+        return false;
+    }
+
+    ColumnRef *column_ref = &not_null->column_ref->expression_data.column_value;
+
+    if (column_ref->column_name[0] == '\0' || column_ref->column_index != -1 ||
+        column_ref->relation_index != -1) {
+        printf("bind_not_null_constraint: Invalid initialized column reference.\n");
+        return false;
+    }
+
+    if (column_ref->table_name[0] != '\0' &&
+        strcmp(column_ref->table_name, create_table->table_name)) {
+        printf("bind_not_null_constraint: Invalid qualified column reference.\n");
+        return false;
+    }
+
+    uint32_t index;
+
+    if (!resolve_create_table_column(create_table, column_ref->column_name, &index)) {
+        printf("bind_not_null_constraint: Constraint column resolution failed.\n");
+        return false;
+    }
+
+    if (index > INT32_MAX) {
+        printf("bind_not_null_constraint: Column index exceeds INT32_MAX.\n");
+        return false;
+    }
+
+    // Column-level NOT NULL must refer to its owner
+    if (owner_column_index >= 0 && index != (uint32_t)owner_column_index) {
+        printf("bind_not_null_constraint: Invalid column index.\n");
+        return false;
+    }
+
+    return true;
+}
+
+// Bind DEFAULT constraint
+bool bind_default_constraint(ConstraintNode *constraint, CreateTableNode *create_table,
+    BindingContext *context, int32_t owner_column_index) {
+    if (!constraint || constraint->type != AST_CONSTRAINT_DEFAULT || !create_table) {
+        printf("bind_default_constraint: Invalid Constraint AST node.\n");
+        return false;
+    }
+
+    if (!context || !context->db) {
+        printf("bind_default_constraint: Invalid binding context.\n");
+        return false;
+    }
+
+    DefaultConstraintNode *default_value = &constraint->constraint_data.default_value;
+
+    if (!default_value || default_value->column_name[0] == '\0' || !default_value->default_expr) {
+        printf("bind_default_constraint: Invalid Default constraint.\n");
+        return false;
+    }
+
+    uint32_t index;
+
+    if (!resolve_create_table_column(create_table, default_value->column_name, &index)) {
+        printf("bind_default_constraint: Constraint column resolution failed.\n");
+        return false;
+    }
+
+    if (owner_column_index >= 0 && index != (uint32_t)owner_column_index) {
+        printf("bind_default_constraint: Invalid column index.\n");
+        return false;
+    }
+
+    ColumnDefNode *column = create_table->columns->column_defs[index];
+
+    // Bind DEFAULT scalar expression
+    BindingClause previous_clause = context->current_clause;
+    context->current_clause = BIND_CLAUSE_DEFAULT;
+
+    BoundExpressionType result_type = {0};
+
+    bool success = bind_scalar_expression(default_value->default_expr, context, &result_type);
+
+    context->current_clause = previous_clause;
+
+    if (!success) {
+        printf("bind_default_constraint: DEFAULT expression binding failed.\n");
+        return false;
+    }
+
+    // If the expression is a Literal,  
+    // validate that its data type can be assigned to the corresponding column
+    if (!result_type.is_untyped_null) {
+        if (default_value->default_expr->type == EXPR_LITERAL) {
+            Literal *literal = &default_value->default_expr->expression_data.literal_value;
+
+            if (!literal->literal) {
+                printf("bind_default_constraint: Invalid literal.\n");
+                return false;
+            }
+
+            // Typed NULL literals are handled by the NULL validation pass
+            if (!literal->literal->null_val &&
+                !value_can_assign(column->type, literal->literal)) {
+                printf("bind_default_constraint: Incompatible literal.\n");
+                return false;
+            }
+        }
+        else if (!value_types_assignable(column->type, result_type.type)) {
+            printf("bind_default_constraint: Incompatible DEFAULT type.\n");
+            return false;
+        }
+    }
+
+    return true;
+}
 
 bool bind_alter_action(AlterActionNode *action, BindingContext *context);
 
@@ -1842,7 +2532,7 @@ bool bind_alter_add_constraint(AlterActionNode *action, BindingContext *context)
 bool bind_alter_drop_constraint(AlterActionNode *action, BindingContext *context);
 
 
-/* ---------- Cross-Clause Validation Helpers ---------- */
+/* ---------- Binding Context Management ---------- */
 
 // Register a table in the binding context, used by FROM and JOIN binding
 bool register_binding_relation(const char *table_name, const char *alias, BindingContext *context) {
@@ -1922,6 +2612,9 @@ bool register_binding_relation(const char *table_name, const char *alias, Bindin
 
     return true;
 }
+
+
+/* ---------- SELECT Grouping and Aggregate Validation ---------- */
 
 // Validate Projection expressions against GROUP BY expressions
 bool validate_grouped_projection(ProjectionNode *projection, GroupByNode *group_by,
@@ -2269,6 +2962,9 @@ bool validate_grouped_order_by(OrderByNode *order_by, GroupByNode *group_by) {
 
     return true;
 }
+
+
+/* ---------- INSERT Assignment Validation and Output Construction ---------- */
 
 // Check assignment compatibility between columns and corresponding inserted values
 bool validate_insert_assignments(IntoNode *into, ValuesNode *values, 
@@ -2670,6 +3366,9 @@ cleanup:
     return success;
 }
 
+
+/* ---------- UPDATE Assignment Validation and Output Construction ---------- */
+
 // Check assignment compatibility between columns and corresponding update values
 bool validate_update_assignments(SetNode *set, const BoundExpressionType *value_types, 
     BindingContext *context) {
@@ -2884,6 +3583,9 @@ bool build_bound_update_values(SetNode *set, const BoundExpressionType *value_ty
     return true;
 }
 
+
+/* ---------- DELETE Output Construction ---------- */
+
 // Build delete output
 bool build_bound_delete_values(WhereNode *where, BindingContext *context, 
     BoundDeleteValues *out_values) {
@@ -2912,5 +3614,1042 @@ bool build_bound_delete_values(WhereNode *where, BindingContext *context,
     out_values->table = table;
     out_values->where = where;
 
+    return true;
+}
+
+
+/* ---------- CREATE TABLE Column Resolution and Constraint Validation ---------- */
+
+// Resolves column index for a column name in the new table schema
+bool resolve_create_table_column(const CreateTableNode *create_table, const char *column_name,
+    uint32_t *out_index) {
+    if (!create_table || !create_table->columns || !create_table->columns->column_defs ||
+        !column_name || column_name[0] == '\0' || !out_index) {
+        printf("resolve_create_table_column: Invalid arguments.\n");
+        return false;
+    }
+
+    ColumnsNode *columns = create_table->columns;
+
+    for (uint32_t i = 0; i < columns->num_column_defs; i++) {
+        ColumnDefNode *column = columns->column_defs[i];
+
+        if (!column || column->column_name[0] == '\0') {
+            printf("resolve_create_table_column: Invalid column definition.\n");
+            return false;
+        }
+
+        if (!strcmp(column->column_name, column_name)) {
+            *out_index = i;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// Validates a constraint's column references
+bool validate_constraint_columns(ExpressionNode **column_refs, uint32_t count,
+    const CreateTableNode *create_table) {
+    if (!column_refs || count == 0 || !create_table) {
+        printf("validate_constraint_columns: Invalid input arguments.\n");
+        return false;
+    }
+
+    for (uint32_t i = 0; i < count; i++) {
+        if (!column_refs[i] || column_refs[i]->type != EXPR_COLUMN_REF) {
+            printf("validate_constraint_columns: Invalid column reference expression.\n");
+            return false;
+        }
+
+        ColumnRef *column_ref = &column_refs[i]->expression_data.column_value;
+
+        if (column_ref->column_name[0] == '\0' || column_ref->column_index != -1 ||
+            column_ref->relation_index != -1) {
+            printf("validate_constraint_columns: Invalid column reference.\n");
+            return false;
+        }
+
+        // A proposed-table column must be unqualified or 
+        // explicitly qualified by the proposed table name.
+        if (column_ref->table_name[0] != '\0' &&
+            strcmp(column_ref->table_name, create_table->table_name)) {
+            printf("validate_constraint_columns: Invalid table qualifier.\n");
+            return false;
+        }
+
+        uint32_t index;
+
+        if (!resolve_create_table_column(create_table, column_ref->column_name, &index)) {
+            printf("validate_constraint_columns: column resolution failed.\n");
+            return false;
+        }
+
+        if (index > INT32_MAX) {
+            printf("validate_constraint_columns: Column index exceeds INT32_MAX.\n");
+            return false;
+        }
+
+        for (uint32_t j = 0; j < i; j++) {
+            ColumnRef *previous = &column_refs[j]->expression_data.column_value;
+
+            if (!strcmp(column_ref->column_name, previous->column_name)) {
+                printf("validate_constraint_columns: Duplicate column references.\n");
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+// Validates one PRIMARY KEY constraint among all column-level and table-level constraints
+bool validate_primary_key_count(const CreateTableNode *create_table) {
+    if (!create_table || !create_table->columns || !create_table->columns->column_defs) {
+        printf("validate_primary_key_count: Invalid input arguments.\n");
+        return false;
+    }
+
+    uint32_t primary_key_count = 0;
+
+    // Count primary key constraints in the column-level constraints
+    for (uint32_t i = 0; i < create_table->columns->num_column_defs; i++) {
+        ColumnDefNode *column = create_table->columns->column_defs[i];
+
+        if (!column || (column->num_constraints > 0 && !column->constraints)) {
+            printf("validate_primary_key_count: Invalid Column Definition node.\n");
+            return false;
+        }
+
+        for (uint32_t j = 0; j < column->num_constraints; j++) {
+            if (!column->constraints || !column->constraints[j]) {
+                printf("validate_primary_key_count: Invalid Column Definition constraint.\n");
+                return false;
+            }
+
+            if (column->constraints[j]->type == AST_CONSTRAINT_PRIMARY_KEY) {
+                primary_key_count++;
+
+                if (primary_key_count > 1) {
+                    return false;
+                }
+            }
+        }
+    }
+
+    if (create_table->num_constraints > 0 && !create_table->constraints) {
+        printf("validate_primary_key_count: Invalid table-level constraints.\n");
+        return false;
+    }
+
+    // Count primary key constraints in the table-level constraint
+    for (uint32_t i = 0; i < create_table->num_constraints; i++) {
+        if (!create_table->constraints || !create_table->constraints[i]) {
+            printf("validate_primary_key_count: Invalid table-level constraint.\n");
+            return false;
+        }
+
+        if (create_table->constraints[i]->type == AST_CONSTRAINT_PRIMARY_KEY) {
+            primary_key_count++;
+
+            if (primary_key_count > 1) {
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+// Retrieves a particular constraint as if column-level and table-level constraints were a single array
+const ConstraintNode *get_create_table_constraint(const CreateTableNode *create_table,
+    uint32_t position) {
+    
+    // Column-level constraint
+    if (position < create_table->num_constraints) {
+        return create_table->constraints[position];
+    }
+
+    position -= create_table->num_constraints;
+
+    // Table-level constraint
+    for (uint32_t i = 0; i < create_table->columns->num_column_defs; i++) {
+        const ColumnDefNode *column = create_table->columns->column_defs[i];
+
+        if (!column || (column->num_constraints > 0 && !column->constraints)) {
+            printf("get_create_table_constraint: Invalid column definition.\n");
+            return NULL;
+        }
+
+        if (position < column->num_constraints) {
+            return column->constraints[position];
+        }
+
+        position -= column->num_constraints;
+    }
+
+    return NULL;
+}
+
+// Checks the uniqueness of constraint names
+bool validate_create_table_constraint_names(const CreateTableNode *create_table) {
+    if (!create_table || !create_table->columns ||
+        !create_table->columns->column_defs ||
+        (create_table->num_constraints > 0 && !create_table->constraints)) {
+        printf("validate_create_table_constraint_names: Invalid Create Table node.\n");
+        return false;
+    }
+
+    uint32_t total = create_table->num_constraints;
+
+    for (uint32_t i = 0; i < create_table->columns->num_column_defs; i++) {
+        const ColumnDefNode *column = create_table->columns->column_defs[i];
+
+        if (!column || (column->num_constraints > 0 && !column->constraints) ||
+            UINT32_MAX - total < column->num_constraints) {
+            printf("validate_create_table_constraint_names: Invalid column definition.\n");
+            return false;
+        }
+
+        total += column->num_constraints;
+    }
+
+    for (uint32_t i = 0; i < total; i++) {
+        const ConstraintNode *current = get_create_table_constraint(create_table, i);
+
+        if (!current) {
+            printf("validate_create_table_constraint_names: Invalid constraint.\n");
+            return false;
+        }
+
+        if (current->constraint_name[0] == '\0') {
+            continue;
+        }
+
+        for (uint32_t j = 0; j < i; j++) {
+            const ConstraintNode *previous = get_create_table_constraint(create_table, j);
+
+            if (!previous) {
+                printf("validate_create_table_constraint_names: Invalid constraint.\n");
+                return false;
+            }
+
+            if (previous->constraint_name[0] != '\0' &&
+                !strcmp(current->constraint_name, previous->constraint_name)) {
+                printf("validate_create_table_constraint_names: Duplicate constraint name.\n");
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+
+/* ---------- CREATE TABLE Foreign Key Validation ---------- */
+
+// Resolves FOREIGN KEY constraint's referenced columns
+bool resolve_fk_referenced_column(const ForeignKeyConstraintNode *fk,
+    const CreateTableNode *create_table, const Table *referenced_table,
+    const ColumnRef *ref, uint32_t *out_index, DataType *out_type) {
+
+    if (!fk || !create_table || !ref || !out_index || !out_type) {
+        printf("resolve_fk_referenced_column: Invalid input arguments.\n");
+        return false;
+    }
+
+    if (ref->column_name[0] == '\0' || ref->column_index != -1 || ref->relation_index != -1) {
+        printf("resolve_fk_referenced_column: Invalid initialized column reference.\n");
+        return false;
+    }
+
+    if (ref->table_name[0] != '\0' &&
+        strcmp(ref->table_name, fk->referenced_table_name)) {
+        printf("resolve_fk_referenced_column: Invalid qualified column reference.\n");
+        return false;
+    }
+
+    bool self_reference = strcmp(fk->referenced_table_name, create_table->table_name) == 0;
+
+    if (self_reference) {
+        if (!resolve_create_table_column(create_table, ref->column_name, out_index)) {
+            printf("resolve_fk_referenced_column: Referenced column not found.\n");
+            return false;
+        }
+
+        if (*out_index > INT32_MAX) {
+            printf("resolve_fk_referenced_column: Referenced column index exceeds INT32_MAX.\n");
+            return false;
+        }
+
+        const ColumnDefNode *column = create_table->columns->column_defs[*out_index];
+
+        if (!column) {
+            printf("resolve_fk_referenced_column: Invalid referenced column.\n");
+            return false;
+        }
+
+        *out_type = column->type;
+        return true;
+    }
+
+    // Only required for a non-self-reference
+    if (!referenced_table ||
+        !referenced_table->table_schema ||
+        !referenced_table->table_schema->columns) {
+        printf("resolve_fk_referenced_column: Invalid referenced table.\n");
+        return false;
+    }
+
+    for (uint32_t i = 0; i < referenced_table->table_schema->num_columns; i++) {
+        const Column *column = referenced_table->table_schema->columns[i];
+
+        if (!column) {
+            printf("resolve_fk_referenced_column: Invalid referenced column.\n");
+            return false;
+        }
+
+        if (!strcmp(column->name, ref->column_name)) {
+            if (i > INT32_MAX) {
+                printf("resolve_fk_referenced_column: Referenced column index exceeds max limit.\n");
+                return false;
+            }
+
+            *out_index = i;
+            *out_type = column->type;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// Check whether local column and referenced column have the same data type
+// and type parameters accordingly
+bool fk_column_types_compatible(const ColumnDefNode *local_column,
+    const ColumnDefNode *self_referenced_column, const Column *external_referenced_column) {
+    
+    if (!local_column ||
+        (self_referenced_column == NULL) == (external_referenced_column == NULL)) {
+        return false;
+    }
+
+    DataType referenced_type;
+    const DataTypeArgs *referenced_type_args;
+
+
+    if (self_referenced_column) {
+        referenced_type = self_referenced_column->type;
+        referenced_type_args = &self_referenced_column->type_args;
+    }
+    else {
+        referenced_type = external_referenced_column->type;
+        referenced_type_args = &external_referenced_column->type_args;
+    }
+
+    // Compare data types
+    if (local_column->type != referenced_type) {
+        return false;
+    }
+
+    // Compare type parameters for CHAR/VARCHAR/NUMERIC
+    switch (local_column->type) {
+        case CHAR:
+        case VARCHAR:
+            return local_column->type_args.length == referenced_type_args->length;
+
+        case NUMERIC:
+            return (
+                local_column->type_args.precision == referenced_type_args->precision &&
+                local_column->type_args.scale == referenced_type_args->scale
+            );
+
+        default:
+            return true;
+    }
+}
+
+// Verify whether the referenced key completely matches a PRIMARY KEY or a UNIQUE key
+bool fk_ast_key_matches(ExpressionNode **key_refs, uint32_t key_count,
+    ExpressionNode **referenced_refs, uint32_t referenced_count) {
+    if (!key_refs || !referenced_refs || key_count != referenced_count) {
+        printf("fk_ast_key_matches: Invalid input arguments.\n");
+        return false;
+    }
+
+    for (uint32_t i = 0; i < key_count; i++) {
+        if (!key_refs[i] || 
+            !referenced_refs[i] || 
+            key_refs[i]->type != EXPR_COLUMN_REF ||
+            referenced_refs[i]->type != EXPR_COLUMN_REF) {
+            printf("fk_ast_key_matches: Invalid local/referenced column expressions.\n");
+            return false;
+        }
+
+        const char *key_name = key_refs[i]->expression_data.column_value.column_name;
+        const char *referenced_name = referenced_refs[i]->expression_data.column_value.column_name;
+
+        if (strcmp(key_name, referenced_name)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+// Verify that the referenced key matches either a PRIMARY KEY or UNIQUE constraint 
+bool fk_matches_create_table_key(const CreateTableNode *create_table, ExpressionNode **referenced_refs,
+    uint32_t referenced_count) {
+
+    if (!create_table ||
+        !create_table->columns ||
+        !create_table->columns->column_defs ||
+        !referenced_refs ||
+        referenced_count == 0) {
+        printf("fk_matches_create_table_key: Invalid input arguments.\n");
+        return false;
+    }
+
+    uint32_t total_constraints = create_table->num_constraints;
+
+    for (uint32_t i = 0; i < create_table->columns->num_column_defs; i++) {
+        const ColumnDefNode *column = create_table->columns->column_defs[i];
+
+        if (!column ||
+            (column->num_constraints > 0 && !column->constraints) ||
+            UINT32_MAX - total_constraints < column->num_constraints) {
+            printf("fk_matches_create_table_key: Invalid column definition.\n");
+            return false;
+        }
+
+        total_constraints += column->num_constraints;
+    }
+
+    for (uint32_t i = 0; i < total_constraints; i++) {
+        const ConstraintNode *candidate = get_create_table_constraint(create_table, i);
+
+        if (!candidate) {
+            printf("fk_matches_create_table_key: Invalid constraint.\n");
+            return false;
+        }
+
+        switch (candidate->type) {
+            case AST_CONSTRAINT_PRIMARY_KEY: {
+                const PrimaryKeyConstraintNode *pk = &candidate->constraint_data.primary_key;
+
+                if (fk_ast_key_matches(
+                        pk->column_refs, 
+                        pk->num_columns, 
+                        referenced_refs, 
+                        referenced_count)) {
+                    return true;
+                }
+
+                break;
+            }
+
+            case AST_CONSTRAINT_UNIQUE: {
+                const UniqueConstraintNode *unique =
+                    &candidate->constraint_data.unique;
+
+                if (fk_ast_key_matches(unique->column_refs, unique->num_columns, referenced_refs, referenced_count)) {
+                    return true;
+                }
+
+                break;
+            }
+
+            default:
+                break;
+        }
+    }
+
+    printf("fk_matches_create_table_key: Referenced key doesn't match a PRIMARY KEY or UNIQUE constraint key.\n");
+    return false;
+}
+
+// Validates that the FOREIGN KEY matches a PRIMARY KEY or UNIQUE constraint from the existing table
+bool fk_matches_schema_key(const Schema *schema, const uint32_t *referenced_indexes,
+    uint32_t num_referenced_columns) {
+    if (!schema || !referenced_indexes || num_referenced_columns == 0) {
+        printf("fk_matches_schema_key: Invalid arguments.\n");
+        return false;
+    }
+
+    if (!schema->columns || schema->num_columns == 0 ||
+        !schema->constraints || schema->num_constraints == 0) {
+        printf("fk_matches_schema_key: Invalid referenced schema.\n");
+        return false;
+    }
+
+    for (uint32_t i = 0; i < schema->num_constraints; i++) {
+        const Constraint *constraint = schema->constraints[i];
+
+        if (!constraint) {
+            printf("fk_matches_schema_key: Invalid constraint.\n");
+            return false;
+        }
+
+        const uint32_t *key_indexes = NULL;
+        uint32_t key_count = 0;
+
+        if (constraint->type == PRIMARY_KEY) {
+            const PrimaryKeyConstraint *pk = &constraint->constraint_data.primary_key;
+
+            key_indexes = pk->primary_key_columns;
+            key_count = pk->amount_columns;
+        }
+        else if (constraint->type == UNIQUE) {
+            const UniqueConstraint *unique = &constraint->constraint_data.unique_cols;
+
+            key_indexes = unique->column_refs;
+            key_count = unique->amount_columns;
+        }
+        else {
+            continue;
+        }
+
+        if (!key_indexes || key_count == 0) {
+            printf("fk_matches_schema_key: Invalid key metadata.\n");
+            return false;
+        }
+
+        if (key_count != num_referenced_columns) {
+            continue;
+        }
+
+        bool matches = true;
+
+        for (uint32_t j = 0; j < key_count; j++) {
+            if (key_indexes[j] != referenced_indexes[j]) {
+                matches = false;
+                break;
+            }
+        }
+
+        if (matches) {
+            return true;
+        }
+    }
+
+    printf("fk_matches_schema_key: No matching PRIMARY KEY or UNIQUE key.\n");
+    return false;
+}
+
+
+/* ---------- CREATE TABLE Default and Nullability Validation ---------- */
+
+// Helper that checks whether an expression is a NULL literal
+bool expression_is_explicit_null_literal(const ExpressionNode *expr) {
+    if (!expr) {
+        printf("expression_is_explicit_null_literal: NULL expression.\n");
+        return false;
+    }
+
+    // An expression that is not a literal cannot be an explicit NULL literal.
+    if (expr->type != EXPR_LITERAL) {
+        return false;
+    }
+
+    const Literal *literal = &expr->expression_data.literal_value;
+
+    return literal->is_untyped_null || (literal->literal != NULL && literal->literal->null_val);
+}
+
+// Helper that checks whether a constraint's key contains a particular column
+bool constraint_key_contains_column(ExpressionNode *const *column_refs, uint32_t count,
+    const char *column_name) {
+    if (!column_refs || !column_name) {
+        printf("constraint_key_contains_column: Invalid input arguments.\n");
+        return false;
+    }
+
+    for (uint32_t i = 0; i < count; i++) {
+        const ExpressionNode *expr = column_refs[i];
+
+        if (!expr || expr->type != EXPR_COLUMN_REF) {
+            printf("constraint_key_contains_column: Invalid column reference expression.\n");
+            return false;
+        }
+
+        if (!strcmp(expr->expression_data.column_value.column_name, column_name)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// Validate conflicting DEFAULT constraints among column-level and table-level constraints 
+bool validate_create_table_defaults(const CreateTableNode *create_table) {
+    if (!create_table || !create_table->columns || !create_table->columns->column_defs ||
+        (create_table->num_constraints > 0 && !create_table->constraints)) {
+        printf("validate_create_table_defaults: Invalid CREATE TABLE node.\n");
+        return false;
+    }
+
+    const ColumnsNode *columns = create_table->columns;
+
+    // Traverse all Column definitions
+    for (uint32_t i = 0; i < columns->num_column_defs; i++) {
+        const ColumnDefNode *column = columns->column_defs[i];
+
+        if (!column || (column->num_constraints > 0 && !column->constraints)) {
+            printf("validate_create_table_defaults: Invalid Column Definition node.\n");
+            return false;
+        }
+
+        bool requires_non_null = false;
+        bool has_default = false;
+        bool has_null_default = false;
+
+        // Inspect constraints declared on this Column definition
+        for (uint32_t j = 0; j < column->num_constraints; j++) {
+            const ConstraintNode *constraint = column->constraints[j];
+
+            if (!constraint) {
+                printf("validate_create_table_defaults: Invalid Column Definition node.\n");
+                return false;
+            }
+
+            switch (constraint->type) {
+                case AST_CONSTRAINT_PRIMARY_KEY: {
+                    const PrimaryKeyConstraintNode *primary_key_con = &constraint->constraint_data.primary_key;
+
+                    if (constraint_key_contains_column(
+                            primary_key_con->column_refs, 
+                            primary_key_con->num_columns, 
+                            column->column_name)) {
+                        requires_non_null = true;
+                    }
+                    break;
+                }
+
+                case AST_CONSTRAINT_NOT_NULL:
+                    requires_non_null = true;
+                    break;
+
+                case AST_CONSTRAINT_DEFAULT: {
+                    const DefaultConstraintNode *default_con = &constraint->constraint_data.default_value;
+
+                    if (strcmp(default_con->column_name, column->column_name) != 0 || 
+                        !default_con->default_expr || 
+                        has_default) {
+                        printf("validate_create_table_defaults: Invalid DEFAULT constraint.\n");
+                        return false;
+                    }
+
+                    has_default = true;
+                    has_null_default = expression_is_explicit_null_literal(default_con->default_expr);
+                    break;
+                }
+
+                default:
+                    break;
+            }
+        }
+
+        // Inspect table-level constraints affecting this column
+        for (uint32_t j = 0; j < create_table->num_constraints; j++) {
+            const ConstraintNode *constraint = create_table->constraints[j];
+
+            if (!constraint) {
+                printf("validate_create_table_defaults: Invalid Column Definition node.\n");
+                return false;
+            }
+
+            if (constraint->type == AST_CONSTRAINT_PRIMARY_KEY) {
+                const PrimaryKeyConstraintNode *primary_key = &constraint->constraint_data.primary_key;
+
+                if (constraint_key_contains_column(
+                        primary_key->column_refs,
+                        primary_key->num_columns,
+                        column->column_name)) {
+                    requires_non_null = true;
+                }
+            }
+        }
+
+        if (requires_non_null && has_null_default) {
+            printf("validate_create_table_defaults: NULL DEFAULT on required column '%s'.\n", column->column_name);
+            return false;
+        }
+    }
+
+    return true;
+}
+
+
+/* ---------- CREATE TABLE Pending Reference Collection and Commit ---------- */
+
+// Add a validated relation and column index resolutions without modifying the AST
+bool pending_binding_add(PendingColumnBindings *pending, ColumnRef *column_ref, uint32_t column_index) {
+
+    if (!pending || !column_ref ||
+        column_ref->column_name[0] == '\0' ||
+        column_ref->relation_index != -1 ||
+        column_ref->column_index != -1 ||
+        column_index > INT32_MAX) {
+        printf("pending_binding_add: Invalid input arguments.\n");
+        return false;
+    }
+
+    // Reject the same AST reference being collected twice
+    for (size_t i = 0; i < pending->count; i++) {
+        if (pending->items[i].ref == column_ref) {
+            printf("pending_binding_add: Duplicate column reference addition failed.\n");
+            return false;
+        }
+    }
+
+    if (pending->count == pending->capacity) {
+        size_t new_capacity = pending->capacity == 0 ? 8 : pending->capacity * 2;
+
+        if (new_capacity < pending->capacity ||
+            new_capacity > SIZE_MAX / sizeof(PendingColumnBinding)) {
+            printf("pending_binding_add: Invalid updated capacity of pending column bindings.\n");
+            return false;
+        }
+
+        PendingColumnBinding *new_items = realloc(
+            pending->items,
+            new_capacity * sizeof(PendingColumnBinding)
+        );
+
+        if (!new_items) {
+            printf("pending_binding_add: Reallocation of pending column binding array failed.\n");
+            return false;
+        }
+
+        pending->items = new_items;
+        pending->capacity = new_capacity;
+    }
+
+    // Append new pending column biding
+    pending->items[pending->count++] = (PendingColumnBinding) {
+        .ref = column_ref,
+        .relation_index = 0,
+        .column_index = (int32_t)column_index
+    };
+
+    return true;
+}
+
+
+// Collect a reference to a column in the proposed table
+bool collect_local_column_ref(ExpressionNode *expr, const CreateTableNode *create_table,
+    PendingColumnBindings *pending) {
+    if (!expr || 
+        expr->type != EXPR_COLUMN_REF ||
+        !create_table || !pending) {
+        printf("collect_local_column_ref: Invalid input arguments.\n");
+        return false;
+    }
+
+    ColumnRef *column_ref = &expr->expression_data.column_value;
+
+    if (column_ref->table_name[0] != '\0' &&
+        strcmp(column_ref->table_name, create_table->table_name) != 0) {
+        printf("collect_local_column_ref: Invalid name-qualified column reference.\n");
+        return false;
+    }
+
+    uint32_t index = 0;
+
+    if (!resolve_create_table_column(create_table, column_ref->column_name, &index)) {
+        printf("collect_local_column_ref: Column reference index resolution failed.\n");
+        return false;
+    }
+
+    return pending_binding_add(pending, column_ref, index);
+}
+
+
+// Collect a reference to an FOREIGN KEY's referenced table
+bool collect_fk_referenced_column_ref(ExpressionNode *expr, const ForeignKeyConstraintNode *fk,
+    const CreateTableNode *create_table, Database *db, PendingColumnBindings *pending) {
+    if (!expr || 
+        expr->type != EXPR_COLUMN_REF ||
+        !fk || !create_table || !db || !pending) {
+        printf("collect_fk_referenced_column_ref: Invalid input arguments.\n");
+        return false;
+    }
+
+    bool self_reference = strcmp(fk->referenced_table_name, create_table->table_name) == 0;
+
+    Table *referenced_table = NULL;
+
+    if (!self_reference) {
+        referenced_table = database_find_table(db, fk->referenced_table_name);
+
+        if (!referenced_table) {
+            printf("collect_fk_referenced_column_ref: Referenced table doesn't exist.\n");
+            return false;
+        }
+    }
+
+    ColumnRef *column_ref = &expr->expression_data.column_value;
+
+    uint32_t index = 0;
+    DataType referenced_type;
+
+    if (!resolve_fk_referenced_column(
+            fk,
+            create_table,
+            referenced_table,
+            column_ref,
+            &index,
+            &referenced_type)) {
+        printf("collect_fk_referenced_column_ref: Referenced column index resolution failed.\n");
+        return false;
+    }
+
+    // Indexes on referenced FK columns are relative
+    // to the referenced table, not the newly created table
+    return pending_binding_add(pending, column_ref, index);
+}
+
+
+// Recursively collect column references from CHECK expressions
+bool collect_create_table_expression_refs(ExpressionNode *expr, const CreateTableNode *create_table, 
+    PendingColumnBindings *pending) {
+    if (!expr || !create_table || !pending) {
+        printf("collect_create_table_expression_refs: Invalid input arguments.\n");
+        return false;
+    }
+
+    switch (expr->type) {
+        case EXPR_LITERAL:
+            return true;
+
+        case EXPR_COLUMN_REF:
+            return collect_local_column_ref(expr, create_table, pending);
+
+        case EXPR_UNARY:
+            return collect_create_table_expression_refs(
+                expr->expression_data.unary_expr.operand,
+                create_table, pending
+            );
+
+        case EXPR_BINARY:
+            return (
+                collect_create_table_expression_refs(
+                    expr->expression_data.binary_expr.left_operand,
+                    create_table, pending
+                ) &&
+                collect_create_table_expression_refs(
+                    expr->expression_data.binary_expr.right_operand,
+                    create_table, pending
+                )
+            );
+
+        case EXPR_IS_NULL:
+            return collect_create_table_expression_refs(
+                expr->expression_data.is_null_expr.operand,
+                create_table, pending
+            );
+
+        case EXPR_IS_NOT_NULL:
+            return collect_create_table_expression_refs(
+                expr->expression_data.is_not_null_expr.operand,
+                create_table, pending
+            );
+
+        case EXPR_IN: {
+            In *in = &expr->expression_data.in_expr;
+
+            if (!in->operand || !in->set_options ||
+                in->option_count == 0) {
+                return false;
+            }
+
+            if (!collect_create_table_expression_refs(
+                    in->operand, create_table, pending)) {
+                return false;
+            }
+
+            for (uint32_t i = 0; i < in->option_count; i++) {
+                if (!collect_create_table_expression_refs(
+                        in->set_options[i],
+                        create_table,
+                        pending)) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        case EXPR_BETWEEN: {
+            Between *between = &expr->expression_data.between_expr;
+
+            return (
+                collect_create_table_expression_refs(between->operand, create_table, pending) &&
+                collect_create_table_expression_refs(between->lower, create_table, pending) &&
+                collect_create_table_expression_refs(between->upper, create_table, pending)
+            );
+        }
+
+        case EXPR_FUNCTIONS:
+        case EXPR_TABLE_REF:
+        default:
+            return false;
+    }
+}
+
+
+// Collect references belonging to a single constraint
+bool collect_constraint_references(ConstraintNode *constraint, const CreateTableNode *create_table, 
+    Database *db, PendingColumnBindings *pending) {
+    if (!constraint || !create_table || !db || !pending) {
+        printf("collect_constraint_references: Invalid input arguments.\n");
+        return false;
+    }
+
+    switch (constraint->type) {
+        case AST_CONSTRAINT_PRIMARY_KEY: {
+            PrimaryKeyConstraintNode *pk = &constraint->constraint_data.primary_key;
+
+            if (!pk->column_refs || pk->num_columns == 0) {
+                printf("collect_constraint_references: Invalid PRIMARY KEY constraint.\n");
+                return false;
+            }
+
+            for (uint32_t i = 0; i < pk->num_columns; i++) {
+                if (!collect_local_column_ref(pk->column_refs[i], create_table, pending)) {
+                    printf("collect_constraint_references: Local column reference's indexes could not be collected.\n");
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        case AST_CONSTRAINT_UNIQUE: {
+            UniqueConstraintNode *unique = &constraint->constraint_data.unique;
+
+            if (!unique->column_refs || unique->num_columns == 0) {
+                printf("collect_constraint_references: Invalid UNIQUE constraint.\n");
+                return false;
+            }
+
+            for (uint32_t i = 0; i < unique->num_columns; i++) {
+                if (!collect_local_column_ref(unique->column_refs[i], create_table, pending)) {
+                    printf("collect_constraint_references: Local column reference's indexes could not be collected.\n");
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        case AST_CONSTRAINT_FOREIGN_KEY: {
+            ForeignKeyConstraintNode *fk = &constraint->constraint_data.foreign_key;
+
+            if (!fk->local_column_refs ||
+                !fk->referenced_column_refs ||
+                fk->num_local_columns == 0 ||
+                fk->num_local_columns != fk->num_referenced_columns) {
+                printf("collect_constraint_references: Invalid FOREIGN KEY constraint.\n");
+                return false;
+            }
+
+            for (uint32_t i = 0; i < fk->num_local_columns; i++) {
+                if (!collect_local_column_ref(fk->local_column_refs[i], create_table, pending)) {
+                    printf("collect_constraint_references: Local column reference's indexes could not be collected.\n");
+                    return false;
+                }
+            }
+
+            for (uint32_t i = 0; i < fk->num_referenced_columns; i++) {
+                if (!collect_fk_referenced_column_ref(
+                        fk->referenced_column_refs[i],
+                        fk,
+                        create_table,
+                        db,
+                        pending)) {
+                    printf("collect_constraint_references: Referenced column reference's indexes could not be collected.\n");    
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        case AST_CONSTRAINT_CHECK:
+            return collect_create_table_expression_refs(
+                constraint->constraint_data.check.check_expr,
+                create_table,
+                pending
+            );
+
+        case AST_CONSTRAINT_NOT_NULL:
+            return collect_local_column_ref(
+                constraint->constraint_data.not_null.column_ref,
+                create_table,
+                pending
+            );
+
+        // DEFAULT has a column_name field, not an ExpressionNode-based destination ColumnRef.
+        // DEFAULT expressions cannot reference columns under the current binder rules.
+        case AST_CONSTRAINT_DEFAULT:
+            return true;
+
+        default:
+            return false;
+    }
+}
+
+
+// Collect every reference first. Publish only after success.
+// A failure leaves every target ColumnRef unchanged.
+bool commit_create_table_references(CreateTableNode *create_table, Database *db) {
+    if (!create_table || !create_table->columns || !create_table->columns->column_defs ||
+        create_table->columns->num_column_defs == 0 ||
+        (create_table->num_constraints > 0 && !create_table->constraints) || !db) {
+        printf("commit_create_table_references: Invalid input arguments.\n");
+        return false;
+    }
+
+    PendingColumnBindings pending = {0};
+
+    // Collect column-level references
+    for (uint32_t i = 0; i < create_table->columns->num_column_defs; i++) {
+        ColumnDefNode *column = create_table->columns->column_defs[i];
+
+        if (!column || (column->num_constraints > 0 && !column->constraints)) {
+            printf("commit_create_table_references: Invalid Column definition.\n");
+            free(pending.items);
+            return false;
+        }
+
+        for (uint32_t j = 0; j < column->num_constraints; j++) {
+            if (!collect_constraint_references(column->constraints[j], create_table, db, &pending)) {
+                printf("commit_create_table_references: Column-level Constraint references index collection failed.\n");
+                free(pending.items);
+                return false;
+            }
+        }
+    }
+
+    // Collect table-level references
+    for (uint32_t i = 0; i < create_table->num_constraints; i++) {
+
+        if (!collect_constraint_references(create_table->constraints[i], create_table, db, &pending)) {
+            printf("commit_create_table_references: Table-level Constraint references index collection failed.\n");
+            free(pending.items);
+            return false;
+        }
+    }
+
+    // All resolutions succeeded. No allocation, lookup, or fallible operation occurs after this point.
+    for (size_t i = 0; i < pending.count; i++) {
+        PendingColumnBinding *binding = &pending.items[i];
+
+        binding->ref->relation_index = binding->relation_index;
+        binding->ref->column_index = binding->column_index;
+    }
+
+    free(pending.items);
     return true;
 }

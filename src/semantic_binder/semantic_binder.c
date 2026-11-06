@@ -76,11 +76,19 @@ bool bind_statement(ASTNode *root, Database *db, BoundStatement *out_statement) 
 
             break;
         }
-#if 0
-        case AST_CREATE_TABLE:
-            success = bind_create_table(root, &context);
-            break;
 
+        case AST_CREATE_TABLE: {
+            success = bind_create_table(root, &context);
+
+            if (success) {
+                out_statement->type = BOUND_STATEMENT_CREATE_TABLE;
+                out_statement->data.create_table.create_table =
+                    &root->node_contents.create_table;
+            }
+
+            break;
+        }
+#if 0
         case AST_DROP_TABLE:
             success = bind_drop_table(root, &context);
             break;
@@ -157,6 +165,14 @@ void bound_delete_values_free(BoundDeleteValues *delete) {
     delete->where = NULL;
 }
 
+void bound_create_table_free(BoundCreateTable *create_table) {
+    if (!create_table) {
+        return;
+    }
+
+    create_table->create_table = NULL;
+}
+
 /* Free bound statement metadata */
 void bound_statement_free(BoundStatement *statement) {
     if (!statement) {
@@ -178,6 +194,10 @@ void bound_statement_free(BoundStatement *statement) {
 
         case BOUND_STATEMENT_DELETE:
             bound_delete_values_free(&statement->data.delete);
+            break;
+
+        case BOUND_STATEMENT_CREATE_TABLE:
+            bound_create_table_free(&statement->data.create_table);
             break;
 
         default:
