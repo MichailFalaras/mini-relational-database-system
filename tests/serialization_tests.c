@@ -27,7 +27,7 @@
 
 /* ---------- Serialized Values ---------- */
 
-static int test_integer_value(void) {
+static int test_integer_value() {
     uint8_t buffer[16] = {0};
     Column column = {.type = INTEGER, .serialized_size = sizeof(int32_t)};
     Value value = {.type = INTEGER, .null_val = false};
@@ -44,7 +44,7 @@ static int test_integer_value(void) {
     return 0;
 }
 
-static int test_unsigned_value(void) {
+static int test_unsigned_value() {
     uint8_t buffer[16] = {0};
     Column column = {.type = UNSIGNED_INTEGER, .serialized_size = sizeof(uint32_t)};
     Value value = {.type = UNSIGNED_INTEGER};
@@ -61,7 +61,7 @@ static int test_unsigned_value(void) {
     return 0;
 }
 
-static int test_numeric_value(void) {
+static int test_numeric_value() {
     uint8_t buffer[16] = {0};
     Column column = {.type = NUMERIC, .serialized_size = sizeof(int64_t) + sizeof(uint32_t)};
     Value value = {.type = NUMERIC};
@@ -80,7 +80,7 @@ static int test_numeric_value(void) {
     return 0;
 }
 
-static int test_floating_values(void) {
+static int test_floating_values() {
     uint8_t buffer[16] = {0};
     Column float_column = {.type = FLOAT, .serialized_size = sizeof(float)};
     Value float_value = {.type = FLOAT};
@@ -107,9 +107,9 @@ static int test_floating_values(void) {
     return 0;
 }
 
-static int test_string_values(void) {
+static int test_string_values() {
     uint8_t buffer[32] = {0};
-    Column char_column = {.type = CHAR, .type_parameter = 8, .serialized_size = 8};
+    Column char_column = {.type = CHAR, .type_args = (DataTypeArgs){.length = 8}, .serialized_size = 8};
     Value char_value = {.type = CHAR};
     char_value.value.char_val.string = "abc";
     ASSERT(serialize_value_data(&char_value, &char_column, buffer));
@@ -119,7 +119,7 @@ static int test_string_values(void) {
     ASSERT(strcmp(decoded_char->value.char_val.string, "abc") == 0);
     value_free(decoded_char);
 
-    Column varchar_column = {.type = VARCHAR, .type_parameter = 10, .serialized_size = 10};
+    Column varchar_column = {.type = VARCHAR, .type_args = (DataTypeArgs){.length = 10}, .serialized_size = 10};
     Value varchar_value = {.type = VARCHAR};
     varchar_value.value.varchar_val.string = "hello";
     ASSERT(serialize_value_data(&varchar_value, &varchar_column, buffer));
@@ -139,7 +139,7 @@ static int test_string_values(void) {
     return 0;
 }
 
-static int test_date_timestamp_bool_values(void) {
+static int test_date_timestamp_bool_values() {
     uint8_t buffer[16] = {0};
     Column date_column = {.type = DATE, .serialized_size = sizeof(uint64_t)};
     Value date_value = {.type = DATE};
@@ -168,7 +168,7 @@ static int test_date_timestamp_bool_values(void) {
     return 0;
 }
 
-static int test_null_value(void) {
+static int test_null_value() {
     uint8_t buffer[8];
     memset(buffer, 0xAB, sizeof(buffer));
     Column column = {.type = INTEGER, .serialized_size = sizeof(int32_t)};
@@ -182,7 +182,7 @@ static int test_null_value(void) {
     return 0;
 }
 
-static int test_null_bitmap(void) {
+static int test_null_bitmap() {
     uint8_t buffer[8] = {0};
     Value values[10] = {0};
     Value *keys[10] = {0};
@@ -210,9 +210,9 @@ static int test_null_bitmap(void) {
 
 /* ---------- Schema / Constraint Metadata ---------- */
 
-static int test_column_metadata(void) {
+static int test_column_metadata() {
     uint8_t buffer[128] = {0};
-    Column column = {.type = VARCHAR, .type_parameter = 200, .non_null_rows = 7, .null_rows = 3};
+    Column column = {.type = VARCHAR, .type_args = (DataTypeArgs){.length = 200}, .non_null_rows = 7, .null_rows = 3};
     strcpy(column.name, "username");
 
     uint8_t *write_offset = buffer;
@@ -226,13 +226,13 @@ static int test_column_metadata(void) {
     ASSERT(decoded != NULL);
     ASSERT(read_offset == write_offset);
     ASSERT(strcmp(decoded->name, "username") == 0);
-    ASSERT(decoded->type == VARCHAR && decoded->type_parameter == 200);
+    ASSERT(decoded->type == VARCHAR && decoded->type_args.length == 200);
     ASSERT(decoded->non_null_rows == 7 && decoded->null_rows == 3);
     free(decoded);
     return 0;
 }
 
-static int test_not_null_constraint(void) {
+static int test_not_null_constraint() {
     uint8_t buffer[128] = {0};
     Constraint constraint = {.type = NOT_NULL};
     strcpy(constraint.constraint_name, "required_name");
@@ -254,7 +254,7 @@ static int test_not_null_constraint(void) {
     return 0;
 }
 
-static int test_primary_key_constraint(void) {
+static int test_primary_key_constraint() {
     uint8_t buffer[128] = {0};
     uint32_t refs[] = {1, 3};
     Constraint constraint = {.type = PRIMARY_KEY};
@@ -281,10 +281,10 @@ static int test_primary_key_constraint(void) {
     return 0;
 }
 
-static int test_schema_metadata(void) {
+static int test_schema_metadata() {
     uint8_t buffer[512] = {0};
     Column id = {.type = INTEGER, .serialized_size = sizeof(int32_t)};
-    Column name = {.type = VARCHAR, .type_parameter = 20, .serialized_size = 20};
+    Column name = {.type = VARCHAR, .type_args = (DataTypeArgs){.length = 20}, .serialized_size = 20};
     strcpy(id.name, "id");
     strcpy(name.name, "name");
     Column *columns[] = {&id, &name};
@@ -313,7 +313,7 @@ static int test_schema_metadata(void) {
 
 /* ---------- Literal / Expression Metadata ---------- */
 
-static int test_literal_values(void) {
+static int test_literal_values() {
     uint8_t buffer[128] = {0};
     Value literal = {.type = NUMERIC};
     literal.value.numeric_val.val = -987654321;
@@ -335,7 +335,7 @@ static int test_literal_values(void) {
     return 0;
 }
 
-static int test_null_literal(void) {
+static int test_null_literal() {
     uint8_t buffer[16] = {0};
     Value literal = {.type = INTEGER, .null_val = true};
     uint8_t *write_offset = buffer;
@@ -351,7 +351,7 @@ static int test_null_literal(void) {
     return 0;
 }
 
-static int test_column_expression(void) {
+static int test_column_expression() {
     uint8_t buffer[128] = {0};
     ExpressionNode expression = {.type = EXPR_COLUMN_REF};
     strcpy(expression.expression_data.column_value.column_name, "price");
@@ -375,7 +375,7 @@ static int test_column_expression(void) {
     return 0;
 }
 
-static int test_nested_expression(void) {
+static int test_nested_expression() {
     uint8_t buffer[256] = {0};
     Value left_value = {.type = INTEGER};
     Value right_value = {.type = INTEGER};
@@ -406,7 +406,7 @@ static int test_nested_expression(void) {
 
 /* ---------- Reserved Page Metadata ---------- */
 
-static int test_page_zero_metadata(void) {
+static int test_page_zero_metadata() {
     uint8_t buffer[64] = {0};
     PageZeroMetadata page_zero = {0};
     memcpy(page_zero.magic, "rdbms-c-v", 9);
@@ -435,7 +435,7 @@ static int test_page_zero_metadata(void) {
 
 /* ---------- Additional Constraint Metadata ---------- */
 
-static int test_unique_constraint(void) {
+static int test_unique_constraint() {
     uint8_t buffer[128] = {0};
     uint32_t refs[] = {0, 2};
     Constraint constraint = {.type = UNIQUE};
@@ -458,7 +458,7 @@ static int test_unique_constraint(void) {
     return 0;
 }
 
-static int test_foreign_key_constraint(void) {
+static int test_foreign_key_constraint() {
     uint8_t buffer[256] = {0};
     uint32_t local[] = {1, 2};
     uint32_t referenced[] = {0, 3};
@@ -487,7 +487,7 @@ static int test_foreign_key_constraint(void) {
     return 0;
 }
 
-static int test_check_constraint(void) {
+static int test_check_constraint() {
     uint8_t buffer[256] = {0};
     uint32_t refs[] = {0};
     Value literal = {.type = INTEGER};
@@ -515,7 +515,7 @@ static int test_check_constraint(void) {
     return 0;
 }
 
-static int test_default_constraint(void) {
+static int test_default_constraint() {
     uint8_t buffer[256] = {0};
     Value literal = {.type = INTEGER};
     literal.value.int32_val = 100;
@@ -542,7 +542,7 @@ static int test_default_constraint(void) {
 
 /* ---------- Remaining Literal Types ---------- */
 
-static int test_supported_literals(void) {
+static int test_supported_literals() {
     uint8_t buffer[128] = {0};
     Value values[5] = {0};
     values[0].type = INTEGER;
@@ -587,7 +587,7 @@ static int test_supported_literals(void) {
 
 /* ---------- Pager-backed Index / Table Metadata ---------- */
 
-static int test_index_metadata(void) {
+static int test_index_metadata() {
     const char *pathname = "build/serialize_index_test.db";
     remove(pathname);
     Pager *pager = pager_open(pathname);
@@ -629,7 +629,7 @@ static int test_index_metadata(void) {
     return 0;
 }
 
-static int test_table_metadata(void) {
+static int test_table_metadata() {
     const char *pathname = "build/serialize_table_test.db";
     remove(pathname);
     Pager *pager = pager_open(pathname);
@@ -674,7 +674,7 @@ static int test_table_metadata(void) {
 
 /* ---------- B+ Tree Cell Contents ---------- */
 
-static int test_internal_cell(void) {
+static int test_internal_cell() {
     uint8_t buffer[64] = {0};
     Column column = {.type = INTEGER, .serialized_size = sizeof(int32_t)};
     Column *columns[] = {&column};
@@ -708,7 +708,7 @@ static int test_internal_cell(void) {
     return 0;
 }
 
-static int test_row_leaf_cell(void) {
+static int test_row_leaf_cell() {
     uint8_t buffer[128] = {0};
     Column column = {.type = INTEGER, .serialized_size = sizeof(int32_t)};
     Column *columns[] = {&column};
@@ -741,7 +741,7 @@ static int test_row_leaf_cell(void) {
     return 0;
 }
 
-static int test_catalog_leaf_cell(void) {
+static int test_catalog_leaf_cell() {
     uint8_t buffer[128] = {0};
     Column column = {.type = INTEGER, .serialized_size = sizeof(int32_t)};
     Column *columns[] = {&column};
@@ -779,7 +779,7 @@ static int test_catalog_leaf_cell(void) {
 
 /* ---------- Additional Expression Metadata ---------- */
 
-static int test_in_expression(void) {
+static int test_in_expression() {
     uint8_t buffer[256] = {0};
     Value operand_value = {.type = INTEGER};
     operand_value.value.int32_val = 5;
@@ -814,7 +814,7 @@ static int test_in_expression(void) {
     return 0;
 }
 
-static int test_between_expression(void) {
+static int test_between_expression() {
     uint8_t buffer[256] = {0};
     Value val = {.type = INTEGER};
     val.value.int32_val = 9;
@@ -848,7 +848,7 @@ static int test_between_expression(void) {
     return 0;
 }
 
-static int test_is_null_expressions(void) {
+static int test_is_null_expressions() {
     uint8_t buffer[128] = {0};
     Value literal = {.type = INTEGER, .null_val = true};
     ExpressionNode operand = {.type = EXPR_LITERAL};
@@ -879,7 +879,7 @@ static int test_is_null_expressions(void) {
     return 0;
 }
 
-static int test_table_reference_expression(void) {
+static int test_table_reference_expression() {
     uint8_t buffer[128] = {0};
     ExpressionNode expression = {.type = EXPR_TABLE_REF};
     strcpy(expression.expression_data.table_value.table_name, "orders");
@@ -896,7 +896,7 @@ static int test_table_reference_expression(void) {
     return 0;
 }
 
-static int test_unary_expression(void) {
+static int test_unary_expression() {
     uint8_t buffer[128] = {0};
     Value literal = {.type = BOOL};
     literal.value.bool_val = true;
@@ -919,7 +919,7 @@ static int test_unary_expression(void) {
     return 0;
 }
 
-static int test_aggregate_expression(void) {
+static int test_aggregate_expression() {
     uint8_t buffer[128] = {0};
     Value literal = {.type = INTEGER};
     literal.value.int32_val = 7;
@@ -946,7 +946,7 @@ static int test_aggregate_expression(void) {
 
 /* ---------- Serialized Size Calculations ---------- */
 
-static int test_fixed_metadata_sizes(void) {
+static int test_fixed_metadata_sizes() {
     uint32_t refs[] = {0, 2, 4};
     IndexKey key = {.num_columns = 3, .column_index_array = refs};
     Index index = {.key = &key};
@@ -954,7 +954,7 @@ static int test_fixed_metadata_sizes(void) {
     ASSERT(serialized_index_metadata_size(&index) == sizeof(uint8_t) + 4*sizeof(uint32_t) + sizeof(uint8_t));
 
     Column column = {.type = INTEGER};
-    ASSERT(serialized_column_size(&column) == 64 + sizeof(uint8_t) + 3*sizeof(uint32_t));
+    ASSERT(serialized_column_size(&column) == 64 + sizeof(uint8_t) + 5*sizeof(uint32_t));
 
     Column *columns[] = {&column};
     Schema schema = {.num_columns = 1, .columns = columns};
@@ -965,7 +965,7 @@ static int test_fixed_metadata_sizes(void) {
     return 0;
 }
 
-static int test_constraint_sizes(void) {
+static int test_constraint_sizes() {
     const size_t header_size = 64 + sizeof(uint8_t);
     uint32_t refs[] = {0, 1, 2};
     Constraint constraint = {0};
@@ -1014,7 +1014,7 @@ static int test_constraint_sizes(void) {
     return 0;
 }
 
-static int test_literal_sizes(void) {
+static int test_literal_sizes() {
     Value literal = {.type = INTEGER};
     ASSERT(serialized_literal_value_size(&literal) == 2 + sizeof(int32_t));
 
@@ -1039,7 +1039,7 @@ static int test_literal_sizes(void) {
     return 0;
 }
 
-static int test_expression_sizes(void) {
+static int test_expression_sizes() {
     Value literal = {.type = INTEGER};
     literal.value.int32_val = 5;
     ExpressionNode value_expr = {.type = EXPR_LITERAL};
@@ -1066,7 +1066,7 @@ static int test_expression_sizes(void) {
     return 0;
 }
 
-static int test_invalid_serialized_sizes(void) {
+static int test_invalid_serialized_sizes() {
     ASSERT(serialized_index_metadata_size(NULL) == 0);
     ASSERT(serialized_table_metadata_size(NULL) == 0);
     ASSERT(serialized_schema_size(NULL) == 0);

@@ -25,42 +25,24 @@
     } \
 }
 
-static Schema *create_mock_schema(void) {
+static Schema *create_mock_schema() {
     Schema *schema = NULL;
     Column **columns = calloc(3, sizeof(Column *));
     if (!columns) {
         return NULL;
     }
 
-    columns[0] = column_alloc(
-        "id",
-        UNSIGNED_INTEGER,
-        0,
-        0,
-        0
-    );
+    columns[0] = column_alloc("id", UNSIGNED_INTEGER, (DataTypeArgs){0}, 0, 0);
     if (!columns[0]) {
         goto cleanup;
     }
 
-    columns[1] = column_alloc(
-        "name",
-        VARCHAR,
-        64,
-        0,
-        0
-    );
+    columns[1] = column_alloc("name", VARCHAR, (DataTypeArgs){.length = 64}, 0, 0);
     if (!columns[1]) {
         goto cleanup;
     }
 
-    columns[2] = column_alloc(
-        "age",
-        UNSIGNED_INTEGER,
-        0,
-        0,
-        0
-    );
+    columns[2] = column_alloc("age", UNSIGNED_INTEGER, (DataTypeArgs){0}, 0, 0);
     if (!columns[2]) {
         goto cleanup;
     }
@@ -110,8 +92,8 @@ static Table *create_mock_table(Pager *pager, const char *table_name) {
 }
 
 #define LARGE_MOCK_TABLE_COLUMNS 54
-static Table *create_large_mock_table(void)
-{
+
+static Table *create_large_mock_table() {
     Column **columns = calloc(LARGE_MOCK_TABLE_COLUMNS, sizeof(Column *));
     if (!columns) {
         return NULL;
@@ -122,13 +104,7 @@ static Table *create_large_mock_table(void)
 
         snprintf(column_name, sizeof(column_name), "mock_column_%u", i);
 
-        columns[i] = column_alloc(
-            column_name,
-            CHAR,
-            64,
-            0,
-            0
-        );
+        columns[i] = column_alloc(column_name, CHAR, (DataTypeArgs){.length = 64}, 0, 0);
 
         if (!columns[i]) {
             for (uint32_t j = 0; j < i; j++) {
@@ -140,12 +116,7 @@ static Table *create_large_mock_table(void)
         }
     }
 
-    Schema *schema = schema_create(
-        columns,
-        NULL,
-        LARGE_MOCK_TABLE_COLUMNS,
-        0
-    );
+    Schema *schema = schema_create(columns, NULL, LARGE_MOCK_TABLE_COLUMNS, 0);
 
     if (!schema) {
         for (uint32_t i = 0; i < LARGE_MOCK_TABLE_COLUMNS; i++) {
@@ -189,6 +160,7 @@ static bool create_mock_catalog_cell(Catalog *catalog, const char *table_name, u
 
     CatalogRecordInfo record_info = {0};
 
+    
     strncpy(
         record_info.table_name,
         table_name,
@@ -302,7 +274,7 @@ static int test_catalog_create() {
         ASSERT(catalog->spec.index_key->column_index_array[2] == 2);
 
         ASSERT(catalog->spec.is_unique == true);
-        ASSERT(catalog->spec.key_size = CATALOG_KEY_SIZE);
+        ASSERT(catalog->spec.key_size == CATALOG_KEY_SIZE);
         ASSERT(catalog->spec.payload_type == BTREE_CATALOG_PAYLOAD);
 
         ASSERT(catalog->spec.schema != NULL);
@@ -311,22 +283,22 @@ static int test_catalog_create() {
 
         ASSERT(!strcmp(catalog->spec.schema->columns[0]->name, "table_name"));
         ASSERT(catalog->spec.schema->columns[0]->type == CHAR);
-        ASSERT(catalog->spec.schema->columns[0]->type_parameter == 64);
-        ASSERT(catalog->spec.schema->columns[0]->serialized_size == get_serialized_value_size(CHAR, 64));
+        ASSERT(catalog->spec.schema->columns[0]->type_args.length == 64);
+        ASSERT(catalog->spec.schema->columns[0]->serialized_size == get_serialized_value_size(CHAR, (DataTypeArgs){.length = 64}));
         ASSERT(catalog->spec.schema->columns[0]->null_rows == 0);
         ASSERT(catalog->spec.schema->columns[0]->non_null_rows == 0);
 
         ASSERT(!strcmp(catalog->spec.schema->columns[1]->name, "object_type"));
         ASSERT(catalog->spec.schema->columns[1]->type == UNSIGNED_INTEGER);
-        ASSERT(catalog->spec.schema->columns[1]->type_parameter == 0);
-        ASSERT(catalog->spec.schema->columns[1]->serialized_size == get_serialized_value_size(UNSIGNED_INTEGER, 0));
+        ASSERT(catalog->spec.schema->columns[1]->type_args.length == 0);
+        ASSERT(catalog->spec.schema->columns[1]->serialized_size == get_serialized_value_size(UNSIGNED_INTEGER, (DataTypeArgs){0}));
         ASSERT(catalog->spec.schema->columns[1]->null_rows == 0);
         ASSERT(catalog->spec.schema->columns[1]->non_null_rows == 0);
 
         ASSERT(!strcmp(catalog->spec.schema->columns[2]->name, "object_name"));
         ASSERT(catalog->spec.schema->columns[2]->type == CHAR);
-        ASSERT(catalog->spec.schema->columns[2]->type_parameter == 64);
-        ASSERT(catalog->spec.schema->columns[2]->serialized_size == get_serialized_value_size(CHAR, 64));
+        ASSERT(catalog->spec.schema->columns[2]->type_args.length == 64);
+        ASSERT(catalog->spec.schema->columns[2]->serialized_size == get_serialized_value_size(CHAR, (DataTypeArgs){.length = 64}));
         ASSERT(catalog->spec.schema->columns[2]->null_rows == 0);
         ASSERT(catalog->spec.schema->columns[2]->non_null_rows == 0);
 
@@ -366,7 +338,7 @@ static int test_catalog_create() {
         ASSERT(catalog->spec.index_key->column_index_array[2] == 2);
 
         ASSERT(catalog->spec.is_unique == true);
-        ASSERT(catalog->spec.key_size = CATALOG_KEY_SIZE);
+        ASSERT(catalog->spec.key_size == CATALOG_KEY_SIZE);
         ASSERT(catalog->spec.payload_type == BTREE_CATALOG_PAYLOAD);
 
         ASSERT(catalog->spec.schema != NULL);
@@ -375,22 +347,22 @@ static int test_catalog_create() {
 
         ASSERT(!strcmp(catalog->spec.schema->columns[0]->name, "table_name"));
         ASSERT(catalog->spec.schema->columns[0]->type == CHAR);
-        ASSERT(catalog->spec.schema->columns[0]->type_parameter == 64);
-        ASSERT(catalog->spec.schema->columns[0]->serialized_size == get_serialized_value_size(CHAR, 64));
+        ASSERT(catalog->spec.schema->columns[0]->type_args.length == 64);
+        ASSERT(catalog->spec.schema->columns[0]->serialized_size == get_serialized_value_size(CHAR, (DataTypeArgs){.length = 64}));
         ASSERT(catalog->spec.schema->columns[0]->null_rows == 0);
         ASSERT(catalog->spec.schema->columns[0]->non_null_rows == 0);
 
         ASSERT(!strcmp(catalog->spec.schema->columns[1]->name, "object_type"));
         ASSERT(catalog->spec.schema->columns[1]->type == UNSIGNED_INTEGER);
-        ASSERT(catalog->spec.schema->columns[1]->type_parameter == 0);
-        ASSERT(catalog->spec.schema->columns[1]->serialized_size == get_serialized_value_size(UNSIGNED_INTEGER, 0));
+        ASSERT(catalog->spec.schema->columns[1]->type_args.length == 0);
+        ASSERT(catalog->spec.schema->columns[1]->serialized_size == get_serialized_value_size(UNSIGNED_INTEGER, (DataTypeArgs){0}));
         ASSERT(catalog->spec.schema->columns[1]->null_rows == 0);
         ASSERT(catalog->spec.schema->columns[1]->non_null_rows == 0);
 
         ASSERT(!strcmp(catalog->spec.schema->columns[2]->name, "object_name"));
         ASSERT(catalog->spec.schema->columns[2]->type == CHAR);
-        ASSERT(catalog->spec.schema->columns[2]->type_parameter == 64);
-        ASSERT(catalog->spec.schema->columns[2]->serialized_size == get_serialized_value_size(CHAR, 64));
+        ASSERT(catalog->spec.schema->columns[2]->type_args.length == 64);
+        ASSERT(catalog->spec.schema->columns[2]->serialized_size == get_serialized_value_size(CHAR, (DataTypeArgs){.length = 64}));
         ASSERT(catalog->spec.schema->columns[2]->null_rows == 0);
         ASSERT(catalog->spec.schema->columns[2]->non_null_rows == 0);
 
@@ -410,6 +382,7 @@ static int test_invalid_catalog_creation() {
         Catalog *catalog = catalog_create(pager, &system_catalog_root_page_num);
 
         ASSERT(catalog == NULL);
+        ASSERT(pager_close(pager));
     }
     
     /* ----- UNINITIALIZED ROOT PAGE NUM  ----- */
@@ -420,6 +393,7 @@ static int test_invalid_catalog_creation() {
         Catalog *catalog = catalog_create(pager, NULL);
 
         ASSERT(catalog == NULL);
+        ASSERT(pager_close(pager));
     }
     
     /* ----- SYSTEM CATALOG ROOT PAGE NUM BEING SUPERBLOCK PAGE ----- */
@@ -432,6 +406,7 @@ static int test_invalid_catalog_creation() {
         Catalog *catalog = catalog_create(pager, &system_catalog_root_page_num);
 
         ASSERT(catalog == NULL);
+        ASSERT(pager_close(pager));
     }
     
     return 0;
