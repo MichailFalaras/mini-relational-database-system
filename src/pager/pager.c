@@ -99,16 +99,31 @@ Pager *pager_open(const char *pathname) {
             return NULL;
         }
 
-    /* Retrieve Page 0 and System Catalog when loading up already
-     * existing database. */
+    // Retrieve Page 0 and System Catalog when loading up already existing database.
     } else {
-        Page *page = pager_get_page(pager, 0);
+        Page *page = pager_get_page(pager, SUPERBLOCK_PAGE_NUM);
+
         if (!page) {
             pager_free(pager);
             close(fd);
             return NULL;
         }
+
+        uint8_t *read_offset = page->page_data;
+        PageZeroMetadata metadata = {0};
+
+        // Validate SUPERBLOCK before accepting the file
+        if (!deserialize_page_zero_metadata(&read_offset, &metadata) ||
+            memcmp(metadata.magic, DB_MAGIC_STRING, DB_MAGIC_STRING_LEN) ||
+            metadata.version != RDBMS_VERSION ||
+            metadata.page_size != PAGE_SIZE) {
+            pager_free(pager);
+            close(fd);
+            return NULL;
+        }
     }
+
+
     return pager;
 }
 

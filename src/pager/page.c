@@ -45,7 +45,7 @@ Page *page_copy(Pager *pager, uint32_t page_num) {
 }
 
 /* Create PageZeroMetadata struct & initialize it. */
-PageZeroMetadata *page_zero_create(void) {
+PageZeroMetadata *page_zero_create() {
     PageZeroMetadata *page_zero = (PageZeroMetadata *) calloc(1, sizeof(PageZeroMetadata));
     if (!page_zero) {
         perror("page_zero_create");
@@ -53,7 +53,7 @@ PageZeroMetadata *page_zero_create(void) {
     }
 
     memcpy(page_zero->magic, DB_MAGIC_STRING, DB_MAGIC_STRING_LEN);
-    page_zero->version = 1;
+    page_zero->version = RDBMS_VERSION;
     page_zero->page_size = PAGE_SIZE;
     page_zero->catalog_root = UINT32_MAX;
     page_zero->free_list_head = 0;
