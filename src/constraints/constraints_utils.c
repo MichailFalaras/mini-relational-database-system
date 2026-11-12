@@ -22,7 +22,7 @@ uint32_t *copy_uint32_array(const uint32_t *source, uint32_t amount) {
     uint32_t *copy = (uint32_t *) calloc(amount, sizeof(uint32_t));
     if (!copy) {
         perror("copy_uint32_array");
-        exit(1);
+        return NULL;
     }
 
     memcpy(copy, source, amount*sizeof(uint32_t));
@@ -380,7 +380,10 @@ bool constraint_validate_row(Pager *pager, const Constraint *constraint, const S
                 return false;
             }
 
-            bool valid = (result->type == BOOL && !result->null_val && result->value.bool_val);
+            bool valid = (
+                result->type == BOOL &&
+                (result->null_val || result->value.bool_val)
+            );
 
             value_free(result);
             return valid;
@@ -568,4 +571,18 @@ bool constraint_is_referenced_by_foreign_key(const Database *db, const Table *ta
     }
 
     return false;
+}
+
+// Return a prefix based on the constraint type,
+// Used when internally assigning names to unnamed constraints in queries 
+extern char *constraint_type_prefix(ConstraintType type) {
+    switch (type) {
+        case PRIMARY_KEY: return "pk";
+        case FOREIGN_KEY: return "fk";
+        case UNIQUE: return "uq";
+        case DEFAULT: return "df";
+        case NOT_NULL: return "nn";
+        case CHECK: return "ck";
+        default: return NULL;
+    }
 }

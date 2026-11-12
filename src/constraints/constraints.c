@@ -14,7 +14,7 @@ Constraint *constraint_alloc(char *constraint_name, ConstraintType type) {
     Constraint *constraint = (Constraint *) malloc(sizeof(Constraint));
     if (constraint == NULL) {
         perror("constraint_create");
-        exit(1);
+        return NULL;
     }
     strncpy(constraint->constraint_name, constraint_name, 63);
     constraint->constraint_name[63] = '\0';
@@ -80,8 +80,17 @@ Constraint *constraint_create_primary_key(char *constraint_name, uint32_t *colum
 
     Constraint *constraint = constraint_alloc(constraint_name, PRIMARY_KEY);
 
-    constraint->constraint_data.primary_key.primary_key_columns = copy_uint32_array(column_refs,
-                                                                                     amount_columns);
+    if (!constraint) {
+        return NULL;
+    }
+
+    constraint->constraint_data.primary_key.primary_key_columns = copy_uint32_array(column_refs, amount_columns);
+
+    if (!constraint->constraint_data.primary_key.primary_key_columns) {
+        constraint_free(constraint);
+        return NULL;
+    }
+
     constraint->constraint_data.primary_key.amount_columns = amount_columns;
 
     return constraint;
@@ -104,13 +113,28 @@ Constraint *constraint_create_foreign_keys(char *constraint_name, uint32_t *fore
 
     Constraint *constraint = constraint_alloc(constraint_name, FOREIGN_KEY);
 
-    constraint->constraint_data.foreign_key.foreign_key_columns = copy_uint32_array(foreign_key_columns,
-                                                                                    amount_foreign_keys);
+    if (!constraint) {
+        return NULL;
+    }
+
+    constraint->constraint_data.foreign_key.foreign_key_columns = copy_uint32_array(foreign_key_columns, amount_foreign_keys);
+
+    if (!constraint->constraint_data.foreign_key.foreign_key_columns) {
+        constraint_free(constraint);
+        return NULL;
+    }
+
     constraint->constraint_data.foreign_key.amount_columns = amount_foreign_keys;
     strncpy(constraint->constraint_data.foreign_key.referenced_table_name, referenced_table_name, 64);
     constraint->constraint_data.foreign_key.referenced_table_name[63] = '\0'; 
-    constraint->constraint_data.foreign_key.referenced_columns = copy_uint32_array(referenced_columns,
-                                                                                    amount_referenced_columns);
+
+    constraint->constraint_data.foreign_key.referenced_columns = copy_uint32_array(referenced_columns, amount_referenced_columns);
+
+    if (!constraint->constraint_data.foreign_key.referenced_columns) {
+        constraint_free(constraint);
+        return NULL;
+    }
+    
     constraint->constraint_data.foreign_key.amount_referenced_columns = amount_referenced_columns;
     
     return constraint;
@@ -126,7 +150,17 @@ Constraint *constraint_create_unique(char *constraint_name, uint32_t *column_ref
 
     Constraint *constraint = constraint_alloc(constraint_name, UNIQUE);
 
+    if (!constraint) {
+        return NULL;
+    }
+
     constraint->constraint_data.unique_cols.column_refs = copy_uint32_array(column_refs, amount_columns);
+
+    if (!constraint->constraint_data.unique_cols.column_refs) {
+        constraint_free(constraint);
+        return NULL;
+    }
+    
     constraint->constraint_data.unique_cols.amount_columns = amount_columns;
 
     return constraint;
@@ -135,16 +169,40 @@ Constraint *constraint_create_unique(char *constraint_name, uint32_t *column_ref
 Constraint *constraint_create_check(char *constraint_name, ExpressionNode *constraint_expr,
     uint32_t *column_refs, uint32_t amount_columns) {
 
-    if (!constraint_name || constraint_name[0] == '\0'
-        || !constraint_expr || !column_refs || !amount_columns) {
+    if (!constraint_name || constraint_name[0] == '\0' ||
+        !constraint_expr ||
+        (amount_columns > 0 && !column_refs) ||
+        (amount_columns == 0 && column_refs)) {
         return NULL;
     }
 
     Constraint *constraint = constraint_alloc(constraint_name, CHECK);
 
+    if (!constraint) {
+        return NULL;
+    }
+
     constraint->constraint_data.check.constraint_expr = expression_node_copy(constraint_expr);
-    constraint->constraint_data.check.column_refs = copy_uint32_array(column_refs, amount_columns);
-    constraint->constraint_data.check.amount_columns = amount_columns;
+
+    if (!constraint->constraint_data.check.constraint_expr) {
+        constraint_free(constraint);
+        return NULL;
+    }
+
+    constraint->constraint_data.check.column_refs = NULL;
+    constraint->constraint_data.check.amount_columns = 0;
+
+    if (amount_columns > 0) {
+        constraint->constraint_data.check.column_refs = copy_uint32_array(column_refs, amount_columns);
+
+        if (!constraint->constraint_data.check.column_refs) {
+            constraint_free(constraint);
+            return NULL;
+        }
+
+        constraint->constraint_data.check.amount_columns = amount_columns;
+    }
+
     return constraint;
 }
 
@@ -154,6 +212,11 @@ Constraint *constraint_create_not_null(char *constraint_name, uint32_t column_re
     }
 
     Constraint *constraint = constraint_alloc(constraint_name, NOT_NULL);
+
+    if (!constraint) {
+        return NULL;
+    }
+
     constraint->constraint_data.not_null.column_ref = column_ref;
 
     return constraint;
@@ -167,8 +230,18 @@ Constraint *constraint_create_default(char *constraint_name, uint32_t column_ref
     
     Constraint *constraint = constraint_alloc(constraint_name, DEFAULT);
 
+    if (!constraint) {
+        return NULL;
+    }
+
     constraint->constraint_data.default_value.column_ref = column_ref;
+
     constraint->constraint_data.default_value.default_expr = expression_node_copy(default_expr);
+
+    if (!constraint->constraint_data.default_value.default_expr) {
+        constraint_free(constraint);
+        return NULL;
+    }
 
     return constraint;
 }
@@ -389,20 +462,24 @@ bool constraint_validate_definition(const Constraint *constraint) {
             }
 
             break;
-        case CHECK:
-            if (constraint->constraint_data.check.constraint_expr == NULL) {
-                return false;
-            }    
+        case CHECK: {
+            const CheckConstraint *check = &constraint->constraint_data.check;
 
-            if (constraint->constraint_data.check.column_refs == NULL) {
+            if (!check->constraint_expr) {
                 return false;
             }
 
-            if (constraint->constraint_data.check.amount_columns == 0) {
+            if (check->amount_columns == 0) {
+                if (check->column_refs != NULL) {
+                    return false;
+                }
+            }
+            else if (!check->column_refs) {
                 return false;
             }
 
             break;
+        }
         case NOT_NULL:
             break;
         case DEFAULT:

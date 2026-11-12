@@ -28,3 +28,7 @@ extern bool constraint_validate_row(Pager *pager, const Constraint *constraint, 
 
 extern bool constraint_is_referenced_by_foreign_key(const Database *db, const Table *table, 
     const Constraint *constraint);
+
+// Return a prefix based on the constraint type,
+// Used when internally assigning names to unnamed constraints in queries 
+extern char *constraint_type_prefix(ConstraintType type);
