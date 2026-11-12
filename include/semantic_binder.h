@@ -8,6 +8,7 @@
 
 typedef struct database Database;
 typedef struct table Table;
+typedef struct schema Schema;
 typedef struct ast_create_table CreateTableNode;
 typedef struct abstract_syntax_tree_node ASTNode;
 typedef struct expression_node ExpressionNode;
@@ -34,6 +35,10 @@ typedef struct binding_relation {
 
     // Added for binding CHECK expressions 
     const CreateTableNode *create_table;
+
+    // Only populated during ALTER TABLE CHECK binding
+    Schema *proposed_schema;
+    ColumnDefNode *proposed_column;
 } BindingRelation;
 
 // Context used by bind utilities to verify table ownership of columns
@@ -108,6 +113,7 @@ typedef struct bound_update_values {
     uint32_t num_values;
 } BoundUpdateValues;
 
+// Metadata for the deleted values
 typedef struct bound_delete_values {
     Table *table;
 
@@ -122,6 +128,16 @@ typedef struct bound_create_table {
 } BoundCreateTable;
 
 
+// Metadata for a validated ALTER TABLE statement
+typedef struct bound_alter_table {
+    // Existing table being altered (non-owning)
+    Table *table;
+
+    // Validated ALTER TABLE AST node (non-owning)
+    AlterTableNode *alter_table;
+    Schema *result_schema;        // Owning
+} BoundAlterTable;
+
 // Final Bound Statement
 typedef enum bound_statement_type {
     BOUND_STATEMENT_NONE = 0,
@@ -129,7 +145,8 @@ typedef enum bound_statement_type {
     BOUND_STATEMENT_INSERT = 2,
     BOUND_STATEMENT_UPDATE = 3,
     BOUND_STATEMENT_DELETE = 4,
-    BOUND_STATEMENT_CREATE_TABLE = 5
+    BOUND_STATEMENT_CREATE_TABLE = 5,
+    BOUND_STATEMENT_ALTER_TABLE = 6
 } BoundStatementType;
 
 typedef struct bound_statement {
@@ -141,6 +158,7 @@ typedef struct bound_statement {
         BoundUpdateValues update;
         BoundDeleteValues delete;
         BoundCreateTable create_table;
+        BoundAlterTable alter_table;
     } data;
 } BoundStatement;
 
@@ -158,6 +176,8 @@ extern void bound_update_values_free(BoundUpdateValues *update);
 extern void bound_delete_values_free(BoundDeleteValues *delete);
 
 extern void bound_create_table_free(BoundCreateTable *create_table);
+
+extern void bound_alter_table_free(BoundAlterTable *alter_table);
 
 extern void bound_statement_free(BoundStatement *statement);
 

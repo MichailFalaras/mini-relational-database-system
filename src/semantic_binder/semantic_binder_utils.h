@@ -9,6 +9,7 @@ typedef struct abstract_syntax_tree_node ASTNode;
 typedef struct binding_context BindingContext;
 typedef struct expression_node ExpressionNode;
 typedef struct table Table;
+typedef struct constraint Constraint;
 
 typedef struct ast_projection ProjectionNode;
 typedef struct ast_from FromNode;
@@ -35,6 +36,7 @@ typedef struct ast_alter_action AlterActionNode;
 typedef struct bound_expression_type BoundExpressionType;
 typedef struct bound_projection BoundProjection;
 typedef struct bound_insertion_values BoundInsertionValues;
+typedef struct bound_alter_table BoundAlterTable;
 
 /* ---------- CREATE TABLE Pending Column Bindings ---------- */
 
@@ -105,7 +107,7 @@ bool bind_drop_table(ASTNode *root, BindingContext *context);
 
 bool bind_truncate_table(ASTNode *root, BindingContext *context);
 
-bool bind_alter_table(ASTNode *root, BindingContext *context);
+bool bind_alter_table(ASTNode *root, BindingContext *context, BoundAlterTable *out_alter);
 
 bool bind_create_index(ASTNode *root, BindingContext *context);
 
@@ -161,21 +163,21 @@ bool bind_not_null_constraint(ConstraintNode *constraint, CreateTableNode *creat
 bool bind_default_constraint(ConstraintNode *constraint, CreateTableNode *create_table,
     BindingContext *context, int32_t owner_column_index);
 
-bool bind_alter_action(AlterActionNode *action, BindingContext *context);
+bool bind_alter_action(AlterActionNode *action, BindingContext *context, Schema *working_schema);
 
-bool bind_alter_add_col(AlterActionNode *action, BindingContext *context);
+bool bind_alter_add_col(AlterActionNode *action, BindingContext *context, Schema *working_schema);
 
-bool bind_alter_drop_col(AlterActionNode *action, BindingContext *context);
+bool bind_alter_drop_col(AlterActionNode *action, BindingContext *context, Schema *working_schema);
 
-bool bind_alter_rename_table(AlterActionNode *action, BindingContext *context);
+bool bind_alter_rename_table(AlterActionNode *action, BindingContext *context, Schema *working_schema);
 
-bool bind_alter_rename_col(AlterActionNode *action, BindingContext *context);
+bool bind_alter_rename_col(AlterActionNode *action, BindingContext *context, Schema *working_schema);
 
-bool bind_alter_modify_col(AlterActionNode *action, BindingContext *context);
+bool bind_alter_modify_col(AlterActionNode *action, BindingContext *context, Schema *working_schema);
 
-bool bind_alter_add_constraint(AlterActionNode *action, BindingContext *context);
+bool bind_alter_add_constraint(AlterActionNode *action, BindingContext *context, Schema *working_schema);
 
-bool bind_alter_drop_constraint(AlterActionNode *action, BindingContext *context);
+bool bind_alter_drop_constraint(AlterActionNode *action, BindingContext *context, Schema *working_schema);
 
 
 /* ---------- Binding Context Management ---------- */
@@ -314,5 +316,42 @@ bool collect_constraint_references(ConstraintNode *constraint, const CreateTable
 
 // Commit all column references' indexes from column definitions and table-level constraints 
 bool commit_create_table_references(CreateTableNode *create_table, Database *db);
+
+
+/* ---------- ALTER TABLE Validation and Proposed Schema Construction ---------- */
+
+// Resolve a column in the proposed ALTER TABLE schema
+bool resolve_alter_candidate_column(const Schema *working_schema, const ColumnDefNode *new_column,
+    const char *column_name, uint32_t *out_index, DataType *out_type);
+
+// Verify whether the new column declares a candidate key
+bool alter_new_column_has_key(const ColumnDefNode *column, const char *table_name);
+
+// Validate FOREIGN KEY constraint in an ALTER TABLE action
+bool validate_alter_column_fk(const ForeignKeyConstraintNode *fk, const ColumnDefNode *column,
+    const Table *table, Schema *working_schema, const BindingContext *context);
+
+// Validate CHECK constraint in ALTER TABLE
+bool validate_alter_column_check(ConstraintNode *constraint, ColumnDefNode *column,
+    Table *table, Schema *working_schema, const BindingContext *context);
+
+// Construct a runtime constraint for the working schema from the column definition's constraint nodes
+Constraint *build_runtime_alter_constraint(const ConstraintNode *constraint, 
+    const ColumnDefNode *column, const Schema *working_schema, const BindingContext *context,
+    const Table *table, char *runtime_name);
+
+// Add new column definition from an ALTER TABLE action to the working schema
+bool working_schema_add_column(Schema *schema, const ColumnDefNode *column,
+    const BindingContext *context, const Table *table);
+
+// Collect all column references from a bound CHECK expression 
+// in order to construct the corresponding runtime CHECK constraint
+bool collect_bound_check_refs(const ExpressionNode *expr, uint32_t *indices, uint32_t capacity,
+    uint32_t *count);
+
+// Generate a constraint name for an unnamed constraint in ALTER TABLE
+bool generate_alter_constraint_name(const ConstraintNode *constraint,
+    const ColumnDefNode *column, const Table *table, const Schema *working_schema,
+    Constraint *const *prepared, uint32_t prepared_count, char *out_name);
 
 #endif

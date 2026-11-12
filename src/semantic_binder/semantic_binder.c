@@ -4,6 +4,7 @@
 #include "./semantic_binder_utils.h"
 #include "../../include/database.h"
 #include "../../include/ast.h"
+#include "../../include/schema.h"
 
 
 /* Inside parse_query, last check of AST validity. */
@@ -82,20 +83,32 @@ bool bind_statement(ASTNode *root, Database *db, BoundStatement *out_statement) 
 
             if (success) {
                 out_statement->type = BOUND_STATEMENT_CREATE_TABLE;
-                out_statement->data.create_table.create_table =
-                    &root->node_contents.create_table;
+                out_statement->data.create_table.create_table = &root->node_contents.create_table;
             }
 
             break;
         }
+
+        case AST_ALTER_TABLE: {
+            BoundAlterTable alter = {0};
+
+            success = bind_alter_table(root, &context, &alter);
+
+            if (success) {
+                out_statement->type = BOUND_STATEMENT_ALTER_TABLE;
+                out_statement->data.alter_table = alter;
+            }
+
+            break;
+        }
+
+
 #if 0
         case AST_DROP_TABLE:
             success = bind_drop_table(root, &context);
             break;
 
-        case AST_ALTER_TABLE:
-            success = bind_alter_table(root, &context);
-            break;
+        
 
         case AST_TRUNCATE_TABLE:
             success = bind_truncate_table(root, &context);
@@ -173,6 +186,18 @@ void bound_create_table_free(BoundCreateTable *create_table) {
     create_table->create_table = NULL;
 }
 
+void bound_alter_table_free(BoundAlterTable *alter_table) {
+    if (!alter_table) {
+        return;
+    }
+
+    schema_free(alter_table->result_schema);
+
+    alter_table->result_schema = NULL;
+    alter_table->table = NULL;
+    alter_table->alter_table = NULL;
+}
+
 /* Free bound statement metadata */
 void bound_statement_free(BoundStatement *statement) {
     if (!statement) {
@@ -198,6 +223,10 @@ void bound_statement_free(BoundStatement *statement) {
 
         case BOUND_STATEMENT_CREATE_TABLE:
             bound_create_table_free(&statement->data.create_table);
+            break;
+
+        case BOUND_STATEMENT_ALTER_TABLE:
+            bound_alter_table_free(&statement->data.alter_table);
             break;
 
         default:
