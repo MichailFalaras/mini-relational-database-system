@@ -2618,7 +2618,1425 @@ cleanup:
     return result;
 }
 
+/* ---------- bind_alter_table unit tests ---------- */
 
+int test_bind_alter_table_add_column_basic() {
+    int result = 1;
+
+    DDLBinderTestFixture binder = {0};
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    // Initialize the bound ALTER TABLE output
+    BoundAlterTable bound_alter = {0};
+
+    TestToken tokens[] = {
+        {"ALTER TABLE", KEYWORD}, {"employees", IDENTIFIER},
+        {"ADD", KEYWORD}, {"COLUMN", KEYWORD}, {"age", IDENTIFIER}, {"INTEGER", KEYWORD},
+        {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_ALTER_TABLE);
+
+    ASSERT(bind_alter_table(root, &binder.context, &bound_alter));
+
+    // Verify the bound output
+    ASSERT(bound_alter.table == &binder.tables[0]);
+    ASSERT(bound_alter.alter_table == &root->node_contents.alter_table);
+    ASSERT(bound_alter.result_schema != NULL);
+
+    // Original employees schema contains 4 columns
+    ASSERT(binder.schemas[0].num_columns == 4);
+
+    // Proposed schema must contain the new fifth column
+    ASSERT(bound_alter.result_schema->num_columns == 5);
+    ASSERT(bound_alter.result_schema->columns != NULL);
+    ASSERT(bound_alter.result_schema->columns[4] != NULL);
+
+    Column *new_column = bound_alter.result_schema->columns[4];
+
+    ASSERT(strcmp(new_column->name, "age") == 0);
+    ASSERT(new_column->type == INTEGER);
+
+    // ADD COLUMN has no constraints in this test
+    ASSERT(bound_alter.result_schema->num_constraints == 0);
+
+    // The committed table schema must remain unchanged
+    ASSERT(binder.tables[0].table_schema == &binder.schemas[0]);
+    ASSERT(binder.tables[0].table_schema != bound_alter.result_schema);
+
+    // Binding must not create additional database tables
+    ASSERT(binder.db.table_count == 3);
+
+    // Verify binding context
+    ASSERT(binder.context.db == &binder.db);
+    ASSERT(binder.context.relations != NULL);
+    ASSERT(binder.context.num_relations == 1);
+    ASSERT(binder.context.relations[0].table == &binder.tables[0]);
+    ASSERT(binder.context.aggregate_depth == 0);
+    ASSERT(binder.context.current_clause == BIND_CLAUSE_SELECT);
+
+    result = 0;
+
+cleanup:
+    bound_alter_table_free(&bound_alter);
+
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+
+    return result;
+}
+
+int test_bind_alter_table_invalid_duplicate_name() {
+    int result = 1;
+
+    DDLBinderTestFixture binder = {0};
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    // Initialize the bound ALTER TABLE output
+    BoundAlterTable bound_alter = {0};
+
+    TestToken tokens[] = {
+        {"ALTER TABLE", KEYWORD}, {"employees", IDENTIFIER},
+        {"ADD", KEYWORD}, {"COLUMN", KEYWORD}, {"salary", IDENTIFIER}, {"INTEGER", KEYWORD},
+        {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_ALTER_TABLE);
+
+    ASSERT(!bind_alter_table(root, &binder.context, &bound_alter));
+
+    result = 0;
+
+cleanup:
+    bound_alter_table_free(&bound_alter);
+
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+
+    return result;
+}
+
+int test_bind_alter_table_invalid_data_type_args() {
+    int result = 1;
+
+    DDLBinderTestFixture binder = {0};
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    // Initialize the bound ALTER TABLE output
+    BoundAlterTable bound_alter = {0};
+
+    TestToken tokens[] = {
+        {"ALTER TABLE", KEYWORD}, {"employees", IDENTIFIER},
+        {"ADD", KEYWORD}, {"COLUMN", KEYWORD}, {"nickname", IDENTIFIER}, 
+        {"VARCHAR", KEYWORD}, {"(", PUNCTUATION}, {"0", NUMBER}, {")", PUNCTUATION},
+        {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_ALTER_TABLE);
+
+    ASSERT(!bind_alter_table(root, &binder.context, &bound_alter));
+
+    result = 0;
+
+cleanup:
+    bound_alter_table_free(&bound_alter);
+
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+
+    return result;
+}
+
+int test_bind_alter_table_add_column_constraint_validation() {
+    int result = 1;
+
+    DDLBinderTestFixture binder = {0};
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    // Initialize the bound ALTER TABLE output
+    BoundAlterTable bound_alter = {0};
+
+    TestToken tokens[] = {
+        {"ALTER TABLE", KEYWORD}, {"employees", IDENTIFIER},
+        {"ADD", KEYWORD}, {"COLUMN", KEYWORD}, {"age", IDENTIFIER}, {"INTEGER", KEYWORD},
+        {"NOT", KEYWORD}, {"NULL", KEYWORD}, {"DEFAULT", KEYWORD}, {"18", NUMBER},
+        {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_ALTER_TABLE);
+
+    ASSERT(bind_alter_table(root, &binder.context, &bound_alter));
+
+    // Verify the bound output
+    ASSERT(bound_alter.table == &binder.tables[0]);
+    ASSERT(bound_alter.alter_table == &root->node_contents.alter_table);
+    ASSERT(bound_alter.result_schema != NULL);
+
+    // Original employees schema contains 4 columns
+    ASSERT(binder.schemas[0].num_columns == 4);
+
+    // Proposed schema must contain the new fifth column
+    ASSERT(bound_alter.result_schema->num_columns == 5);
+    ASSERT(bound_alter.result_schema->columns != NULL);
+    ASSERT(bound_alter.result_schema->columns[4] != NULL);
+
+    Column *new_column = bound_alter.result_schema->columns[4];
+
+    ASSERT(strcmp(new_column->name, "age") == 0);
+    ASSERT(new_column->type == INTEGER);
+
+    // Verify the runtime constraints
+    Schema *schema = bound_alter.result_schema;
+
+    ASSERT(schema->num_constraints == 2);
+    ASSERT(schema->constraints != NULL);
+
+    Constraint *not_null = schema->constraints[0];
+    Constraint *default_constraint = schema->constraints[1];
+
+    ASSERT(not_null != NULL);
+    ASSERT(default_constraint != NULL);
+
+    // Verify NOT NULL constraint
+    ASSERT(not_null->type == NOT_NULL);
+    ASSERT(!strcmp(not_null->constraint_name, "employees_nn_1"));
+
+    ASSERT(not_null->constraint_data.not_null.column_ref == 4);
+
+    // Verify DEFAULT constraint
+    ASSERT(default_constraint->type == DEFAULT);
+    ASSERT(!strcmp(default_constraint->constraint_name, "employees_df_1"));
+
+    ASSERT(default_constraint->constraint_data.default_value.column_ref == 4);
+
+    // Verify DEFAULT expression
+    ExpressionNode *default_expr = default_constraint->constraint_data.default_value.default_expr;
+
+    ASSERT(default_expr != NULL);
+    ASSERT(default_expr->type == EXPR_LITERAL);
+
+    Literal *literal = &default_expr->expression_data.literal_value;
+
+    ASSERT(!literal->is_untyped_null);
+    ASSERT(literal->literal != NULL);
+    ASSERT(!literal->literal->null_val);
+
+    ASSERT(literal->literal->type == UNSIGNED_INTEGER);
+    ASSERT(literal->literal->value.uint32_val == 18);
+
+    // Verify constraint names are unique
+    ASSERT(strcmp(not_null->constraint_name, default_constraint->constraint_name));
+
+    // The committed table schema must remain unchanged
+    ASSERT(binder.tables[0].table_schema == &binder.schemas[0]);
+    ASSERT(binder.tables[0].table_schema != bound_alter.result_schema);
+
+    // Binding must not create additional database tables
+    ASSERT(binder.db.table_count == 3);
+
+    // Verify binding context
+    ASSERT(binder.context.db == &binder.db);
+    ASSERT(binder.context.relations != NULL);
+    ASSERT(binder.context.num_relations == 1);
+    ASSERT(binder.context.relations[0].table == &binder.tables[0]);
+    ASSERT(binder.context.aggregate_depth == 0);
+    ASSERT(binder.context.current_clause == BIND_CLAUSE_SELECT);
+
+    result = 0;
+
+cleanup:
+    bound_alter_table_free(&bound_alter);
+
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+
+    return result;
+}
+
+int test_bind_alter_table_add_column_primary_key() {
+    int result = 1;
+
+    DDLBinderTestFixture binder = {0};
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    // Initialize the bound ALTER TABLE output
+    BoundAlterTable bound_alter = {0};
+
+    TestToken tokens[] = {
+        {"ALTER TABLE", KEYWORD}, {"employees", IDENTIFIER},
+        {"ADD", KEYWORD}, {"COLUMN", KEYWORD}, {"employee_code", IDENTIFIER}, 
+        {"INTEGER", KEYWORD}, {"PRIMARY", KEYWORD}, {"KEY", KEYWORD},
+        {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_ALTER_TABLE);
+
+    ASSERT(bind_alter_table(root, &binder.context, &bound_alter));
+
+    // Verify the bound output
+    ASSERT(bound_alter.table == &binder.tables[0]);
+    ASSERT(bound_alter.alter_table == &root->node_contents.alter_table);
+    ASSERT(bound_alter.result_schema != NULL);
+
+    // Original employees schema contains 4 columns
+    ASSERT(binder.schemas[0].num_columns == 4);
+
+    // Proposed schema must contain the new fifth column
+    ASSERT(bound_alter.result_schema->num_columns == 5);
+    ASSERT(bound_alter.result_schema->columns != NULL);
+    ASSERT(bound_alter.result_schema->columns[4] != NULL);
+
+    Column *new_column = bound_alter.result_schema->columns[4];
+
+    ASSERT(strcmp(new_column->name, "employee_code") == 0);
+    ASSERT(new_column->type == INTEGER);
+
+    // Verify the runtime constraints
+    Schema *schema = bound_alter.result_schema;
+
+    ASSERT(schema->num_constraints == 1);
+    ASSERT(schema->constraints != NULL);
+
+    Constraint *primary_key = schema->constraints[0];
+
+    ASSERT(primary_key != NULL);
+
+    // Verify PRIMARY KEY constraint
+    ASSERT(primary_key->type == PRIMARY_KEY);
+    ASSERT(!strcmp(primary_key->constraint_name, "employees_pk_1"));
+
+    ASSERT(primary_key->constraint_data.primary_key.amount_columns == 1);
+    ASSERT(primary_key->constraint_data.primary_key.primary_key_columns[0] == 4);
+
+    // The committed table schema must remain unchanged
+    ASSERT(binder.tables[0].table_schema == &binder.schemas[0]);
+    ASSERT(binder.tables[0].table_schema != bound_alter.result_schema);
+
+    // Binding must not create additional database tables
+    ASSERT(binder.db.table_count == 3);
+
+    // Verify binding context
+    ASSERT(binder.context.db == &binder.db);
+    ASSERT(binder.context.relations != NULL);
+    ASSERT(binder.context.num_relations == 1);
+    ASSERT(binder.context.relations[0].table == &binder.tables[0]);
+    ASSERT(binder.context.aggregate_depth == 0);
+    ASSERT(binder.context.current_clause == BIND_CLAUSE_SELECT);
+
+    result = 0;
+
+cleanup:
+    bound_alter_table_free(&bound_alter);
+
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+
+    return result;
+}
+
+int test_bind_alter_table_add_column_conflict_default_null() {
+    int result = 1;
+
+    DDLBinderTestFixture binder = {0};
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    // Initialize the bound ALTER TABLE output
+    BoundAlterTable bound_alter = {0};
+
+    TestToken tokens[] = {
+        {"ALTER TABLE", KEYWORD}, {"employees", IDENTIFIER},
+        {"ADD", KEYWORD}, {"COLUMN", KEYWORD}, {"age", IDENTIFIER}, 
+        {"INTEGER", KEYWORD}, {"NOT", KEYWORD}, {"NULL", KEYWORD}, 
+        {"DEFAULT", KEYWORD}, {"NULL", KEYWORD},
+        {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_ALTER_TABLE);
+
+    ASSERT(!bind_alter_table(root, &binder.context, &bound_alter));
+
+    result = 0;
+
+cleanup:
+    bound_alter_table_free(&bound_alter);
+
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+
+    return result;
+}
+
+int test_bind_alter_table_add_column_check_expr() {
+    int result = 1;
+
+    DDLBinderTestFixture binder = {0};
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    // Initialize the bound ALTER TABLE output
+    BoundAlterTable bound_alter = {0};
+
+    TestToken tokens[] = {
+        {"ALTER TABLE", KEYWORD}, {"employees", IDENTIFIER},
+        {"ADD", KEYWORD}, {"COLUMN", KEYWORD}, {"age", IDENTIFIER}, 
+        {"INTEGER", KEYWORD}, {"CHECK", KEYWORD}, {"(", PUNCTUATION}, 
+        {"age", IDENTIFIER}, {">=", OPERATOR}, {"18", NUMBER}, {")", PUNCTUATION},
+        {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_ALTER_TABLE);
+
+    ASSERT(bind_alter_table(root, &binder.context, &bound_alter));
+
+    // Verify the bound output
+    ASSERT(bound_alter.table == &binder.tables[0]);
+    ASSERT(bound_alter.alter_table == &root->node_contents.alter_table);
+    ASSERT(bound_alter.result_schema != NULL);
+
+    // Original employees schema contains 4 columns
+    ASSERT(binder.schemas[0].num_columns == 4);
+
+    // Proposed schema must contain the new fifth column
+    ASSERT(bound_alter.result_schema->num_columns == 5);
+    ASSERT(bound_alter.result_schema->columns != NULL);
+    ASSERT(bound_alter.result_schema->columns[4] != NULL);
+
+    Column *new_column = bound_alter.result_schema->columns[4];
+
+    ASSERT(strcmp(new_column->name, "age") == 0);
+    ASSERT(new_column->type == INTEGER);
+
+    // Verify the runtime constraints
+    Schema *schema = bound_alter.result_schema;
+
+    ASSERT(schema->num_constraints == 1);
+    ASSERT(schema->constraints != NULL);
+
+    Constraint *check = schema->constraints[0];
+
+    ASSERT(check != NULL);
+
+    // Verify CHECK constraint
+    ASSERT(check->type == CHECK);
+    ASSERT(!strcmp(check->constraint_name, "employees_ck_1"));
+
+    ASSERT(check->constraint_data.check.amount_columns == 1);
+    ASSERT(check->constraint_data.check.column_refs[0] == 4);
+
+    // Validate binary expression (age >= 18)
+    ExpressionNode *check_expr = check->constraint_data.check.constraint_expr;
+    
+    ASSERT(check_expr != NULL);
+    ASSERT(check_expr->type == EXPR_BINARY);
+    ASSERT(check_expr->expression_data.binary_expr.op == OP_GTE);
+
+    ExpressionNode *age_column_expr = check_expr->expression_data.binary_expr.left_operand;
+    ExpressionNode *number_literal = check_expr->expression_data.binary_expr.right_operand;
+
+    ASSERT(age_column_expr != NULL);
+    ASSERT(age_column_expr->type == EXPR_COLUMN_REF);
+    ASSERT(age_column_expr->expression_data.column_value.relation_index == 0);
+    ASSERT(age_column_expr->expression_data.column_value.column_index == 4);
+
+    ASSERT(number_literal != NULL);
+    ASSERT(number_literal->type == EXPR_LITERAL);
+    ASSERT(!number_literal->expression_data.literal_value.is_untyped_null);
+    
+    ASSERT(number_literal->expression_data.literal_value.literal != NULL);
+    ASSERT(number_literal->expression_data.literal_value.literal->type == UNSIGNED_INTEGER);
+    ASSERT(number_literal->expression_data.literal_value.literal->value.uint32_val == 18);
+
+    // The committed table schema must remain unchanged
+    ASSERT(binder.tables[0].table_schema == &binder.schemas[0]);
+    ASSERT(binder.tables[0].table_schema != bound_alter.result_schema);
+
+    // Binding must not create additional database tables
+    ASSERT(binder.db.table_count == 3);
+
+    // Verify binding context
+    ASSERT(binder.context.db == &binder.db);
+    ASSERT(binder.context.relations != NULL);
+    ASSERT(binder.context.num_relations == 1);
+    ASSERT(binder.context.relations[0].table == &binder.tables[0]);
+    ASSERT(binder.context.aggregate_depth == 0);
+    ASSERT(binder.context.current_clause == BIND_CLAUSE_SELECT);
+
+    result = 0;
+
+cleanup:
+    bound_alter_table_free(&bound_alter);
+
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+
+    return result;
+}
+
+int test_bind_alter_table_add_column_invalid_check_expr() {
+    int result = 1;
+
+    DDLBinderTestFixture binder = {0};
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    // Initialize the bound ALTER TABLE output
+    BoundAlterTable bound_alter = {0};
+
+    TestToken tokens[] = {
+        {"ALTER TABLE", KEYWORD}, {"employees", IDENTIFIER},
+        {"ADD", KEYWORD}, {"COLUMN", KEYWORD}, {"age", IDENTIFIER}, 
+        {"INTEGER", KEYWORD}, {"CHECK", KEYWORD}, {"(", PUNCTUATION}, 
+        {"unknown_column", IDENTIFIER}, {">", OPERATOR}, {"0", NUMBER}, {")", PUNCTUATION},
+        {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_ALTER_TABLE);
+
+    ASSERT(!bind_alter_table(root, &binder.context, &bound_alter));
+
+    result = 0;
+
+cleanup:
+    bound_alter_table_free(&bound_alter);
+
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+
+    return result;
+}
+
+int test_bind_alter_table_add_column_fk_references_pk() {
+    int result = 1;
+
+    DDLBinderTestFixture binder = {0};
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    // Initialize the bound ALTER TABLE output
+    BoundAlterTable bound_alter = {0};
+
+    TestToken tokens[] = {
+        {"ALTER TABLE", KEYWORD}, {"employees", IDENTIFIER},
+        {"ADD", KEYWORD}, {"COLUMN", KEYWORD}, {"parent_department_id", IDENTIFIER}, 
+        {"INTEGER", KEYWORD}, {"REFERENCES", KEYWORD}, {"departments", IDENTIFIER}, 
+        {"(", PUNCTUATION}, {"id", IDENTIFIER}, {")", PUNCTUATION},
+        {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_ALTER_TABLE);
+
+    ASSERT(bind_alter_table(root, &binder.context, &bound_alter));
+
+    // Verify the bound output
+    ASSERT(bound_alter.table == &binder.tables[0]);
+    ASSERT(bound_alter.alter_table == &root->node_contents.alter_table);
+    ASSERT(bound_alter.result_schema != NULL);
+
+    // Original employees schema contains 4 columns
+    ASSERT(binder.schemas[0].num_columns == 4);
+
+    // Proposed schema must contain the new fifth column
+    ASSERT(bound_alter.result_schema->num_columns == 5);
+    ASSERT(bound_alter.result_schema->columns != NULL);
+    ASSERT(bound_alter.result_schema->columns[4] != NULL);
+
+    Column *new_column = bound_alter.result_schema->columns[4];
+
+    ASSERT(strcmp(new_column->name, "parent_department_id") == 0);
+    ASSERT(new_column->type == INTEGER);
+
+    // Verify the runtime constraints
+    Schema *schema = bound_alter.result_schema;
+
+    ASSERT(schema->num_constraints == 1);
+    ASSERT(schema->constraints != NULL);
+
+    Constraint *foreign_key = schema->constraints[0];
+
+    ASSERT(foreign_key != NULL);
+
+    // Verify FOREIGN KEY constraint
+    ASSERT(foreign_key->type == FOREIGN_KEY);
+    ASSERT(!strcmp(foreign_key->constraint_name, "employees_fk_1"));
+
+    ASSERT(foreign_key->constraint_data.foreign_key.amount_columns == 1);
+    ASSERT(foreign_key->constraint_data.foreign_key.foreign_key_columns[0] == 4);
+    
+    ASSERT(!strcmp(foreign_key->constraint_data.foreign_key.referenced_table_name, "departments"));
+    ASSERT(foreign_key->constraint_data.foreign_key.amount_referenced_columns == 1);
+    ASSERT(foreign_key->constraint_data.foreign_key.referenced_columns[0] == 0);
+    
+
+    // The committed table schema must remain unchanged
+    ASSERT(binder.tables[0].table_schema == &binder.schemas[0]);
+    ASSERT(binder.tables[0].table_schema != bound_alter.result_schema);
+
+    // Binding must not create additional database tables
+    ASSERT(binder.db.table_count == 3);
+
+    // Verify binding context
+    ASSERT(binder.context.db == &binder.db);
+    ASSERT(binder.context.relations != NULL);
+    ASSERT(binder.context.num_relations == 1);
+    ASSERT(binder.context.relations[0].table == &binder.tables[0]);
+    ASSERT(binder.context.aggregate_depth == 0);
+    ASSERT(binder.context.current_clause == BIND_CLAUSE_SELECT);
+
+    result = 0;
+
+cleanup:
+    bound_alter_table_free(&bound_alter);
+
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+
+    return result;
+}
+
+int test_bind_alter_table_add_column_fk_references_unique() {
+    int result = 1;
+
+    DDLBinderTestFixture binder = {0};
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    // Initialize the bound ALTER TABLE output
+    BoundAlterTable bound_alter = {0};
+
+    TestToken tokens[] = {
+        {"ALTER TABLE", KEYWORD}, {"employees", IDENTIFIER},
+        {"ADD", KEYWORD}, {"COLUMN", KEYWORD}, {"department_name", IDENTIFIER}, 
+        {"VARCHAR", KEYWORD}, {"(", PUNCTUATION}, {"64", NUMBER}, {")", PUNCTUATION}, 
+        {"REFERENCES", KEYWORD}, {"departments", IDENTIFIER}, 
+        {"(", PUNCTUATION}, {"name", IDENTIFIER}, {")", PUNCTUATION},
+        {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_ALTER_TABLE);
+
+    ASSERT(bind_alter_table(root, &binder.context, &bound_alter));
+
+    // Verify the bound output
+    ASSERT(bound_alter.table == &binder.tables[0]);
+    ASSERT(bound_alter.alter_table == &root->node_contents.alter_table);
+    ASSERT(bound_alter.result_schema != NULL);
+
+    // Original employees schema contains 4 columns
+    ASSERT(binder.schemas[0].num_columns == 4);
+
+    // Proposed schema must contain the new fifth column
+    ASSERT(bound_alter.result_schema->num_columns == 5);
+    ASSERT(bound_alter.result_schema->columns != NULL);
+    ASSERT(bound_alter.result_schema->columns[4] != NULL);
+
+    Column *new_column = bound_alter.result_schema->columns[4];
+
+    ASSERT(strcmp(new_column->name, "department_name") == 0);
+    ASSERT(new_column->type == VARCHAR);
+    ASSERT(new_column->type_args.length == 64);
+
+    // Verify the runtime constraints
+    Schema *schema = bound_alter.result_schema;
+
+    ASSERT(schema->num_constraints == 1);
+    ASSERT(schema->constraints != NULL);
+
+    Constraint *foreign_key = schema->constraints[0];
+
+    ASSERT(foreign_key != NULL);
+
+    // Verify FOREIGN KEY constraint
+    ASSERT(foreign_key->type == FOREIGN_KEY);
+    ASSERT(!strcmp(foreign_key->constraint_name, "employees_fk_1"));
+
+    ASSERT(foreign_key->constraint_data.foreign_key.amount_columns == 1);
+    ASSERT(foreign_key->constraint_data.foreign_key.foreign_key_columns[0] == 4);
+    
+    ASSERT(!strcmp(foreign_key->constraint_data.foreign_key.referenced_table_name, "departments"));
+    ASSERT(foreign_key->constraint_data.foreign_key.amount_referenced_columns == 1);
+    ASSERT(foreign_key->constraint_data.foreign_key.referenced_columns[0] == 1);
+    
+
+    // The committed table schema must remain unchanged
+    ASSERT(binder.tables[0].table_schema == &binder.schemas[0]);
+    ASSERT(binder.tables[0].table_schema != bound_alter.result_schema);
+
+    // Binding must not create additional database tables
+    ASSERT(binder.db.table_count == 3);
+
+    // Verify binding context
+    ASSERT(binder.context.db == &binder.db);
+    ASSERT(binder.context.relations != NULL);
+    ASSERT(binder.context.num_relations == 1);
+    ASSERT(binder.context.relations[0].table == &binder.tables[0]);
+    ASSERT(binder.context.aggregate_depth == 0);
+    ASSERT(binder.context.current_clause == BIND_CLAUSE_SELECT);
+
+    result = 0;
+
+cleanup:
+    bound_alter_table_free(&bound_alter);
+
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+
+    return result;
+}
+
+int test_bind_alter_table_add_column_fk_references_non_unique() {
+    int result = 1;
+
+    DDLBinderTestFixture binder = {0};
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    // Initialize the bound ALTER TABLE output
+    BoundAlterTable bound_alter = {0};
+
+    TestToken tokens[] = {
+        {"ALTER TABLE", KEYWORD}, {"employees", IDENTIFIER},
+        {"ADD", KEYWORD}, {"COLUMN", KEYWORD}, {"department_budget", IDENTIFIER}, 
+        {"VARCHAR", KEYWORD}, {"(", PUNCTUATION}, {"64", NUMBER}, {")", PUNCTUATION}, 
+        {"REFERENCES", KEYWORD}, {"departments", IDENTIFIER}, 
+        {"(", PUNCTUATION}, {"budget", IDENTIFIER}, {")", PUNCTUATION},
+        {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_ALTER_TABLE);
+
+    ASSERT(!bind_alter_table(root, &binder.context, &bound_alter));
+
+    result = 0;
+
+cleanup:
+    bound_alter_table_free(&bound_alter);
+
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+
+    return result;
+}
+
+int test_bind_alter_table_add_column_datatype_mismatch() {
+    int result = 1;
+
+    DDLBinderTestFixture binder = {0};
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    // Initialize the bound ALTER TABLE output
+    BoundAlterTable bound_alter = {0};
+
+    TestToken tokens[] = {
+        {"ALTER TABLE", KEYWORD}, {"employees", IDENTIFIER},
+        {"ADD", KEYWORD}, {"COLUMN", KEYWORD}, {"department_code", IDENTIFIER}, 
+        {"INTEGER", KEYWORD}, {"REFERENCES", KEYWORD}, {"departments", IDENTIFIER}, 
+        {"(", PUNCTUATION}, {"name", IDENTIFIER}, {")", PUNCTUATION},
+        {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_ALTER_TABLE);
+
+    ASSERT(!bind_alter_table(root, &binder.context, &bound_alter));
+
+    result = 0;
+
+cleanup:
+    bound_alter_table_free(&bound_alter);
+
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+
+    return result;
+}
+
+int test_bind_alter_table_add_column_missing_referenced_table() {
+    int result = 1;
+
+    DDLBinderTestFixture binder = {0};
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    // Initialize the bound ALTER TABLE output
+    BoundAlterTable bound_alter = {0};
+
+    TestToken tokens[] = {
+        {"ALTER TABLE", KEYWORD}, {"employees", IDENTIFIER},
+        {"ADD", KEYWORD}, {"COLUMN", KEYWORD}, {"manager_id", IDENTIFIER}, 
+        {"INTEGER", KEYWORD}, {"REFERENCES", KEYWORD}, {"managers", IDENTIFIER}, 
+        {"(", PUNCTUATION}, {"id", IDENTIFIER}, {")", PUNCTUATION},
+        {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_ALTER_TABLE);
+
+    ASSERT(!bind_alter_table(root, &binder.context, &bound_alter));
+
+    result = 0;
+
+cleanup:
+    bound_alter_table_free(&bound_alter);
+
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+
+    return result;
+}
+
+int test_bind_alter_table_add_column_self_reference() {
+    int result = 1;
+
+    DDLBinderTestFixture binder = {0};
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    // Initialize the bound ALTER TABLE output
+    BoundAlterTable bound_alter = {0};
+
+    TestToken tokens[] = {
+        {"ALTER TABLE", KEYWORD}, {"employees", IDENTIFIER},
+        {"ADD", KEYWORD}, {"COLUMN", KEYWORD}, {"mentor_id", IDENTIFIER}, 
+        {"INTEGER", KEYWORD}, {"UNIQUE", KEYWORD}, 
+        {"REFERENCES", KEYWORD}, {"employees", IDENTIFIER}, 
+        {"(", PUNCTUATION}, {"mentor_id", IDENTIFIER}, {")", PUNCTUATION},
+        {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_ALTER_TABLE);
+
+    ASSERT(bind_alter_table(root, &binder.context, &bound_alter));
+
+    // Verify the bound output
+    ASSERT(bound_alter.table == &binder.tables[0]);
+    ASSERT(bound_alter.alter_table == &root->node_contents.alter_table);
+    ASSERT(bound_alter.result_schema != NULL);
+
+    // Original employees schema contains 4 columns
+    ASSERT(binder.schemas[0].num_columns == 4);
+
+    // Proposed schema must contain the new fifth column
+    ASSERT(bound_alter.result_schema->num_columns == 5);
+    ASSERT(bound_alter.result_schema->columns != NULL);
+    ASSERT(bound_alter.result_schema->columns[4] != NULL);
+
+    Column *new_column = bound_alter.result_schema->columns[4];
+
+    ASSERT(strcmp(new_column->name, "mentor_id") == 0);
+    ASSERT(new_column->type == INTEGER);
+
+    // Verify the runtime constraints
+    Schema *schema = bound_alter.result_schema;
+
+    ASSERT(schema->num_constraints == 2);
+    ASSERT(schema->constraints != NULL);
+
+    // Validate UNIQUE constraint
+    Constraint *unique = schema->constraints[0];
+
+    ASSERT(unique != NULL);
+    ASSERT(unique->type == UNIQUE);
+    ASSERT(!strcmp(unique->constraint_name, "employees_uq_1"));
+    ASSERT(unique->constraint_data.unique_cols.amount_columns == 1);
+    ASSERT(unique->constraint_data.unique_cols.column_refs[0] == 4);
+
+    // Validate FOREIGN KEY constraint
+    Constraint *foreign_key = schema->constraints[1];
+
+    ASSERT(foreign_key != NULL);
+
+    // Verify FOREIGN KEY constraint
+    ASSERT(foreign_key->type == FOREIGN_KEY);
+    ASSERT(!strcmp(foreign_key->constraint_name, "employees_fk_1"));
+
+    ASSERT(foreign_key->constraint_data.foreign_key.amount_columns == 1);
+    ASSERT(foreign_key->constraint_data.foreign_key.foreign_key_columns[0] == 4);
+    
+    ASSERT(!strcmp(foreign_key->constraint_data.foreign_key.referenced_table_name, "employees"));
+    ASSERT(foreign_key->constraint_data.foreign_key.amount_referenced_columns == 1);
+    ASSERT(foreign_key->constraint_data.foreign_key.referenced_columns[0] == 4);
+    
+
+    // The committed table schema must remain unchanged
+    ASSERT(binder.tables[0].table_schema == &binder.schemas[0]);
+    ASSERT(binder.tables[0].table_schema != bound_alter.result_schema);
+
+    // Binding must not create additional database tables
+    ASSERT(binder.db.table_count == 3);
+
+    // Verify binding context
+    ASSERT(binder.context.db == &binder.db);
+    ASSERT(binder.context.relations != NULL);
+    ASSERT(binder.context.num_relations == 1);
+    ASSERT(binder.context.relations[0].table == &binder.tables[0]);
+    ASSERT(binder.context.aggregate_depth == 0);
+    ASSERT(binder.context.current_clause == BIND_CLAUSE_SELECT);
+
+    result = 0;
+
+cleanup:
+    bound_alter_table_free(&bound_alter);
+
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+
+    return result;
+}
+
+int test_bind_alter_table_add_column_self_reference_not_key() {
+    int result = 1;
+
+    DDLBinderTestFixture binder = {0};
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    // Initialize the bound ALTER TABLE output
+    BoundAlterTable bound_alter = {0};
+
+    TestToken tokens[] = {
+        {"ALTER TABLE", KEYWORD}, {"employees", IDENTIFIER},
+        {"ADD", KEYWORD}, {"COLUMN", KEYWORD}, {"manager_id", IDENTIFIER}, 
+        {"INTEGER", KEYWORD}, {"REFERENCES", KEYWORD}, {"employees", IDENTIFIER}, 
+        {"(", PUNCTUATION}, {"id", IDENTIFIER}, {")", PUNCTUATION},
+        {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_ALTER_TABLE);
+
+    ASSERT(!bind_alter_table(root, &binder.context, &bound_alter));
+
+    result = 0;
+
+cleanup:
+    bound_alter_table_free(&bound_alter);
+
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+
+    return result;
+}
+
+int test_bind_alter_table_add_column_preserve_constraint_name() {
+    int result = 1;
+
+    DDLBinderTestFixture binder = {0};
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    // Initialize the bound ALTER TABLE output
+    BoundAlterTable bound_alter = {0};
+
+    TestToken tokens[] = {
+        {"ALTER TABLE", KEYWORD}, {"employees", IDENTIFIER},
+        {"ADD", KEYWORD}, {"COLUMN", KEYWORD}, {"age", IDENTIFIER}, 
+        {"INTEGER", KEYWORD}, {"CONSTRAINT", KEYWORD}, {"ck_employee_age", IDENTIFIER},
+        {"CHECK", KEYWORD}, {"(", PUNCTUATION}, {"age", IDENTIFIER},
+        {">=", OPERATOR}, {"18", NUMBER}, {")", PUNCTUATION},
+        {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_ALTER_TABLE);
+
+    ASSERT(bind_alter_table(root, &binder.context, &bound_alter));
+
+    // Verify the bound output
+    ASSERT(bound_alter.table == &binder.tables[0]);
+    ASSERT(bound_alter.alter_table == &root->node_contents.alter_table);
+    ASSERT(bound_alter.result_schema != NULL);
+
+    // Original employees schema contains 4 columns
+    ASSERT(binder.schemas[0].num_columns == 4);
+
+    // Proposed schema must contain the new fifth column
+    ASSERT(bound_alter.result_schema->num_columns == 5);
+    ASSERT(bound_alter.result_schema->columns != NULL);
+    ASSERT(bound_alter.result_schema->columns[4] != NULL);
+
+    Column *new_column = bound_alter.result_schema->columns[4];
+
+    ASSERT(strcmp(new_column->name, "age") == 0);
+    ASSERT(new_column->type == INTEGER);
+
+    // Verify the runtime constraints
+    Schema *schema = bound_alter.result_schema;
+
+    ASSERT(schema->num_constraints == 1);
+    ASSERT(schema->constraints != NULL);
+
+    // Validate CHECK constraint
+    Constraint *check = schema->constraints[0];
+
+    ASSERT(check != NULL);
+
+    // Verify FOREIGN KEY constraint
+    ASSERT(check->type == CHECK);
+    ASSERT(!strcmp(check->constraint_name, "ck_employee_age"));
+
+    // Not, validating the whole binary expression (age >= 18),
+    // because it's verified in the corresponding test above
+    ASSERT(check->constraint_data.check.amount_columns == 1);
+    ASSERT(check->constraint_data.check.column_refs[0] == 4);
+    
+    
+    // The committed table schema must remain unchanged
+    ASSERT(binder.tables[0].table_schema == &binder.schemas[0]);
+    ASSERT(binder.tables[0].table_schema != bound_alter.result_schema);
+
+    // Binding must not create additional database tables
+    ASSERT(binder.db.table_count == 3);
+
+    // Verify binding context
+    ASSERT(binder.context.db == &binder.db);
+    ASSERT(binder.context.relations != NULL);
+    ASSERT(binder.context.num_relations == 1);
+    ASSERT(binder.context.relations[0].table == &binder.tables[0]);
+    ASSERT(binder.context.aggregate_depth == 0);
+    ASSERT(binder.context.current_clause == BIND_CLAUSE_SELECT);
+
+    result = 0;
+
+cleanup:
+    bound_alter_table_free(&bound_alter);
+
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+
+    return result;
+}
+
+int test_bind_alter_table_add_column_multiple_constraint_names() {
+    int result = 1;
+
+    DDLBinderTestFixture binder = {0};
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    // Initialize the bound ALTER TABLE output
+    BoundAlterTable bound_alter = {0};
+
+    TestToken tokens[] = {
+        {"ALTER TABLE", KEYWORD}, {"employees", IDENTIFIER},
+        {"ADD", KEYWORD}, {"COLUMN", KEYWORD}, {"age", IDENTIFIER}, 
+        {"INTEGER", KEYWORD}, 
+        {"CHECK", KEYWORD}, {"(", PUNCTUATION}, {"age", IDENTIFIER},
+        {">=", OPERATOR}, {"18", NUMBER}, {")", PUNCTUATION},
+        {"CHECK", KEYWORD}, {"(", PUNCTUATION}, {"age", IDENTIFIER},
+        {"<=", OPERATOR}, {"65", NUMBER}, {")", PUNCTUATION},
+        {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_ALTER_TABLE);
+
+    ASSERT(bind_alter_table(root, &binder.context, &bound_alter));
+
+    // Verify the bound output
+    ASSERT(bound_alter.table == &binder.tables[0]);
+    ASSERT(bound_alter.alter_table == &root->node_contents.alter_table);
+    ASSERT(bound_alter.result_schema != NULL);
+
+    // Original employees schema contains 4 columns
+    ASSERT(binder.schemas[0].num_columns == 4);
+
+    // Proposed schema must contain the new fifth column
+    ASSERT(bound_alter.result_schema->num_columns == 5);
+    ASSERT(bound_alter.result_schema->columns != NULL);
+    ASSERT(bound_alter.result_schema->columns[4] != NULL);
+
+    Column *new_column = bound_alter.result_schema->columns[4];
+
+    ASSERT(strcmp(new_column->name, "age") == 0);
+    ASSERT(new_column->type == INTEGER);
+
+    // Verify the runtime constraints
+    Schema *schema = bound_alter.result_schema;
+
+    ASSERT(schema->num_constraints == 2);
+    ASSERT(schema->constraints != NULL);
+
+    // Validate CHECK constraint
+    Constraint *check_1 = schema->constraints[0];
+    Constraint *check_2 = schema->constraints[1];
+
+    ASSERT(check_1 != NULL);
+    ASSERT(check_2 != NULL);
+
+    // Verify unique constraint names
+    ASSERT(check_1->type == CHECK);
+    ASSERT(!strcmp(check_1->constraint_name, "employees_ck_1"));
+    
+    ASSERT(check_2->type == CHECK);
+    ASSERT(!strcmp(check_2->constraint_name, "employees_ck_2"));
+
+    // The committed table schema must remain unchanged
+    ASSERT(binder.tables[0].table_schema == &binder.schemas[0]);
+    ASSERT(binder.tables[0].table_schema != bound_alter.result_schema);
+
+    // Binding must not create additional database tables
+    ASSERT(binder.db.table_count == 3);
+
+    // Verify binding context
+    ASSERT(binder.context.db == &binder.db);
+    ASSERT(binder.context.relations != NULL);
+    ASSERT(binder.context.num_relations == 1);
+    ASSERT(binder.context.relations[0].table == &binder.tables[0]);
+    ASSERT(binder.context.aggregate_depth == 0);
+    ASSERT(binder.context.current_clause == BIND_CLAUSE_SELECT);
+
+    result = 0;
+
+cleanup:
+    bound_alter_table_free(&bound_alter);
+
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+
+    return result;
+}
+
+int test_bind_alter_table_add_column_duplicate_constraint_names() {
+    int result = 1;
+
+    DDLBinderTestFixture binder = {0};
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    // Initialize the bound ALTER TABLE output
+    BoundAlterTable bound_alter = {0};
+
+    TestToken tokens[] = {
+        {"ALTER TABLE", KEYWORD}, {"employees", IDENTIFIER},
+        {"ADD", KEYWORD}, {"COLUMN", KEYWORD}, {"age", IDENTIFIER}, {"INTEGER", KEYWORD},
+        {"CONSTRAINT", KEYWORD}, {"age_check", IDENTIFIER}, {"CHECK", KEYWORD}, 
+        {"(", PUNCTUATION}, {"age", IDENTIFIER}, {">=", OPERATOR}, {"18", NUMBER}, {")", PUNCTUATION},
+        {"CONSTRAINT", KEYWORD}, {"age_check", IDENTIFIER}, {"CHECK", KEYWORD}, 
+        {"(", PUNCTUATION}, {"age", IDENTIFIER}, {"<=", OPERATOR}, {"65", NUMBER}, {")", PUNCTUATION},
+        {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_ALTER_TABLE);
+
+    ASSERT(!bind_alter_table(root, &binder.context, &bound_alter));
+
+    result = 0;
+
+cleanup:
+    bound_alter_table_free(&bound_alter);
+
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+
+    return result;
+}
+
+int test_bind_alter_table_add_column_ref_preceding_add_column() {
+    int result = 1;
+
+    DDLBinderTestFixture binder = {0};
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    // Initialize the bound ALTER TABLE output
+    BoundAlterTable bound_alter = {0};
+
+    TestToken tokens[] = {
+        {"ALTER TABLE", KEYWORD}, {"employees", IDENTIFIER},
+        {"ADD", KEYWORD}, {"COLUMN", KEYWORD}, {"code", IDENTIFIER}, 
+        {"INTEGER", KEYWORD}, {"UNIQUE", KEYWORD}, {",", PUNCTUATION},
+        {"ADD", KEYWORD}, {"COLUMN", KEYWORD}, {"alternate_code", IDENTIFIER},
+        {"INTEGER", KEYWORD}, {"REFERENCES", KEYWORD}, {"employees", IDENTIFIER},
+        {"(", PUNCTUATION}, {"code", IDENTIFIER}, {")", PUNCTUATION},
+        {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_ALTER_TABLE);
+
+    ASSERT(bind_alter_table(root, &binder.context, &bound_alter));
+
+    // Verify the bound output
+    ASSERT(bound_alter.table == &binder.tables[0]);
+    ASSERT(bound_alter.alter_table == &root->node_contents.alter_table);
+    ASSERT(bound_alter.result_schema != NULL);
+
+    // Original employees schema contains 4 columns
+    ASSERT(binder.schemas[0].num_columns == 4);
+
+    // Proposed schema must contain the new fifth column
+    ASSERT(bound_alter.result_schema->num_columns == 6);
+    ASSERT(bound_alter.result_schema->columns != NULL);
+    ASSERT(bound_alter.result_schema->columns[4] != NULL);
+
+    Column *new_column = bound_alter.result_schema->columns[4];
+
+    ASSERT(strcmp(new_column->name, "code") == 0);
+    ASSERT(new_column->type == INTEGER);
+
+    // Verify the runtime constraints
+    Schema *schema = bound_alter.result_schema;
+
+    ASSERT(schema->num_constraints == 2);
+    ASSERT(schema->constraints != NULL);
+
+    // Validate UNIQUE constraint
+    Constraint *unique = schema->constraints[0];
+
+    ASSERT(unique != NULL);
+    ASSERT(unique->type == UNIQUE);
+    ASSERT(!strcmp(unique->constraint_name, "employees_uq_1"));
+
+    // Validate FOREIGN KEY constraint
+    Constraint *foreign_key = schema->constraints[1];
+
+    ASSERT(foreign_key != NULL);
+    ASSERT(foreign_key->type == FOREIGN_KEY);
+    ASSERT(!strcmp(foreign_key->constraint_name, "employees_fk_1"));
+
+
+    // The committed table schema must remain unchanged
+    ASSERT(binder.tables[0].table_schema == &binder.schemas[0]);
+    ASSERT(binder.tables[0].table_schema != bound_alter.result_schema);
+
+    // Binding must not create additional database tables
+    ASSERT(binder.db.table_count == 3);
+
+    // Verify binding context
+    ASSERT(binder.context.db == &binder.db);
+    ASSERT(binder.context.relations != NULL);
+    ASSERT(binder.context.num_relations == 1);
+    ASSERT(binder.context.relations[0].table == &binder.tables[0]);
+    ASSERT(binder.context.aggregate_depth == 0);
+    ASSERT(binder.context.current_clause == BIND_CLAUSE_SELECT);
+
+    result = 0;
+
+cleanup:
+    bound_alter_table_free(&bound_alter);
+
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+
+    return result;
+}
+
+int test_bind_alter_table_add_column_reject_and_rollback_later_action() {
+    int result = 1;
+
+    DDLBinderTestFixture binder = {0};
+
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+
+    // Initialize the bound ALTER TABLE output
+    BoundAlterTable bound_alter = {0};
+
+    TestToken tokens[] = {
+        {"ALTER TABLE", KEYWORD}, {"employees", IDENTIFIER},
+        {"ADD", KEYWORD}, {"COLUMN", KEYWORD}, {"age", IDENTIFIER}, {"INTEGER", KEYWORD}, {",", PUNCTUATION},
+        {"ADD", KEYWORD}, {"COLUMN", KEYWORD}, {"salary", IDENTIFIER}, {"INTEGER", KEYWORD},
+        {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_ALTER_TABLE);
+
+    ASSERT(!bind_alter_table(root, &binder.context, &bound_alter));
+
+    // No bound ALTER result should be published
+    ASSERT(bound_alter.table == NULL);
+    ASSERT(bound_alter.alter_table == NULL);
+    ASSERT(bound_alter.result_schema == NULL);
+
+    // The original table must retain its original schema
+    ASSERT(binder.tables[0].table_schema == &binder.schemas[0]);
+
+    // Original schema remains unchanged
+    ASSERT(binder.schemas[0].num_columns == 4);
+    ASSERT(binder.schemas[0].columns != NULL);
+
+    // Verify original column names and ordering
+    ASSERT(strcmp(binder.schemas[0].columns[0]->name, "id") == 0);
+    ASSERT(strcmp(binder.schemas[0].columns[1]->name, "name") == 0);
+    ASSERT(strcmp(binder.schemas[0].columns[2]->name, "salary") == 0);
+    ASSERT(strcmp(binder.schemas[0].columns[3]->name, "department_id") == 0);
+
+    // The original schema still has no constraints
+    ASSERT(binder.schemas[0].num_constraints == 0);
+
+    // No additional tables should have been created
+    ASSERT(binder.db.table_count == 3);
+    
+    result = 0;
+
+cleanup:
+    bound_alter_table_free(&bound_alter);
+
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+
+    return result;
+}
 
 /* ---------- Logging Helper ---------- */
 
@@ -2708,6 +4126,48 @@ int main(int argc, char *argv[]) {
     generate_output(result, 33, "test_bind_create_table_invalid_arguments");
     result = test_bind_create_table_invalid_ast_structure();
     generate_output(result, 34, "test_bind_create_table_invalid_ast_structure");
+
+    /* ---------- bind_alter_table unit tests ---------- */
+    result = test_bind_alter_table_add_column_basic();
+    generate_output(result, 35, "test_bind_alter_table_add_column_basic"); 
+    result = test_bind_alter_table_invalid_duplicate_name();
+    generate_output(result, 36, "test_bind_alter_table_invalid_duplicate_name");
+    result = test_bind_alter_table_invalid_data_type_args();
+    generate_output(result, 37, "test_bind_alter_table_invalid_data_type_args");
+    result = test_bind_alter_table_add_column_constraint_validation();
+    generate_output(result, 38, "test_bind_alter_table_add_column_constraint_validation");
+    result = test_bind_alter_table_add_column_primary_key();
+    generate_output(result, 39, "test_bind_alter_table_add_column_primary_key");
+    result = test_bind_alter_table_add_column_conflict_default_null();
+    generate_output(result, 40, "test_bind_alter_table_add_column_conflict_default_null");
+    result = test_bind_alter_table_add_column_check_expr();
+    generate_output(result, 41, "test_bind_alter_table_add_column_check_expr");
+    result = test_bind_alter_table_add_column_invalid_check_expr();
+    generate_output(result, 42, "test_bind_alter_table_add_column_invalid_check_expr");
+    result = test_bind_alter_table_add_column_fk_references_pk();
+    generate_output(result, 43, "test_bind_alter_table_add_column_fk_references_pk");
+    result = test_bind_alter_table_add_column_fk_references_unique();
+    generate_output(result, 44, "test_bind_alter_table_add_column_fk_references_unique");
+    result = test_bind_alter_table_add_column_fk_references_non_unique();
+    generate_output(result, 45, "test_bind_alter_table_add_column_fk_references_non_unique");
+    result = test_bind_alter_table_add_column_datatype_mismatch();
+    generate_output(result, 46, "test_bind_alter_table_add_column_datatype_mismatch");
+    result = test_bind_alter_table_add_column_missing_referenced_table();
+    generate_output(result, 47, "test_bind_alter_table_add_column_missing_referenced_table");
+    result = test_bind_alter_table_add_column_self_reference();
+    generate_output(result, 48, "test_bind_alter_table_add_column_self_reference");
+    result = test_bind_alter_table_add_column_self_reference_not_key();
+    generate_output(result, 49, "test_bind_alter_table_add_column_self_reference_not_key");
+    result = test_bind_alter_table_add_column_preserve_constraint_name();
+    generate_output(result, 50, "test_bind_alter_table_add_column_preserve_constraint_name");
+    result = test_bind_alter_table_add_column_multiple_constraint_names();
+    generate_output(result, 51, "test_bind_alter_table_add_column_multiple_constraint_names");
+    result = test_bind_alter_table_add_column_duplicate_constraint_names();
+    generate_output(result, 52, "test_bind_alter_table_add_column_duplicate_constraint_names");
+    result = test_bind_alter_table_add_column_ref_preceding_add_column();
+    generate_output(result, 53, "test_bind_alter_table_add_column_ref_preceding_add_column");
+    result = test_bind_alter_table_add_column_reject_and_rollback_later_action();
+    generate_output(result, 54, "test_bind_alter_table_add_column_reject_and_rollback_later_action");
 
     return 0;
 }
