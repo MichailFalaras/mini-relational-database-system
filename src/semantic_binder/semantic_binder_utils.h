@@ -8,6 +8,7 @@ typedef struct database Database;
 typedef struct abstract_syntax_tree_node ASTNode;
 typedef struct binding_context BindingContext;
 typedef struct expression_node ExpressionNode;
+typedef struct index Index;
 typedef struct table Table;
 typedef struct constraint Constraint;
 
@@ -365,14 +366,14 @@ bool validate_modified_foreign_key(const Constraint *constraint, const Table *ta
     const Schema *working_schema, const Database *db);
 
 // Reset Column reference indexes (-1) before binding the proposed modified CHECK constraint
-static bool reset_check_column_refs(ExpressionNode *expr);
+bool reset_check_column_refs(ExpressionNode *expr);
 
 // Validate a modified CHECK constraint in ALTER TABLE MODIFY COLUMN
-static bool validate_modified_check_expression(const Constraint *constraint, Table *table,
+bool validate_modified_check_expression(const Constraint *constraint, Table *table,
     Schema *working_schema, Database *db);
 
 // Validate a modified DEFAULT constraint in ALTER TABLE MODIFY COLUMN
-static bool validate_modified_default(const Constraint *constraint, DataType new_type,
+bool validate_modified_default(const Constraint *constraint, DataType new_type,
     DataTypeArgs new_args, BindingContext *context);
 
 // Validate incoming FOREIGN KEYS from other database tables

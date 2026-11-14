@@ -13,6 +13,7 @@
 #include "../../include/schema.h"
 #include "../../include/constraints.h"
 #include "../src/constraints/constraints_utils.h"
+#include "../src/btree/btree_utils.h"
 
 
 /* ---------- Binding of ExpressionNode ---------- */
@@ -6227,7 +6228,7 @@ bool validate_modified_foreign_key(const Constraint *constraint, const Table *ta
 }
 
 // Reset Column reference indexes (-1) before binding the proposed modified CHECK constraint
-static bool reset_check_column_refs(ExpressionNode *expr) {
+bool reset_check_column_refs(ExpressionNode *expr) {
     if (!expr) {
         return false;
     }
@@ -6285,7 +6286,7 @@ static bool reset_check_column_refs(ExpressionNode *expr) {
 }
 
 // Validate a modified CHECK constraint in ALTER TABLE MODIFY COLUMN
-static bool validate_modified_check_expression(const Constraint *constraint, Table *table,
+bool validate_modified_check_expression(const Constraint *constraint, Table *table,
     Schema *working_schema, Database *db) {
     if (!constraint || constraint->type != CHECK || !table || !working_schema || !db) {
         printf("validate_modified_check_expression: Invalid inputs.\n");
@@ -6343,7 +6344,7 @@ static bool validate_modified_check_expression(const Constraint *constraint, Tab
 }
 
 // Validate a modified DEFAULT constraint in ALTER TABLE MODIFY COLUMN
-static bool validate_modified_default(const Constraint *constraint, DataType new_type,
+bool validate_modified_default(const Constraint *constraint, DataType new_type,
     DataTypeArgs new_args, BindingContext *context) {
     if (!constraint || constraint->type != DEFAULT || !context || !context->db) {
         printf("validate_modified_default: Invalid inputs.\n");
@@ -6558,6 +6559,9 @@ bool value_fits_type_args(const Value *value, DataType target_type, DataTypeArgs
                 }
             }
         }
+
+        default:
+            break;
 
     }
 
