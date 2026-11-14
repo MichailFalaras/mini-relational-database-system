@@ -9,6 +9,7 @@
 #include "../../include/expressions.h"
 #include "../data_types/data_types_utils.h"
 #include "../../include/table.h"
+#include "../../include/index.h"
 #include "../../include/schema.h"
 #include "../../include/constraints.h"
 #include "../src/constraints/constraints_utils.h"
@@ -2626,6 +2627,7 @@ bool bind_default_constraint(ConstraintNode *constraint, CreateTableNode *create
     return true;
 }
 
+// Bind Alteration action
 bool bind_alter_action(AlterActionNode *action, BindingContext *context, Schema *working_schema) {
     if (!action) {
         printf("bind_alter_action: Invalid action node.\n");
@@ -3028,16 +3030,196 @@ bool bind_alter_rename_col(AlterActionNode *action, BindingContext *context, Sch
 // Bind MODIFY COLUMN alteration node
 bool bind_alter_modify_col(AlterActionNode *action, BindingContext *context, Schema *working_schema) {
     if (!action || action->type != AST_ALTER_MODIFY_COLUMN) {
-        printf("bind_alter_modify_col: Invalid MODIFY COLUMN alteration node.\n");
+        printf("bind_alter_modify_col: Invalid MODIFY COLUMN action.\n");
         return false;
     }
 
-    if (!context) {
+    if (!context || !context->db ||
+        !context->relations || context->num_relations != 1 ||
+        !context->relations[0].table) {
         printf("bind_alter_modify_col: Invalid binding context.\n");
         return false;
     }
 
+    Table *table = context->relations[0].table;
+    AlterModifyNode *modify_column = &action->alter_contents.alter_modify; 
+
+    if (!working_schema || !working_schema->columns || 
+        !modify_column || modify_column->column_name[0] == '\0') {
+        printf("bind_alter_modify_col: Invalid schema or column.\n");
+        return false;
+    }
+
+    if (working_schema->num_constraints > 0 && !working_schema->constraints) {
+        printf("bind_alter_modify_col: Invalid schema constraints.\n");
+        return false;
+    }
+
+    // Validate that the column exists
+    Column *target_column = NULL;
+    uint32_t column_index = 0;
+
+    for (uint32_t i = 0; i < working_schema->num_columns; i++) {
+        Column *existing = working_schema->columns[i];
+
+        if (!existing || existing->name[0] == '\0') {
+            printf("bind_alter_modify_col: Invalid existing column.\n");
+            return false;
+        }
+
+        if (!strcmp(existing->name, modify_column->column_name)) {
+            target_column = existing;
+            column_index = i;
+            break;   
+        }
+    }
+
+    if (!target_column) {
+        printf("bind_alter_modify_col: Target column name doesn't exist.\n");
+        return false;
+    }
+
+    if (column_index >= INT32_MAX) {
+        printf("bind_alter_modify_col: Target column index exceeds maximum integer limit.\n");
+        return false;
+    }
+
+    // Validate new data type and data type arguments
+    if (modify_column->new_type < INTEGER || modify_column->new_type > JSONB) {
+        printf("bind_alter_modify_col: Invalid new data type.\n");
+        return false;
+    }
+
+    // Validate whether the existing datatype can be converted to the requested datatype.
+    if (!value_types_assignable(modify_column->new_type, target_column->type)) {
+        printf("bind_alter_modify_col: Unsupported datatype conversion.\n");
+        return false;
+    }
+
+    // Validate potential changes to data type arguments
+    if ((modify_column->new_type == CHAR && modify_column->type_args.length == 0) ||
+        (modify_column->new_type == VARCHAR && modify_column->type_args.length == 0) ||
+        (modify_column->new_type == NUMERIC &&
+        (modify_column->type_args.precision == 0 ||
+         modify_column->type_args.scale > modify_column->type_args.precision))) {
+        printf("bind_alter_modify_col: Invalid data type arguments.\n");
+        return false;
+    }
+
+    // Retain the current column
+    Column *old_column = working_schema->columns[column_index];
+
+    // Construct the proposed replacement column
+    Column *new_column = column_alloc(
+        target_column->name, modify_column->new_type, modify_column->type_args,
+        target_column->non_null_rows, target_column->null_rows
+    ); 
+
+    if (!new_column) {
+        printf("bind_alter_modify_col: New column creation failed.\n");
+        return false;
+    }
+
+    working_schema->columns[column_index] = new_column;
+
+    // Validate affected constraints and indexes
+    for (uint32_t i = 0; i < working_schema->num_constraints; i++) {
+        Constraint *constraint = working_schema->constraints[i];
+
+        if (!constraint) {
+            printf("bind_alter_modify_col: Invalid existing working schema constraint.\n");
+            goto rollback;
+        }
+
+        // If a constraint doesn't reference the target column, skip its validation
+        bool affected = false;
+
+        if (constraint->type == CHECK) {
+            affected = true;
+        }
+        else if (constraint->type == FOREIGN_KEY) {
+            affected = 
+                foreign_key_uses_column(constraint, column_index) ||
+                (!strcmp(constraint->constraint_data.foreign_key.referenced_table_name,table->name) &&
+                foreign_key_references_column(constraint, column_index));
+        }
+        else {
+            affected = constraint_has_column(constraint, column_index);
+        }
+
+        if (!affected) {
+            continue;
+        }
+
+        switch (constraint->type) {
+            case PRIMARY_KEY:
+            case UNIQUE:
+                // Verify that the proposed datatype can serve as a key in BaseQL's ordered B+ Tree
+                if (!are_equality_compatible(modify_column->new_type, modify_column->new_type) ||
+                    !supports_ordering(modify_column->new_type)) {
+                    printf("bind_alter_modify_col: Unsupported key datatype.\n");
+                    goto rollback;
+                }
+
+                // Converted-key uniqueness is checked by the executor
+                break;
+
+            case FOREIGN_KEY:
+                // Validate both sides using the proposed schema
+                if (!validate_modified_foreign_key(constraint, table, working_schema, context->db)) {
+                    printf("bind_alter_modify_col: FOREIGN KEY datatype mismatch.\n");
+                    goto rollback;
+                }
+                break;
+
+            case CHECK:
+                // Check expression types, not stored row values.
+                if (!validate_modified_check_expression(constraint, table, working_schema, context->db)) {
+                    printf("bind_alter_modify_col: CHECK expression incompatible with new type.\n");
+                    goto rollback;
+                }
+                break;
+
+            case DEFAULT:
+                if (!validate_modified_default(
+                        constraint, 
+                        modify_column->new_type,
+                        modify_column->type_args,
+                        context)) {
+                    printf("bind_alter_modify_col: DEFAULT incompatible with new datatype.\n");
+                    goto rollback;
+                }
+                break;
+
+            case NOT_NULL:
+                // No datatype-specific semantic validation. The constraint remains unchanged
+                break;
+
+            default:
+                printf("bind_alter_modify_col: Unknown constraint type.\n");
+                goto rollback;
+        }
+    }
+
+    // Validate potential incoming (from other tables) FOREIGN KEY constraints
+    if (!validate_modify_incoming_foreign_keys(table, working_schema, context->db)) {
+        printf("bind_alter_modify_col: Incoming FOREIGN KEY incompatibility.\n");
+        goto rollback;
+    }
+
+    // Validate affected secondary indexes
+    if (!validate_modified_column_indexes(table, working_schema, column_index)) {
+        printf("bind_alter_modify_col: Index incompatibility.\n");
+        goto rollback;
+    }
+    
+    free(old_column);
     return true;
+
+rollback:
+    working_schema->columns[column_index] = old_column;
+    free(new_column);
+    return false;
 }
 
 // Bind ADD CONSTRAINT alteration node
@@ -5954,4 +6136,509 @@ bool generate_alter_constraint_name(const ConstraintNode *constraint,
     }
 
     return false;
+}
+
+
+/* ---------- ALTER TABLE MODIFY COLUMN Validation Helpers ---------- */
+
+// Validate the compatibity of 2 Column's data types, used by FOREIGN KEY validation
+bool fk_runtime_types_compatible(const Column *left, const Column *right) {
+    if (!left || !right) {
+        printf("fk_runtime_types_compatible: Invalid input columns.\n");
+        return false;
+    }
+
+    if (left->type != right->type) {
+        return false;
+    }
+
+    switch (left->type) {
+        case CHAR:
+        case VARCHAR:
+            return left->type_args.length == right->type_args.length;
+
+        case NUMERIC:
+            return left->type_args.precision == right->type_args.precision &&
+                   left->type_args.scale == right->type_args.scale;
+
+        default:
+            return true;
+    }
+}
+
+// Validate a modified FOREIGN KEY constraint in ALTER TABLE MODIFY COLUMN
+bool validate_modified_foreign_key(const Constraint *constraint, const Table *table, 
+    const Schema *working_schema, const Database *db) {
+    if (!constraint || constraint->type != FOREIGN_KEY || !table || !working_schema || !db) {
+        printf("validate_modified_foreign_key: Invalid inputs.\n");
+        return false;
+    }
+
+    const ForeignKeyConstraint *fk = &constraint->constraint_data.foreign_key;
+
+    if (!fk->foreign_key_columns || !fk->referenced_columns || fk->amount_columns == 0 ||
+        fk->amount_columns != fk->amount_referenced_columns) {
+        printf("validate_modified_foreign_key: Invalid FOREIGN KEY.\n");
+        return false;
+    }
+
+    const Schema *referenced_schema = NULL;
+
+    if (!strcmp(fk->referenced_table_name, table->name)) {
+        // Self-referencing FK: use proposed schema.
+        referenced_schema = working_schema;
+    }
+    else {
+        Table *referenced_table = database_find_table(db, fk->referenced_table_name);
+
+        if (!referenced_table) {
+            printf("validate_modified_foreign_key: Invalid referenced table.\n");
+            return false;
+        }
+
+        referenced_schema = referenced_table->table_schema;
+    }
+
+    if (!referenced_schema || !referenced_schema->columns) {
+        printf("validate_modified_foreign_key: Invalid referenced table schema.\n");
+        return false;
+    }
+
+    for (uint32_t i = 0; i < fk->amount_columns; i++) {
+        uint32_t local_index = fk->foreign_key_columns[i];
+        uint32_t remote_index = fk->referenced_columns[i];
+
+        if (local_index >= working_schema->num_columns ||
+            remote_index >= referenced_schema->num_columns) {
+            printf("validate_modified_foreign_key: Invalid FOREIGN KEY column indexes.\n");
+            return false;
+        }
+
+        const Column *local = working_schema->columns[local_index];
+        const Column *remote = referenced_schema->columns[remote_index];
+
+        if (!fk_runtime_types_compatible(local, remote)) {
+            printf("validate_modified_foreign_key: Incompatible data types.\n");
+            return false;
+        }
+    }
+
+    return true;
+}
+
+// Reset Column reference indexes (-1) before binding the proposed modified CHECK constraint
+static bool reset_check_column_refs(ExpressionNode *expr) {
+    if (!expr) {
+        return false;
+    }
+
+    switch (expr->type) {
+        case EXPR_LITERAL:
+            return true;
+
+        case EXPR_COLUMN_REF:
+            expr->expression_data.column_value.column_index = -1;
+            expr->expression_data.column_value.relation_index = -1;
+            return true;
+
+        case EXPR_UNARY:
+            return reset_check_column_refs(expr->expression_data.unary_expr.operand);
+
+        case EXPR_BINARY:
+            return reset_check_column_refs(expr->expression_data.binary_expr.left_operand) &&
+                   reset_check_column_refs(expr->expression_data.binary_expr.right_operand);
+
+        case EXPR_IS_NULL:
+            return reset_check_column_refs(expr->expression_data.is_null_expr.operand);
+
+        case EXPR_IS_NOT_NULL:
+            return reset_check_column_refs(expr->expression_data.is_not_null_expr.operand);
+
+        case EXPR_IN: {
+            In *in = &expr->expression_data.in_expr;
+
+            if (!reset_check_column_refs(in->operand) ||
+                (in->option_count > 0 && !in->set_options)) {
+                return false;
+            }
+
+            for (uint32_t i = 0; i < in->option_count; i++) {
+                if (!reset_check_column_refs(in->set_options[i])) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        case EXPR_BETWEEN: {
+            Between *between = &expr->expression_data.between_expr;
+
+            return reset_check_column_refs(between->operand) &&
+                   reset_check_column_refs(between->lower) &&
+                   reset_check_column_refs(between->upper);
+        }
+
+        default:
+            return false;
+    }
+}
+
+// Validate a modified CHECK constraint in ALTER TABLE MODIFY COLUMN
+static bool validate_modified_check_expression(const Constraint *constraint, Table *table,
+    Schema *working_schema, Database *db) {
+    if (!constraint || constraint->type != CHECK || !table || !working_schema || !db) {
+        printf("validate_modified_check_expression: Invalid inputs.\n");
+        return false;
+    }
+
+    const CheckConstraint *check = &constraint->constraint_data.check;
+
+    if (!check->constraint_expr) {
+        printf("validate_modified_check_expression: Invalid CHECK constraint expression.\n");
+        return false;
+    }
+
+    ExpressionNode *copy = expression_node_copy(check->constraint_expr);
+
+    if (!copy) {
+        printf("validate_modified_check_expression: Invalid expression Node copy.\n");
+        return false;
+    }
+
+    if (!reset_check_column_refs(copy)) {
+        expression_node_free(copy);
+        return false;
+    }
+
+    ColumnDefNode proposed_column = {0};
+
+    BindingRelation relation = {0};
+    relation.table = table;
+    relation.proposed_schema = working_schema;
+    relation.proposed_column = &proposed_column;
+
+    BindingContext check_context = {0};
+    check_context.db = db;
+    check_context.relations = &relation;
+    check_context.num_relations = 1;
+    check_context.current_clause = BIND_CLAUSE_CHECK;
+
+    BoundExpressionType result_type = {0};
+
+    if (!bind_scalar_expression(copy, &check_context, &result_type)) {
+        printf("validate_modified_check_expression: CHECK expression binding failed.\n");
+        expression_node_free(copy);
+        return false;
+    }
+
+    if (result_type.is_untyped_null || result_type.type != BOOL) {
+        printf("validate_modified_check_expression: Invalid CHECK expression type.\n");
+        expression_node_free(copy);
+        return false;
+    }
+
+    expression_node_free(copy);
+    return true;
+}
+
+// Validate a modified DEFAULT constraint in ALTER TABLE MODIFY COLUMN
+static bool validate_modified_default(const Constraint *constraint, DataType new_type,
+    DataTypeArgs new_args, BindingContext *context) {
+    if (!constraint || constraint->type != DEFAULT || !context || !context->db) {
+        printf("validate_modified_default: Invalid inputs.\n");
+        return false;
+    }
+
+    ExpressionNode *expr = constraint->constraint_data.default_value.default_expr;
+
+    if (!expr) {
+        printf("validate_modified_default: Invalid DEFAULT expression node.\n");
+        return false;
+    }
+
+    BoundExpressionType result_type = {0};
+
+    BindingClause previous = context->current_clause;
+    context->current_clause = BIND_CLAUSE_DEFAULT;
+
+    bool bound = bind_scalar_expression(expr, context, &result_type);
+
+    context->current_clause = previous;
+
+    if (!bound) {
+        printf("validate_modified_default: Binding of DEFAULT expression failed.\n");
+        return false;
+    }
+
+    // SQL NULL is compatible at the datatype level.
+    // NOT NULL / PRIMARY KEY rules are checked separately.
+    if (result_type.is_untyped_null || expression_is_explicit_null_literal(expr)) {
+        return true;
+    }
+
+    if (expr->type == EXPR_LITERAL) {
+        Value *value = expr->expression_data.literal_value.literal;
+
+        if (!value || !value_can_assign(new_type, value)) {
+            return false;
+        }
+
+        if (value->type == new_type && !value_fits_type_args(value, new_type, new_args)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    return value_types_assignable(new_type, result_type.type);
+}
+
+// Validate incoming FOREIGN KEYS from other database tables
+bool validate_modify_incoming_foreign_keys(const Table *modified_table,
+    const Schema *proposed_schema, const Database *db) {
+
+    if (!modified_table || !proposed_schema || !db || (db->table_count > 0 && !db->tables)) {
+        printf("validate_modify_incoming_foreign_keys: Invalid inputs.\n");
+        return false;
+    }
+
+    for (uint32_t i = 0; i < db->table_count; i++) {
+        const Table *other = db->tables[i];
+
+        if (!other || !other->table_schema) {
+            printf("validate_modify_incoming_foreign_keys: Invalid database table.\n");
+            return false;
+        }
+
+        // Self-references are already handled against the proposed schema by the local FK validator
+        if (other == modified_table) {
+            continue;
+        }
+
+        const Schema *other_schema = other->table_schema;
+
+        // Traverse the other table's schema constraints
+        for (uint32_t j = 0; j < other_schema->num_constraints; j++) {
+            const Constraint *constraint = other_schema->constraints[j];
+
+            if (!constraint) {
+                printf("validate_modify_incoming_foreign_keys: Invalid constraint.\n");
+                return false;
+            }
+
+            if (constraint->type != FOREIGN_KEY) {
+                continue;
+            }
+
+            const ForeignKeyConstraint *fk = &constraint->constraint_data.foreign_key;
+
+            if (strcmp(fk->referenced_table_name, modified_table->name)) {
+                continue;
+            }
+
+            if (!fk->foreign_key_columns || !fk->referenced_columns ||
+                fk->amount_columns == 0 ||
+                fk->amount_columns != fk->amount_referenced_columns) {
+                printf("validate_modify_incoming_foreign_keys: Invalid FOREIGN KEY constraint.\n");
+                return false;
+            }
+
+            for (uint32_t j = 0; j < fk->amount_columns; j++) {
+                uint32_t local_index = fk->foreign_key_columns[j];
+                uint32_t remote_index = fk->referenced_columns[j];
+
+                if (local_index >= other_schema->num_columns ||
+                    remote_index >= proposed_schema->num_columns) {
+                    printf("validate_modify_incoming_foreign_keys: Invalid local/referenced column indexes.\n");
+                    return false;
+                }
+
+                if (!fk_runtime_types_compatible(
+                        other_schema->columns[local_index],
+                        proposed_schema->columns[remote_index])) {
+                    printf("validate_modify_incoming_foreign_keys: FOREIGN KEY data type mismatch.\n");
+                    return false;
+                }
+            }
+        }
+    }
+
+    return true;
+}
+
+// Check that the DEFAULT value validates new data type arguments 
+bool value_fits_type_args(const Value *value, DataType target_type, DataTypeArgs target_args) {
+    if (!value || 
+        target_type < INTEGER || target_type > JSONB ||
+        value->type != target_type) {
+        printf("value_fits_type_args: Invalid inputs.\n");
+        return false;
+    }
+
+    if (value->null_val) {
+        return true;
+    }
+
+    switch (target_type) {
+        case CHAR: {
+            if (target_args.length == 0 || !value->value.char_val.string) {
+                printf("value_fits_type_args: Invalid CHAR value/length.\n");
+                return false;
+            }
+
+            size_t actual_length = strlen(value->value.char_val.string);
+
+            return actual_length <= target_args.length;
+        }
+
+        case VARCHAR: {
+            if (!value->value.varchar_val.string || target_args.length == 0) {
+                printf("value_fits_type_args: Invalid VARCHAR value/length.\n");
+                return false;
+            }
+
+            size_t actual_length = strlen(value->value.varchar_val.string);
+
+            return actual_length <= target_args.length;
+        }
+            
+        case NUMERIC: {
+            if (target_args.precision == 0 || target_args.scale > target_args.precision) {
+                printf("value_fits_type_args: Invalid NUMERIC parameters.\n");
+                return false;
+            }
+
+            // Safely determine the magnitude, including INT64_MIN
+            uint64_t magnitude = value->value.numeric_val.val < 0
+                ? (uint64_t)(-(value->value.numeric_val.val + 1)) + 1
+                : (uint64_t)value->value.numeric_val.val;
+
+            // Zero fits every valid NUMERIC declaration
+            if (magnitude == 0) {
+                return true;
+            }
+
+            // Count significant digits in the integer representation
+            uint32_t digits = 0;
+            uint64_t temp = magnitude;
+
+            while (temp > 0) {
+                digits++;
+                temp /= 10;
+            }
+
+            // Determine the number of integer digits.
+            uint32_t integer_digits =
+                digits > value->value.numeric_val.scale
+                    ? digits - value->value.numeric_val.scale
+                    : 0;
+
+            uint32_t allowed_integer_digits = target_args.precision - target_args.scale;
+
+            if (integer_digits > allowed_integer_digits) {
+                return false;
+            }
+
+            // Check that reducing the scale would not lose nonzero fractional digits
+            if (value->value.numeric_val.scale > target_args.scale) {
+                uint32_t excess = value->value.numeric_val.scale - target_args.scale;
+
+                // An int64_t magnitude has at most 19 digits
+                if (excess > 19) {
+                    return false;
+                }
+
+                for (uint32_t i = 0; i < excess; i++) {
+                    if (magnitude % 10 != 0) {
+                        return false;
+                    }
+
+                    magnitude /= 10;
+                }
+            }
+        }
+
+    }
+
+    return true;
+}
+
+// Validate one existing index against the proposed table schema.
+bool validate_modified_index(const Index *index, Schema *working_schema, uint32_t column_index) {
+    if (!index || !index->key ||
+        !index->key->column_index_array ||
+        index->key->num_columns == 0) {
+        printf("validate_modified_index: Invalid index.\n");
+        return false;
+    }
+
+    // Physical storage validation is always required.
+    // Even non-key columns affect serialized row size.
+    if (!btree_index_definition_fits(index, working_schema)) {
+        printf("validate_modified_index: Index exceeds physical storage limits.\n");
+        return false;
+    }
+
+    // If the modified column is not part of the index key,
+    // there is no need to recheck key datatype compatibility.
+    if (!index_key_has_column(index, column_index)) {
+        return true;
+    }
+
+    // Validate every column composing the affected key
+    for (uint32_t i = 0; i < index->key->num_columns; i++) {
+        uint32_t key_column_index = index->key->column_index_array[i];
+
+        if (key_column_index >= working_schema->num_columns) {
+            return false;
+        }
+
+        Column *column = working_schema->columns[key_column_index];
+
+        if (!column) {
+            return false;
+        }
+
+        DataType type = column->type;
+
+        if (!supports_ordering(type) || !are_equality_compatible(type, type)) {
+            printf("validate_modified_index: Unsupported index key datatype.\n");
+            return false;
+        }
+    }
+
+    return true;
+}
+
+// Orchestrate validation of all indexes that are affected by the modified column
+bool validate_modified_column_indexes(Table *table, Schema *working_schema, uint32_t column_index) {
+    if (!table || !working_schema ||
+        !working_schema->columns ||
+        working_schema->num_columns == 0 ||
+        column_index >= working_schema->num_columns ||
+        (table->total_secondary_indexes > 0 &&
+         !table->secondary_indexes)) {
+        printf("validate_modified_column_indexes: Invalid inputs.\n");
+        return false;
+    }
+
+    // Validate the canonical B+Tree index.
+    if (!table->primary_index ||
+        !validate_modified_index(table->primary_index, working_schema, column_index)) {
+        printf("validate_modified_column_indexes: Primary index incompatibility.\n");
+        return false;
+    }
+
+    // Validate all secondary indexes.
+    for (uint32_t i = 0; i < table->total_secondary_indexes; i++) {
+        Index *index = table->secondary_indexes[i];
+
+        if (!validate_modified_index(index, working_schema, column_index)) {
+            printf("validate_modified_column_indexes: Secondary index incompatibility.\n");
+            return false;
+        }
+    }
+
+    return true;
 }

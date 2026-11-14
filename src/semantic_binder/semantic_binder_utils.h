@@ -318,7 +318,7 @@ bool collect_constraint_references(ConstraintNode *constraint, const CreateTable
 bool commit_create_table_references(CreateTableNode *create_table, Database *db);
 
 
-/* ---------- ALTER TABLE Validation and Proposed Schema Construction ---------- */
+/* ---------- ALTER TABLE ADD COLUMN Validation and Proposed Schema Construction ---------- */
 
 // Resolve a column in the proposed ALTER TABLE schema
 bool resolve_alter_candidate_column(const Schema *working_schema, const ColumnDefNode *new_column,
@@ -353,5 +353,39 @@ bool collect_bound_check_refs(const ExpressionNode *expr, uint32_t *indices, uin
 bool generate_alter_constraint_name(const ConstraintNode *constraint,
     const ColumnDefNode *column, const Table *table, const Schema *working_schema,
     Constraint *const *prepared, uint32_t prepared_count, char *out_name);
+
+
+/* ---------- ALTER TABLE MODIFY COLUMN Validation Helpers ---------- */
+
+// Validate the compatibity of 2 Column's data types, used by FOREIGN KEY validation
+bool fk_runtime_types_compatible(const Column *left, const Column *right);
+
+// Validate a modified FOREIGN KEY constraint in ALTER TABLE MODIFY COLUMN
+bool validate_modified_foreign_key(const Constraint *constraint, const Table *table, 
+    const Schema *working_schema, const Database *db);
+
+// Reset Column reference indexes (-1) before binding the proposed modified CHECK constraint
+static bool reset_check_column_refs(ExpressionNode *expr);
+
+// Validate a modified CHECK constraint in ALTER TABLE MODIFY COLUMN
+static bool validate_modified_check_expression(const Constraint *constraint, Table *table,
+    Schema *working_schema, Database *db);
+
+// Validate a modified DEFAULT constraint in ALTER TABLE MODIFY COLUMN
+static bool validate_modified_default(const Constraint *constraint, DataType new_type,
+    DataTypeArgs new_args, BindingContext *context);
+
+// Validate incoming FOREIGN KEYS from other database tables
+bool validate_modify_incoming_foreign_keys(const Table *modified_table,
+    const Schema *proposed_schema, const Database *db);
+
+// Check that the DEFAULT value validates new data type arguments 
+bool value_fits_type_args(const Value *value, DataType target_type, DataTypeArgs target_args);
+
+// Validate one existing index against the proposed table schema.
+bool validate_modified_index(const Index *index, Schema *working_schema, uint32_t column_index);
+
+// Orchestrate validation of all indexes that are affected by the modified column
+bool validate_modified_column_indexes(Table *table, Schema *working_schema, uint32_t column_index);
 
 #endif
