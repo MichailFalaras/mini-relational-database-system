@@ -180,37 +180,61 @@ bool bind_column_ref(ExpressionNode *expr, BindingContext *context, BoundExpress
         }
 
         // CHECK in ALTER TABLE
-        if (!relation->table || !relation->proposed_schema || !relation->proposed_column) {
-            printf("bind_column_ref: Invalid ALTER TABLE metadata.\n");
+        if (!relation->table || !relation->proposed_schema ||
+            !relation->proposed_schema->columns) {
+            printf("bind_column_ref: Invalid ALTER TABLE CHECK metadata.\n");
             return false;
         }
 
         if (column_ref->table_name[0] != '\0' &&
             strcmp(column_ref->table_name, relation->table->name)) {
-            printf("bind_column_ref: Invalid CHECK table qualifier in ALTER TABLE.\n");
+            printf("bind_column_ref: Invalid CHECK table qualifier.\n");
             return false;
         }
-        
-        uint32_t index;
-        DataType type;
 
-        if (!resolve_alter_candidate_column(
+        uint32_t index = 0;
+        DataType type = {0};
+        bool resolved = false;
+
+        if (relation->proposed_column) {
+            // ADD COLUMN: resolve against existing columns and the proposed new column
+            resolved = resolve_alter_candidate_column(
                 relation->proposed_schema,
                 relation->proposed_column,
                 column_ref->column_name,
                 &index,
                 &type
-            )) {
-            printf("bind_column_ref: CHECK column resolution in ALTER TABLE failed.\n");
+            );
+        }
+        else {
+            // ADD CONSTRAINT: resolve against working_schema only.
+            int32_t found = schema_find_column_index(relation->proposed_schema, column_ref->column_name);
+
+            if (found >= 0) {
+                index = (uint32_t)found;
+
+                const Column *column = relation->proposed_schema->columns[index];
+
+                if (!column) {
+                    return false;
+                }
+
+                type = column->type;
+                resolved = true;
+            }
+        }
+
+        if (!resolved || index > INT32_MAX) {
+            printf("bind_column_ref: CHECK column resolution failed.\n");
             return false;
         }
 
-        // Publish the resolved relation and column indices.
         column_ref->relation_index = 0;
         column_ref->column_index = (int32_t)index;
 
         out_type->type = type;
         out_type->is_untyped_null = false;
+
         return true;
     }
 
@@ -3230,12 +3254,518 @@ bool bind_alter_add_constraint(AlterActionNode *action, BindingContext *context,
         return false;
     }
 
-    if (!context) {
+    if (!context || !context->db || 
+        !context->relations || context->num_relations != 1 || !context->relations[0].table) {
         printf("bind_alter_add_constraint: Invalid binding context.\n");
         return false;
     }
 
+    if (!working_schema || 
+        !working_schema->columns || working_schema->num_columns == 0 || 
+        (working_schema->num_constraints > 0 && !working_schema->constraints)) {
+        printf("bind_alter_modify_col: Invalid working schema.\n");
+        return false;
+    }
+
+    if (working_schema->num_constraints == UINT32_MAX) {
+        printf("bind_alter_add_constraint: Constraint count limit reached.\n");
+        return false;
+    }
+
+    if (working_schema->num_columns > INT32_MAX) {
+        printf("bind_alter_add_constraint: Column index limit exceeded.\n");
+        return false;
+    }
+
+    for (uint32_t i = 0; i < working_schema->num_constraints; i++) {
+        if (!working_schema->constraints[i]) {
+            printf("bind_alter_add_constraint: Invalid existing constraint.\n");
+            return false;
+        }
+    }
+
+    Table *table = context->relations[0].table;
+    ConstraintNode *new_constraint = action->alter_contents.alter_add_constraint.constraint;
+
+    if (!table || !new_constraint) {
+        printf("bind_alter_modify_col: Invalid table or constraint.\n");
+        return false;
+    }
+
+    // Validate and uniqueness of constraint name
+    if (new_constraint->constraint_name[0] != '\0') {
+        for (uint32_t i = 0; i < working_schema->num_constraints; i++) {
+            Constraint *existing = working_schema->constraints[i];
+
+            if (!existing) {
+                printf("bind_alter_modify_col: Invalid existing constraint.\n");
+                return false;
+            }
+
+            if (!strcmp(existing->constraint_name, new_constraint->constraint_name)) {
+                printf("bind_alter_modify_col: Duplicate constraint name.\n");
+                return false;   
+            }
+        }
+    }
+
+    // Prepare the constraint's runtime name
+    char runtime_name[64] = {0};
+
+    if (new_constraint->constraint_name[0] != '\0') {
+        // Preserve the explicitly provided constraint name
+        memcpy(runtime_name, new_constraint->constraint_name, sizeof(runtime_name));
+        runtime_name[sizeof(runtime_name) - 1] = '\0';
+    }
+    else {
+        // ADD CONSTRAINT has no new ColumnDefNode
+        // Supply an empty column definition to the existing naming helper
+        ColumnDefNode empty_column = {0};
+
+        if (!generate_alter_constraint_name(
+                new_constraint, &empty_column, table, working_schema, NULL, 0, runtime_name
+            )) {
+            printf("bind_alter_add_constraint: Constraint name generation failed.\n");
+            return false;
+        }
+    }
+
+    // Used to allocate the runtime constraint during binding
+    Constraint *prepared = NULL;
+
+    switch (new_constraint->type) {
+        case AST_CONSTRAINT_PRIMARY_KEY:
+        case AST_CONSTRAINT_UNIQUE: {
+            bool primary = new_constraint->type == AST_CONSTRAINT_PRIMARY_KEY;
+
+            ExpressionNode **refs = primary
+                ? new_constraint->constraint_data.primary_key.column_refs
+                : new_constraint->constraint_data.unique.column_refs;
+
+            uint32_t count = primary
+                ? new_constraint->constraint_data.primary_key.num_columns
+                : new_constraint->constraint_data.unique.num_columns;
+
+            if (!refs || !count || count > working_schema->num_columns ||
+                (size_t)count > SIZE_MAX / sizeof(uint32_t)) {
+                goto failed;
+            }
+
+            if (primary) {
+                for (uint32_t i = 0; i < working_schema->num_constraints; i++) {
+                    if (working_schema->constraints[i]->type == PRIMARY_KEY) {
+                        printf("bind_alter_add_constraint: PRIMARY KEY already exists.\n");
+                        goto failed;
+                    }
+                }
+            }
+
+            uint32_t *indexes = calloc(count, sizeof(*indexes));
+
+            if (!indexes) {
+                goto failed;
+            }
+
+            bool valid = resolve_constraint_column_refs(refs, count, working_schema, table->name, indexes);
+
+            for (uint32_t i = 0; valid && i < count; i++) {
+                DataType type = working_schema->columns[indexes[i]]->type;
+
+                if (!supports_ordering(type) || !are_equality_compatible(type, type)) {
+                    valid = false;
+                }
+
+                if (primary) {
+                    // PRIMARY KEY columns cannot have DEFAULT NULL.
+                    for (uint32_t j = 0; valid && j < working_schema->num_constraints; j++) {
+                        Constraint *existing = working_schema->constraints[j];
+
+                        if (existing->type == DEFAULT &&
+                            constraint_has_column(existing, indexes[i]) &&
+                            expression_is_explicit_null_literal(existing->constraint_data.default_value.default_expr)) {
+                            valid = false;
+                        }
+                    }
+                }
+            }
+
+            // Validate physical B+ Tree storage limits
+            Index *temp_index = NULL;
+            IndexKey *key = NULL;
+
+            if (valid) {
+                key = index_key_create(indexes, count);
+
+                if (!key) {
+                    printf("bind_alter_add_constraint: Temporary index key allocation failed.\n");
+                    valid = false;
+                }
+            }
+
+            if (valid) {
+                temp_index = index_metadata_create(
+                    primary ? "temp_pk_index" : "temp_uq_index",
+                    primary ? PRIMARY_INDEX : SECONDARY_INDEX,
+                    key,
+                    UINT32_MAX,
+                    true
+                );
+
+                if (!temp_index) {
+                    printf("bind_alter_add_constraint: Temporary index allocation failed.\n");
+                    valid = false;
+                }
+            }
+
+            if (valid) {
+                valid = btree_index_definition_fits(temp_index, working_schema);
+
+                if (!valid) {
+                    printf("bind_alter_add_constraint: Index exceeds physical storage limits.\n");
+                }
+            }
+
+            // Build the runtime constraint after all validations succeed
+            if (valid) {
+                prepared = primary
+                    ? constraint_create_primary_key(runtime_name, indexes, count)
+                    : constraint_create_unique(runtime_name, indexes, count);
+            }
+
+            // Release all temporary allocations
+            if (temp_index) {
+                index_free(temp_index);
+            }
+
+            if (key) {
+                index_key_free(key);
+            }
+
+            free(indexes);
+
+            if (!valid || !prepared) {
+                goto failed;
+            }
+
+            break;
+        }
+
+        case AST_CONSTRAINT_FOREIGN_KEY: {
+            ForeignKeyConstraintNode *fk = &new_constraint->constraint_data.foreign_key;
+
+            uint32_t count = fk->num_local_columns;
+
+            if (!fk->referenced_table_name[0] || !fk->local_column_refs ||
+                !fk->referenced_column_refs || !count || count != fk->num_referenced_columns ||
+                (size_t)count > SIZE_MAX / sizeof(uint32_t)) {
+                goto failed;
+            }
+
+            const Schema *ref_schema = NULL;
+
+            if (!strcmp(fk->referenced_table_name, table->name)) {
+                ref_schema = working_schema;
+            }
+            else {
+                Table *referenced = database_find_table(context->db, fk->referenced_table_name);
+
+                if (!referenced) {
+                    goto failed;
+                }
+
+                ref_schema = referenced->table_schema;
+            }
+
+            if (!ref_schema || !ref_schema->columns ||
+                count > ref_schema->num_columns) {
+                goto failed;
+            }
+
+            uint32_t *local = calloc(count, sizeof(*local));
+            uint32_t *remote = calloc(count, sizeof(*remote));
+
+            if (!local || !remote) {
+                free(local);
+                free(remote);
+                goto failed;
+            }
+
+            // Resolve local and referenced columns
+            bool valid = resolve_constraint_column_refs(
+                fk->local_column_refs,
+                count,
+                working_schema,
+                table->name,
+                local
+            ) &&
+            resolve_constraint_column_refs(
+                fk->referenced_column_refs,
+                count,
+                ref_schema,
+                fk->referenced_table_name,
+                remote
+            );
+
+            // Validate each local/referenced datatype pair.
+            for (uint32_t i = 0; valid && i < count; i++) {
+                if (!fk_runtime_types_compatible(working_schema->columns[local[i]], ref_schema->columns[remote[i]])) {
+                    valid = false;
+                }
+            }
+
+            // Referenced columns must constitute a candidate key.
+            if (valid) {
+                valid = fk_matches_schema_key(ref_schema, remote, count);
+            }
+
+            if (valid) {
+                prepared = constraint_create_foreign_keys(
+                    runtime_name, local, count, fk->referenced_table_name, remote, count
+                );
+            }
+
+            free(local);
+            free(remote);
+
+            if (!valid || !prepared) {
+                printf("bind_alter_add_constraint: Invalid FOREIGN KEY definition.\n");
+                goto failed;
+            }
+
+            break;
+        }
+
+        case AST_CONSTRAINT_CHECK: {
+            ExpressionNode *expr = new_constraint->constraint_data.check.check_expr;
+
+            if (!expr) {
+                goto failed;
+            }
+
+            // Bind a copy rather than modifying the parser-owned AST
+            ExpressionNode *copy = expression_node_copy(expr);
+
+            if (!copy) {
+                goto failed;
+            }
+
+            BindingRelation relation = {0};
+            relation.table = table;
+            relation.proposed_schema = working_schema;
+            relation.proposed_column = NULL;
+
+            BindingContext check_context = {0};
+            check_context.db = context->db;
+            check_context.relations = &relation;
+            check_context.num_relations = 1;
+            check_context.current_clause = BIND_CLAUSE_CHECK;
+
+            BoundExpressionType result = {0};
+
+            bool valid = 
+                bind_scalar_expression(copy, &check_context, &result) &&
+                !result.is_untyped_null &&
+                result.type == BOOL;
+
+            uint32_t *indexes = NULL;
+            uint32_t used = 0;
+
+            if (valid) {
+                indexes = calloc(working_schema->num_columns, sizeof(*indexes));
+
+                valid = indexes && collect_bound_check_refs(copy, indexes, working_schema->num_columns, &used);
+            }
+
+            if (valid) {
+                prepared = constraint_create_check(runtime_name, copy, used ? indexes : NULL, used);
+            }
+
+            free(indexes);
+            expression_node_free(copy);
+
+            if (!valid || !prepared) {
+                goto failed;
+            }
+
+            break;
+        }
+
+        case AST_CONSTRAINT_DEFAULT: {
+            DefaultConstraintNode *def = &new_constraint->constraint_data.default_value;
+
+            if (!def->column_name[0] || !def->default_expr) {
+                goto failed;
+            }
+
+            int32_t column_index = schema_find_column_index(working_schema, def->column_name);
+
+            if (column_index < 0) {
+                goto failed;
+            }
+
+            // Reject an existing DEFAULT for this column
+            for (uint32_t i = 0; i < working_schema->num_constraints; i++) {
+                Constraint *existing = working_schema->constraints[i];
+
+                if (existing->type == DEFAULT &&
+                    constraint_has_column(existing, (uint32_t)column_index)) {
+                    goto failed;
+                }
+            }
+
+            ExpressionNode *copy = expression_node_copy(def->default_expr);
+
+            if (!copy) {
+                goto failed;
+            }
+
+            BindingContext default_context = {0};
+            default_context.db = context->db;
+            default_context.current_clause = BIND_CLAUSE_DEFAULT;
+
+            BoundExpressionType result = {0};
+
+            bool valid = bind_scalar_expression(copy, &default_context, &result);
+
+            bool null_default = expression_is_explicit_null_literal(copy);
+
+            Column *column = working_schema->columns[column_index];
+
+            if (!column) {
+                expression_node_free(copy);
+                goto failed;
+            }
+
+            // Validate DEFAULT expression assignment
+            if (valid && !null_default) {
+                if (result.is_untyped_null) {
+                    // Only a genuine NULL expression can be untyped NULL
+                    valid = false;
+                }
+                else if (copy->type == EXPR_LITERAL) {
+                    Literal *literal = &copy->expression_data.literal_value;
+
+                    Value *value = literal->literal;
+
+                    valid = value && !value->null_val && value_can_assign(column->type, value);
+
+                    // Validate destination datatype parameters when
+                    // the value has the same datatype as the column
+                    if (valid && value->type == column->type) {
+                        valid = value_fits_type_args(value, column->type, column->type_args);
+                    }
+                }
+                else {
+                    valid = value_types_assignable(column->type, result.type);
+                }
+            }
+
+            // DEFAULT NULL conflicts with NOT NULL and PRIMARY KEY
+            if (valid && null_default) {
+                for (uint32_t i = 0;
+                    i < working_schema->num_constraints;
+                    i++) {
+
+                    Constraint *existing = working_schema->constraints[i];
+
+                    if ((existing->type == NOT_NULL || existing->type == PRIMARY_KEY) &&
+                        constraint_has_column(existing, (uint32_t)column_index)) {
+                        valid = false;
+                        break;
+                    }
+                }
+            }
+
+            if (valid) {
+                prepared = constraint_create_default(runtime_name, (uint32_t)column_index, copy);
+            }
+
+            expression_node_free(copy);
+
+            if (!valid || !prepared) {
+                goto failed;
+            }
+
+            break;
+        }
+
+        case AST_CONSTRAINT_NOT_NULL: {
+            ExpressionNode *ref = new_constraint->constraint_data.not_null.column_ref;
+
+            if (!ref) {
+                goto failed;
+            }
+
+            uint32_t index = 0;
+
+            if (!resolve_constraint_column_refs(&ref, 1, working_schema, table->name, &index)) {
+                goto failed;
+            }
+
+            for (uint32_t i = 0; i < working_schema->num_constraints; i++) {
+                Constraint *existing = working_schema->constraints[i];
+
+                // Already effectively NOT NULL
+                if ((existing->type == NOT_NULL || existing->type == PRIMARY_KEY) &&
+                    constraint_has_column(existing, index)) {
+                    goto failed;
+                }
+
+                // Reject conflicts with an existing DEFAULT NULL
+                if (existing->type == DEFAULT &&
+                    constraint_has_column(existing, index) &&
+                    expression_is_explicit_null_literal(existing->constraint_data.default_value.default_expr)) {
+                    goto failed;
+                }
+            }
+
+            prepared = constraint_create_not_null(runtime_name, index);
+
+            if (!prepared) {
+                goto failed;
+            }
+
+            break;
+        }
+
+        default:
+            printf("bind_alter_add_constraint: Unknown constraint type.\n");
+            goto failed;
+    }
+
+    // Check for an existing constraint with the same effect
+    if (schema_has_equivalent_constraint(working_schema, prepared)) {
+        printf("bind_alter_add_constraint: Schema already has equivalent constraint.\n");
+        goto failed;
+    }
+
+    // Append the validated constraint to the working schema
+    size_t new_count = (size_t)working_schema->num_constraints + 1;
+
+    if (new_count > SIZE_MAX / sizeof(Constraint *)) {
+        goto failed;
+    }
+
+    Constraint **expanded_constraints = realloc(
+        working_schema->constraints,
+        new_count * sizeof(*expanded_constraints)
+    );
+
+    if (!expanded_constraints) {
+        goto failed;
+    }
+
+    working_schema->constraints = expanded_constraints;
+    working_schema->constraints[working_schema->num_constraints] = prepared;
+    working_schema->num_constraints++;
+
     return true;
+
+failed:
+    if (prepared) {
+        constraint_free(prepared);
+    }
+    return false;
 }
 
 // Bind DROP CONSTRAINT alteration node
@@ -6645,4 +7175,172 @@ bool validate_modified_column_indexes(Table *table, Schema *working_schema, uint
     }
 
     return true;
+}
+
+
+/* ---------- ALTER TABLE ADD CONSTRAINT Validation Helpers ---------- */
+
+// Resolve constraint column references against a runtime schema
+bool resolve_constraint_column_refs(ExpressionNode *const *refs, uint32_t count,
+    const Schema *schema, const char *owner_name, uint32_t *out_indexes) {
+    
+    if (!refs || count == 0 || !schema || !schema->columns ||
+        !owner_name || !out_indexes || count > schema->num_columns ||
+        schema->num_columns > INT32_MAX) {
+        printf("resolve_constraint_column_refs: Invalid inputs.\n");
+        return false;
+    }
+
+    for (uint32_t i = 0; i < count; i++) {
+        const ExpressionNode *expr = refs[i];
+
+        if (!expr || expr->type != EXPR_COLUMN_REF) {
+            printf("resolve_constraint_column_refs: Invalid input expression nodes.\n");
+            return false;
+        }
+
+        const ColumnRef *ref = &expr->expression_data.column_value;
+
+        if (ref->column_name[0] == '\0' ||
+            ref->column_index != -1 || ref->relation_index != -1 ||
+            (ref->table_name[0] != '\0' && strcmp(ref->table_name, owner_name))) {
+            printf("resolve_constraint_column_refs: Invalid column reference.\n");
+            return false;
+        }
+
+        // Find the column in the proposed schema
+        bool found = false;
+        uint32_t index = 0;
+
+        for (uint32_t j = 0; j < schema->num_columns; j++) {
+            const Column *column = schema->columns[j];
+
+            if (!column || column->name[0] == '\0') {
+                printf("resolve_constraint_column_refs: Invalid schema column.\n");
+                return false;
+            }
+
+            if (!strcmp(ref->column_name, column->name)) {
+                index = j;
+                found = true;
+                break;
+            }
+        }
+
+        if (!found) {
+            printf("resolve_constraint_column_refs: Column doesn't exist in the proposed schema.\n");
+            return false;
+        }
+
+        // Reject duplicate references within the same key
+        for (uint32_t j = 0; j < i; j++) {
+            if (out_indexes[j] == index) {
+                printf("resolve_constraint_column_refs: Duplicate references within the same key.\n");
+                return false;
+            }
+        }
+
+        out_indexes[i] = index;
+    }
+
+    return true;
+}
+
+// Compare two ordered arrays of resolved column indexes
+bool constraint_indexes_equal(const uint32_t *left, const uint32_t *right, uint32_t count) {
+    if (!left || !right || count == 0) {
+        return false;
+    }
+
+    for (uint32_t i = 0; i < count; i++) {
+        if (left[i] != right[i]) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+// Check if schema has an equivalent constraint
+
+bool schema_has_equivalent_constraint(const Schema *schema, const Constraint *candidate) {
+    if (!schema || !candidate ||
+        (schema->num_constraints > 0 && !schema->constraints)) {
+        return false;
+    }
+
+    // No existing constraints means no duplicate
+    if (schema->num_constraints == 0) {
+        return false;
+    }
+
+    for (uint32_t i = 0; i < schema->num_constraints; i++) {
+        const Constraint *existing = schema->constraints[i];
+
+        if (!existing || existing->type != candidate->type) {
+            continue;
+        }
+
+        switch (candidate->type) {
+            case PRIMARY_KEY: {
+                const PrimaryKeyConstraint *a = &existing->constraint_data.primary_key;
+                const PrimaryKeyConstraint *b = &candidate->constraint_data.primary_key;
+
+                if (a->amount_columns == b->amount_columns &&
+                    constraint_indexes_equal(
+                        a->primary_key_columns,
+                        b->primary_key_columns,
+                        a->amount_columns)) {
+                    return true;
+                }
+
+                break;
+            }
+
+            case UNIQUE: {
+                const UniqueConstraint *a = &existing->constraint_data.unique_cols;
+                const UniqueConstraint *b = &candidate->constraint_data.unique_cols;
+
+                if (a->amount_columns == b->amount_columns &&
+                    constraint_indexes_equal(
+                        a->column_refs,
+                        b->column_refs,
+                        a->amount_columns)) {
+                    return true;
+                }
+
+                break;
+            }
+
+            case FOREIGN_KEY: {
+                const ForeignKeyConstraint *a = &existing->constraint_data.foreign_key;
+                const ForeignKeyConstraint *b = &candidate->constraint_data.foreign_key;
+
+                // Reject comparison if metadata differs.
+                if (strcmp(a->referenced_table_name, b->referenced_table_name) ||
+                    a->amount_columns != b->amount_columns ||
+                    a->amount_referenced_columns != b->amount_referenced_columns) {
+                    break;
+                }
+
+                if (constraint_indexes_equal(
+                        a->foreign_key_columns,
+                        b->foreign_key_columns,
+                        a->amount_columns) &&
+                    constraint_indexes_equal(
+                        a->referenced_columns,
+                        b->referenced_columns,
+                        a->amount_referenced_columns)) {
+                    return true;
+                }
+
+                break;
+            }
+
+            default:
+                break;
+        }
+    }
+
+    return false;
 }

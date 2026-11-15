@@ -389,4 +389,17 @@ bool validate_modified_index(const Index *index, Schema *working_schema, uint32_
 // Orchestrate validation of all indexes that are affected by the modified column
 bool validate_modified_column_indexes(Table *table, Schema *working_schema, uint32_t column_index);
 
+
+/* ---------- ALTER TABLE ADD CONSTRAINT Validation Helpers ---------- */
+
+// Resolve constraint column references against a runtime schema
+bool resolve_constraint_column_refs(ExpressionNode *const *refs, uint32_t count,
+    const Schema *schema, const char *owner_name, uint32_t *out_indexes);
+
+// Compare two ordered arrays of resolved column indexes
+bool constraint_indexes_equal(const uint32_t *left, const uint32_t *right, uint32_t count);
+
+// Check if schema has an equivalent constraint
+bool schema_has_equivalent_constraint(const Schema *shema, const Constraint *candidate);
+
 #endif
