@@ -2719,12 +2719,12 @@ bool bind_alter_add_col(AlterActionNode *action, BindingContext *context, Schema
     if (!working_schema || !working_schema->columns || !column ||
         column->column_name[0] == '\0' ||
         (column->num_constraints > 0 && !column->constraints)) {
-        printf("bind_alter_add_col: Invalid schema or column.\n");
+        printf("bind_alter_add_col: Invalid working schema or column.\n");
         return false;
     }
 
     if (working_schema->num_constraints > 0 && !working_schema->constraints) {
-        printf("bind_alter_add_col: Invalid schema constraints.\n");
+        printf("bind_alter_add_col: Invalid working schema constraints.\n");
         return false;
     }
 
@@ -3022,7 +3022,7 @@ bool bind_alter_drop_col(AlterActionNode *action, BindingContext *context, Schem
 
     if (!working_schema || !working_schema->columns ||
         (working_schema->num_constraints > 0 && !working_schema->constraints)) {
-        printf("bind_alter_drop_col: Invalid schema.\n");
+        printf("bind_alter_drop_col: Invalid working schema.\n");
         return false;
     }
 
@@ -3160,8 +3160,29 @@ bool bind_alter_rename_table(AlterActionNode *action, BindingContext *context, S
         return false;
     }
 
-    if (!context) {
+    if (!context || !context->db ||
+        !context->relations || context->num_relations != 1 ||
+        !context->relations[0].table) {
         printf("bind_alter_rename_table: Invalid binding context.\n");
+        return false;
+    }
+
+    if (!working_schema || !working_schema->columns || working_schema->num_columns == 0 ||
+        (working_schema->num_constraints > 0 && !working_schema->constraints)) {
+        printf("bind_alter_rename_table: Invalid working schema.\n");
+        return false;
+    }
+
+    char *new_table_name = action->alter_contents.alter_rename_table.new_table_name;
+
+    if (new_table_name[0] == '\0') {
+        printf("bind_alter_rename_table: Empty new table name.\n");
+        return false;
+    }
+
+    // Reject names already registered in the database, including the current table's existing name
+    if (database_find_table(context->db, new_table_name)) {
+        printf("bind_alter_rename_table: New table name is already is use.\n");
         return false;
     }
 
