@@ -3014,8 +3014,139 @@ bool bind_alter_drop_col(AlterActionNode *action, BindingContext *context, Schem
         return false;
     }
 
-    if (!context) {
+    if (!context || !context->db || !context->relations || 
+        context->num_relations != 1 || !context->relations[0].table) {
         printf("bind_alter_drop_col: Invalid binding context.\n");
+        return false;
+    }
+
+    if (!working_schema || !working_schema->columns ||
+        (working_schema->num_constraints > 0 && !working_schema->constraints)) {
+        printf("bind_alter_drop_col: Invalid schema.\n");
+        return false;
+    }
+
+    if (working_schema->num_columns <= 1) {
+        printf("bind_alter_drop_col: Cannot drop the last column.\n");
+        return false;
+    }
+
+    Table *table = context->relations[0].table;
+    char *drop_column_name = action->alter_contents.alter_drop.column_name;
+
+    if (!drop_column_name || drop_column_name[0] == '\0') {
+        printf("bind_alter_drop_col: Invalid target column.\n");
+        return false;
+    }
+
+    int32_t found = schema_find_column_index(working_schema, drop_column_name);
+
+    if (found < 0) {
+        printf("bind_alter_drop_col: Target column does not exist.\n");
+        return false;
+    }
+
+    uint32_t column_index = (uint32_t)found;
+
+    for (uint32_t i = 0; i < working_schema->num_columns; i++) {
+        Column *column = working_schema->columns[i];
+
+        if (!column || column->name[0] == '\0') {
+            printf("bind_alter_drop_col: Invalid working schema column.\n");
+            return false;
+        }
+
+        // Skip all non-matching columns
+        if (strcmp(drop_column_name, column->name)) {
+            continue;
+        }
+
+        // At this point we've found the matching column
+        column_index = i;
+
+        // We should verify if any constraints reference that column
+        for (uint32_t j = 0; j < working_schema->num_constraints; j++) {
+            Constraint *constraint = working_schema->constraints[j];
+
+            if (!constraint) {
+                printf("bind_alter_drop_col: Invalid working schema constraint.\n");
+                return false;
+            }
+
+            switch (constraint->type) {
+                case PRIMARY_KEY:
+                case UNIQUE:
+                case CHECK:
+                    if (constraint_references_column(constraint, column_index)) {
+                        printf("bind_alter_drop_col: Column participates in a PRIMARY KEY/UNIQUE constraint.\n");
+                        return false;
+                    }
+                    break;
+
+                case FOREIGN_KEY: {
+                    bool local_dependency = foreign_key_uses_column(constraint, column_index);
+
+                    bool self_reference = strcmp(constraint->constraint_data.foreign_key.referenced_table_name, table->name) == 0;
+
+                    bool referenced_dependency =
+                            self_reference &&
+                            foreign_key_references_column(constraint, column_index);
+
+                    if (local_dependency || referenced_dependency) {
+                        printf("bind_alter_drop_col: Column is used by a FOREIGN KEY.\n");
+                        return false;
+                    }
+
+                    break;
+                }
+
+                case DEFAULT:
+                case NOT_NULL:
+                    break;
+                    
+                default:
+                    printf("bind_alter_drop_col: Invalid constraint type.\n");
+                    return false;
+            }
+        }
+    }
+
+    if (has_incoming_fk_dependency(context->db, table, column_index)) {
+        printf("bind_alter_drop_col: Another table FOREIGN KEY references target column.\n");
+        return false;
+    }
+
+    // Validate if the primary index references the target column
+    if (!table->primary_index ||
+        !table->primary_index->key ||
+        index_key_has_column(table->primary_index, column_index)) {
+        printf("bind_alter_drop_col: Column is part of canonical index.\n");
+        return false;
+    }
+
+    if (table->total_secondary_indexes > 0 && !table->secondary_indexes) {
+        printf("bind_alter_drop_col: Invalid secondary indexes.\n");
+        return false;
+    }
+
+    // Validate if any secondary index references the target column
+    for (uint32_t i = 0; i < table->total_secondary_indexes; i++) {
+        Index *index = table->secondary_indexes[i];
+
+        if (!index || !index->key) {
+            printf("bind_alter_drop_col: Invalid secondary index.\n");
+            return false;
+        }
+
+        if (index_key_has_column(index, column_index)) {
+            printf("bind_alter_drop_col: Column is part of secondary index.\n");
+            return false;
+        }
+    }
+
+    // Update working schema
+    if (!working_schema_drop_column(working_schema, column_index, table->name)) {
+        printf("bind_alter_drop_col: Working schema couldn't be updated.\n");
         return false;
     }
 
@@ -6323,7 +6454,7 @@ Constraint *build_runtime_alter_constraint(const ConstraintNode *constraint,
     }
 }
 
-// Add new column definition from an ALTER TABLE action to the working schema
+// Add new column to the working schema as a result of an ADD COLUMN action
 bool working_schema_add_column(Schema *schema, const ColumnDefNode *column,
     const BindingContext *context, const Table *table) {
     
@@ -7342,5 +7473,421 @@ bool schema_has_equivalent_constraint(const Schema *schema, const Constraint *ca
         }
     }
 
+    return false;
+}
+
+// Validate that another table's FOREIGN KEY references the target column
+bool has_incoming_fk_dependency(const Database *db, const Table *target_table, uint32_t column_index) {
+    // Fail closed on invalid metadata
+    if (!db || !target_table || (db->table_count > 0 && !db->tables)) {
+        return true; 
+    }
+
+    for (uint32_t i = 0; i < db->table_count; i++) {
+        const Table *other = db->tables[i];
+
+        if (!other || !other->table_schema) {
+            return true;
+        }
+
+        // Self-references checked locally
+        if (other == target_table) {
+            continue; 
+        }
+
+        const Schema *schema = other->table_schema;
+
+        // Fail closed on invalid metadata
+        if (schema->num_constraints > 0 && !schema->constraints) {
+            return true;
+        }
+
+        for (uint32_t j = 0; j < schema->num_constraints; j++) {
+            const Constraint *constraint = schema->constraints[j];
+
+            if (!constraint) {
+                return true;
+            }
+
+            // Another table's FOREIGN KEY matches if it references
+            // the target table and column
+            if (constraint->type == FOREIGN_KEY &&
+                !strcmp(
+                    constraint->constraint_data.foreign_key.referenced_table_name,
+                    target_table->name
+                ) &&
+                foreign_key_references_column(constraint, column_index)) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+// Remove column from the working schema as a result of a DROP COLUMN action
+// FAILURE CONTRACT:
+// - On failure, the working schema may be partially modified.
+// - The caller must discard the entire working schema using schema_free().
+// - Do not reuse schema after a failed call.
+bool working_schema_drop_column(Schema *schema, uint32_t column_index, const char *table_name) {
+    if (!schema || !table_name || table_name[0] == '\0' ||
+        !schema->columns || schema->num_columns <= 1 ||
+        column_index >= schema->num_columns ||
+        (schema->num_constraints > 0 && !schema->constraints)) {
+        printf("working_schema_drop_column: Invalid inputs.\n");
+        return false;
+    }
+
+    for (uint32_t i = 0; i < schema->num_columns; i++) {
+        if (!schema->columns[i] || schema->columns[i]->name[0] == '\0') {
+            printf("working_schema_drop_column: Invalid schema column.\n");
+            return false;
+        } 
+    }
+
+    const uint32_t old_count = schema->num_columns;
+
+    // Temporary traversal stack for CHECK expression trees
+    ExpressionNode **stack = NULL;
+    size_t stack_capacity = 0;
+
+    // Pass 0: validate references and prepare traversal capacity
+    // Pass 1: update surviving references
+    for (int pass = 0; pass < 2; pass++) {
+        for (uint32_t i = 0; i < schema->num_constraints; i++) {
+            Constraint *constraint = schema->constraints[i];
+
+            if (!constraint) {
+                goto failed;
+            }
+
+            uint32_t *refs[2] = {NULL, NULL};
+            uint32_t counts[2] = {0, 0};
+            uint32_t groups = 0;
+            ExpressionNode *check_expr = NULL;
+
+            switch (constraint->type) {
+                case PRIMARY_KEY:
+                    refs[0] = constraint->constraint_data.primary_key.primary_key_columns;
+                    counts[0] = constraint->constraint_data.primary_key.amount_columns;
+                    
+                    groups = 1;
+                    break;
+
+                case UNIQUE:
+                    refs[0] = constraint->constraint_data.unique_cols.column_refs;
+                    counts[0] = constraint->constraint_data.unique_cols.amount_columns;
+                    
+                    groups = 1;
+                    break;
+
+                case FOREIGN_KEY: {
+                    ForeignKeyConstraint *fk = &constraint->constraint_data.foreign_key;
+
+                    refs[0] = fk->foreign_key_columns;
+                    counts[0] = fk->amount_columns;
+                    groups = 1;
+
+                    // Referenced indexes are local only for self-FKs.
+                    if (!strcmp(fk->referenced_table_name, table_name)) {
+                        refs[1] = fk->referenced_columns;
+                        counts[1] = fk->amount_referenced_columns;
+                        groups = 2;
+                    }
+
+                    break;
+                }
+
+                case CHECK: {
+                    CheckConstraint *check = &constraint->constraint_data.check;
+
+                    refs[0] = check->column_refs;
+                    counts[0] = check->amount_columns;
+                    groups = 1;
+
+                    check_expr = check->constraint_expr;
+
+                    if (!check_expr) {
+                        goto failed;
+                    }
+
+                    break;
+                }
+
+                case DEFAULT:
+                case NOT_NULL: {
+                    uint32_t owner = constraint->type == DEFAULT
+                        ? constraint->constraint_data.default_value.column_ref
+                        : constraint->constraint_data.not_null.column_ref;
+
+                    if (owner >= old_count) {
+                        goto failed;
+                    }
+
+                    // This constraint will disappear with the column
+                    if (owner == column_index) {
+                        continue;
+                    }
+
+                    if (pass == 1 && owner > column_index) {
+                        if (constraint->type == DEFAULT) {
+                            constraint->constraint_data.default_value.column_ref--;
+                        } else {
+                            constraint->constraint_data.not_null.column_ref--;
+                        }
+                    }
+
+                    continue;
+                }
+
+                default:
+                    goto failed;
+            }
+
+            // Validate/remap the constraint's local index arrays
+            for (uint32_t g = 0; g < groups; g++) {
+                if (counts[g] == 0 || !refs[g]) {
+
+                    // CHECK without column references is valid
+                    if (constraint->type == CHECK && counts[g] == 0 && !refs[g]) {
+                        continue;
+                    }
+
+                    goto failed;
+                }
+
+                for (uint32_t j = 0; j < counts[g]; j++) {
+                    uint32_t index = refs[g][j];
+
+                    if (index >= old_count || index == column_index) {
+                        goto failed;
+                    }
+
+                    if (pass == 1 && index > column_index) {
+                        refs[g][j] = index - 1;
+                    }
+                }
+            }
+
+            if (!check_expr) {
+                continue;
+            }
+
+            // Traverse the complete CHECK expression tree.
+            // Pass 0 also grows the stack to its required capacity.
+            size_t top = 0;
+
+            if (stack_capacity == 0) {
+                stack = malloc(16 * sizeof(*stack));
+
+                if (!stack) {
+                    goto failed;
+                }
+
+                stack_capacity = 16;
+            }
+
+            stack[top++] = check_expr;
+
+            while (top > 0) {
+                ExpressionNode *node = stack[--top];
+
+                if (!node) {
+                    goto failed;
+                }
+
+                uint32_t children = 0;
+
+                switch (node->type) {
+                    case EXPR_LITERAL:
+                        break;
+
+                    case EXPR_COLUMN_REF: {
+                        ColumnRef *ref = &node->expression_data.column_value;
+
+                        if (ref->relation_index != 0 || ref->column_index < 0 ||
+                            (uint32_t)ref->column_index >= old_count ||
+                            (uint32_t)ref->column_index == column_index) {
+                            goto failed;
+                        }
+
+                        if (pass == 1 && (uint32_t)ref->column_index > column_index) {
+                            ref->column_index--;
+                        }
+
+                        break;
+                    }
+
+                    case EXPR_UNARY:
+                    case EXPR_IS_NULL:
+                    case EXPR_IS_NOT_NULL:
+                        children = 1;
+                        break;
+
+                    case EXPR_BINARY:
+                        children = 2;
+                        break;
+
+                    case EXPR_BETWEEN:
+                        children = 3;
+                        break;
+
+                    case EXPR_IN: {
+                        In *in = &node->expression_data.in_expr;
+
+                        if (!in->operand || in->option_count == UINT32_MAX ||
+                            (in->option_count > 0 && !in->set_options)) {
+                            goto failed;
+                        }
+
+                        children = in->option_count + 1;
+                        break;
+                    }
+
+                    default:
+                        // Functions and unsupported expression types
+                        // are not permitted in CHECK expressions
+                        goto failed;
+                }
+
+                if ((size_t)children > SIZE_MAX - top) {
+                    goto failed;
+                }
+
+                size_t required = top + (size_t)children;
+
+                if (required > stack_capacity) {
+                    size_t new_capacity = stack_capacity;
+
+                    while (new_capacity < required) {
+                        if (new_capacity > SIZE_MAX / 2) {
+                            new_capacity = required;
+                            break;
+                        }
+
+                        new_capacity *= 2;
+                    }
+
+                    if (new_capacity > SIZE_MAX / sizeof(*stack)) {
+                        goto failed;
+                    }
+
+                    ExpressionNode **expanded = realloc(stack, new_capacity * sizeof(*stack));
+
+                    if (!expanded) {
+                        goto failed;
+                    }
+
+                    stack = expanded;
+                    stack_capacity = new_capacity;
+                }
+
+                for (uint32_t j = 0; j < children; j++) {
+                    ExpressionNode *child = NULL;
+
+                    switch (node->type) {
+                        case EXPR_UNARY:
+                            child = node->expression_data.unary_expr.operand;
+                            break;
+
+                        case EXPR_IS_NULL:
+                            child = node->expression_data.is_null_expr.operand;
+                            break;
+
+                        case EXPR_IS_NOT_NULL:
+                            child = node->expression_data.is_not_null_expr.operand;
+                            break;
+
+                        case EXPR_BINARY:
+                            child = j == 0
+                                ? node->expression_data.binary_expr.left_operand
+                                : node->expression_data.binary_expr.right_operand;
+                            break;
+
+                        case EXPR_BETWEEN: {
+                            Between *between = &node->expression_data.between_expr;
+
+                            child = j == 0 ? between->operand
+                                  : j == 1 ? between->lower
+                                           : between->upper;
+                            break;
+                        }
+
+                        case EXPR_IN: {
+                            In *in = &node->expression_data.in_expr;
+
+                            child = j == 0
+                                ? in->operand
+                                : in->set_options[j - 1];
+                            break;
+                        }
+
+                        default:
+                            goto failed;
+                    }
+
+                    if (!child) {
+                        goto failed;
+                    }
+
+                    stack[top++] = child;
+                }
+            }
+        }
+
+        if (pass == 0) {
+            // Remove DEFAULT/NOT NULL constraints on the dropped column
+            uint32_t write = 0;
+            uint32_t old_constraint_count = schema->num_constraints;
+
+            for (uint32_t read = 0; read < old_constraint_count; read++) {
+                Constraint *constraint = schema->constraints[read];
+
+                bool remove = false;
+
+                if (constraint->type == DEFAULT) {
+                    remove = constraint->constraint_data.default_value.column_ref == column_index;
+                }
+                else if (constraint->type == NOT_NULL) {
+                    remove = constraint->constraint_data.not_null.column_ref == column_index;
+                }
+
+                if (remove) {
+                    constraint_free(constraint);
+                }
+                else {
+                    schema->constraints[write++] = constraint;
+                }
+            }
+
+            for (uint32_t i = write; i < old_constraint_count; i++) {
+                schema->constraints[i] = NULL;
+            }
+
+            schema->num_constraints = write;
+        }
+    }
+
+    free(stack);
+    stack = NULL;
+
+    // Remove the target column from the copied schema
+    Column *removed = schema->columns[column_index];
+
+    for (uint32_t i = column_index; i + 1 < old_count; i++) {
+        schema->columns[i] = schema->columns[i + 1];
+    }
+
+    schema->num_columns = old_count - 1;
+    schema->columns[schema->num_columns] = NULL;
+
+    free(removed);
+
+    return true;
+
+failed:
+    free(stack);
+    printf("working_schema_drop_column: Schema update failed.\n");
     return false;
 }

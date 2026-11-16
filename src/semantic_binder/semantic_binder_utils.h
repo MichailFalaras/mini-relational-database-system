@@ -341,7 +341,7 @@ Constraint *build_runtime_alter_constraint(const ConstraintNode *constraint,
     const ColumnDefNode *column, const Schema *working_schema, const BindingContext *context,
     const Table *table, char *runtime_name);
 
-// Add new column definition from an ALTER TABLE action to the working schema
+// Add new column to the working schema as a result of an ADD COLUMN action
 bool working_schema_add_column(Schema *schema, const ColumnDefNode *column,
     const BindingContext *context, const Table *table);
 
@@ -401,5 +401,14 @@ bool constraint_indexes_equal(const uint32_t *left, const uint32_t *right, uint3
 
 // Check if schema has an equivalent constraint
 bool schema_has_equivalent_constraint(const Schema *shema, const Constraint *candidate);
+
+
+/* ---------- ALTER TABLE DROP COLUMN Validation Helpers ---------- */
+
+// Validate that another table's FOREIGN KEY references the target column
+bool has_incoming_fk_dependency(const Database *db, const Table *target_table, uint32_t column_index);
+
+// Remove column from the working schema as a result of a DROP COLUMN action
+bool working_schema_drop_column(Schema *schema, uint32_t column_index, const char *table_name);
 
 #endif
