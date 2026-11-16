@@ -8268,14 +8268,15 @@ cleanup:
     return result;
 }
 
+
+/* ---------- ALTER TABLE DROP CONSTRAINT binding tests ---------- */
+
 int test_bind_alter_drop_constraint_pk_basic() {
     int result = 1;
 
     DDLBinderTestFixture binder = {0};
-    
     Parser *parser = NULL;
     ASTNode *root = NULL;
-    
     BoundAlterTable bound_alter = {0};
 
     TestToken tokens[] = {
@@ -8301,7 +8302,7 @@ int test_bind_alter_drop_constraint_pk_basic() {
     ASSERT(schema_find_constraint_index(bound_alter.result_schema, "uq_departments_name") >= 0);
     ASSERT(schema_find_constraint_index(bound_alter.result_schema, "pk_departments") < 0);
 
-    // Binding does not mutate the live table or its physical indexes
+    // Binding does not mutate the live table or its physical indexes.
     ASSERT(binder.tables[1].table_schema == &binder.schemas[1]);
     ASSERT(binder.tables[1].primary_index == &binder.canonical_indexes[1]);
     ASSERT(binder.schemas[1].num_constraints == 2);
@@ -8311,7 +8312,6 @@ int test_bind_alter_drop_constraint_pk_basic() {
 
 cleanup:
     bound_alter_table_free(&bound_alter);
-    
     cleanup_ddl_binder_fixture(&binder);
     free_test_parser(parser, root);
     return result;
@@ -8321,10 +8321,8 @@ int test_bind_alter_drop_constraint_unique_basic() {
     int result = 1;
 
     DDLBinderTestFixture binder = {0};
-    
     Parser *parser = NULL;
     ASTNode *root = NULL;
-    
     BoundAlterTable bound_alter = {0};
 
     TestToken tokens[] = {
@@ -8350,7 +8348,7 @@ int test_bind_alter_drop_constraint_unique_basic() {
     ASSERT(schema_find_constraint_index(bound_alter.result_schema, "pk_departments") >= 0);
     ASSERT(schema_find_constraint_index(bound_alter.result_schema, "uq_departments_name") < 0);
 
-    // Binding does not mutate the live table or its physical indexes
+    // Binding does not mutate the live table or its physical indexes.
     ASSERT(binder.tables[1].table_schema == &binder.schemas[1]);
     ASSERT(binder.tables[1].primary_index == &binder.canonical_indexes[1]);
     ASSERT(binder.schemas[1].num_constraints == 2);
@@ -8360,7 +8358,6 @@ int test_bind_alter_drop_constraint_unique_basic() {
 
 cleanup:
     bound_alter_table_free(&bound_alter);
-    
     cleanup_ddl_binder_fixture(&binder);
     free_test_parser(parser, root);
     return result;
@@ -8370,10 +8367,8 @@ int test_bind_alter_drop_constraint_missing() {
     int result = 1;
 
     DDLBinderTestFixture binder = {0};
-    
     Parser *parser = NULL;
     ASTNode *root = NULL;
-    
     BoundAlterTable bound_alter = {0};
 
     TestToken tokens[] = {
@@ -8393,7 +8388,7 @@ int test_bind_alter_drop_constraint_missing() {
     ASSERT(bound_alter.table == NULL);
     ASSERT(bound_alter.result_schema == NULL);
 
-    // Binding does not mutate the live table or its physical indexes
+    // Binding does not mutate the live table or its physical indexes.
     ASSERT(binder.tables[1].table_schema == &binder.schemas[1]);
     ASSERT(binder.tables[1].primary_index == &binder.canonical_indexes[1]);
     ASSERT(binder.schemas[1].num_constraints == 2);
@@ -8403,7 +8398,6 @@ int test_bind_alter_drop_constraint_missing() {
 
 cleanup:
     bound_alter_table_free(&bound_alter);
-    
     cleanup_ddl_binder_fixture(&binder);
     free_test_parser(parser, root);
     return result;
@@ -8413,10 +8407,8 @@ int test_bind_alter_drop_constraint_repeated_drop() {
     int result = 1;
 
     DDLBinderTestFixture binder = {0};
-    
     Parser *parser = NULL;
     ASTNode *root = NULL;
-    
     BoundAlterTable bound_alter = {0};
 
     TestToken tokens[] = {
@@ -8437,7 +8429,7 @@ int test_bind_alter_drop_constraint_repeated_drop() {
     ASSERT(bound_alter.table == NULL);
     ASSERT(bound_alter.result_schema == NULL);
 
-    // Binding does not mutate the live table or its physical indexes
+    // Binding does not mutate the live table or its physical indexes.
     ASSERT(binder.tables[1].table_schema == &binder.schemas[1]);
     ASSERT(binder.tables[1].primary_index == &binder.canonical_indexes[1]);
     ASSERT(binder.schemas[1].num_constraints == 2);
@@ -8447,7 +8439,6 @@ int test_bind_alter_drop_constraint_repeated_drop() {
 
 cleanup:
     bound_alter_table_free(&bound_alter);
-    
     cleanup_ddl_binder_fixture(&binder);
     free_test_parser(parser, root);
     return result;
@@ -8457,10 +8448,8 @@ int test_bind_alter_drop_constraint_drop_both() {
     int result = 1;
 
     DDLBinderTestFixture binder = {0};
-    
     Parser *parser = NULL;
     ASTNode *root = NULL;
-    
     BoundAlterTable bound_alter = {0};
 
     TestToken tokens[] = {
@@ -8487,7 +8476,7 @@ int test_bind_alter_drop_constraint_drop_both() {
     ASSERT(schema_find_constraint_index(bound_alter.result_schema, "uq_departments_name") < 0);
     ASSERT(schema_find_constraint_index(bound_alter.result_schema, "pk_departments") < 0);
 
-    // Binding does not mutate the live table or its physical indexes
+    // Binding does not mutate the live table or its physical indexes.
     ASSERT(binder.tables[1].table_schema == &binder.schemas[1]);
     ASSERT(binder.tables[1].primary_index == &binder.canonical_indexes[1]);
     ASSERT(binder.schemas[1].num_constraints == 2);
@@ -8497,7 +8486,6 @@ int test_bind_alter_drop_constraint_drop_both() {
 
 cleanup:
     bound_alter_table_free(&bound_alter);
-    
     cleanup_ddl_binder_fixture(&binder);
     free_test_parser(parser, root);
     return result;
@@ -8507,10 +8495,8 @@ int test_bind_alter_drop_constraint_invalid_second_action() {
     int result = 1;
 
     DDLBinderTestFixture binder = {0};
-    
     Parser *parser = NULL;
     ASTNode *root = NULL;
-    
     BoundAlterTable bound_alter = {0};
 
     TestToken tokens[] = {
@@ -8531,7 +8517,7 @@ int test_bind_alter_drop_constraint_invalid_second_action() {
     ASSERT(bound_alter.table == NULL);
     ASSERT(bound_alter.result_schema == NULL);
 
-    // Binding does not mutate the live table or its physical indexes
+    // Binding does not mutate the live table or its physical indexes.
     ASSERT(binder.tables[1].table_schema == &binder.schemas[1]);
     ASSERT(binder.tables[1].primary_index == &binder.canonical_indexes[1]);
     ASSERT(binder.schemas[1].num_constraints == 2);
@@ -8541,7 +8527,6 @@ int test_bind_alter_drop_constraint_invalid_second_action() {
 
 cleanup:
     bound_alter_table_free(&bound_alter);
-    
     cleanup_ddl_binder_fixture(&binder);
     free_test_parser(parser, root);
     return result;
@@ -8551,10 +8536,8 @@ int test_bind_alter_drop_constraint_pk_incoming_fk() {
     int result = 1;
 
     DDLBinderTestFixture binder = {0};
-    
     Parser *parser = NULL;
     ASTNode *root = NULL;
-    
     BoundAlterTable bound_alter = {0};
     Constraint *fk = NULL;
 
@@ -8564,7 +8547,7 @@ int test_bind_alter_drop_constraint_pk_incoming_fk() {
 
     init_ddl_binder_fixture(&binder);
 
-    // An FK from department_locations references departments
+    // An FK from department_locations references departments.
     uint32_t local_columns[] = {0};
     uint32_t referenced_columns[] = {0};
     Constraint *constraints[2] = {&binder.department_locations_pk, NULL};
@@ -8588,7 +8571,7 @@ int test_bind_alter_drop_constraint_pk_incoming_fk() {
     ASSERT(bound_alter.table == NULL);
     ASSERT(bound_alter.result_schema == NULL);
 
-    // Binding does not mutate the live table or its physical indexes
+    // Binding does not mutate the live table or its physical indexes.
     ASSERT(binder.tables[1].table_schema == &binder.schemas[1]);
     ASSERT(binder.tables[1].primary_index == &binder.canonical_indexes[1]);
     ASSERT(binder.schemas[1].num_constraints == 2);
@@ -8598,11 +8581,9 @@ int test_bind_alter_drop_constraint_pk_incoming_fk() {
 
 cleanup:
     bound_alter_table_free(&bound_alter);
-    
     binder.schemas[2].constraints = binder.department_locations_constraint_ptrs;
     binder.schemas[2].num_constraints = 1;
     constraint_free(fk);
-    
     cleanup_ddl_binder_fixture(&binder);
     free_test_parser(parser, root);
     return result;
@@ -8612,10 +8593,8 @@ int test_bind_alter_drop_constraint_unique_incoming_fk() {
     int result = 1;
 
     DDLBinderTestFixture binder = {0};
-    
     Parser *parser = NULL;
     ASTNode *root = NULL;
-    
     BoundAlterTable bound_alter = {0};
     Constraint *fk = NULL;
 
@@ -8625,7 +8604,7 @@ int test_bind_alter_drop_constraint_unique_incoming_fk() {
 
     init_ddl_binder_fixture(&binder);
 
-    // An FK from department_locations references departments
+    // An FK from department_locations references departments.
     uint32_t local_columns[] = {0};
     uint32_t referenced_columns[] = {1};
     Constraint *constraints[2] = {&binder.department_locations_pk, NULL};
@@ -8649,7 +8628,7 @@ int test_bind_alter_drop_constraint_unique_incoming_fk() {
     ASSERT(bound_alter.table == NULL);
     ASSERT(bound_alter.result_schema == NULL);
 
-    // Binding does not mutate the live table or its physical indexes
+    // Binding does not mutate the live table or its physical indexes.
     ASSERT(binder.tables[1].table_schema == &binder.schemas[1]);
     ASSERT(binder.tables[1].primary_index == &binder.canonical_indexes[1]);
     ASSERT(binder.schemas[1].num_constraints == 2);
@@ -8659,11 +8638,9 @@ int test_bind_alter_drop_constraint_unique_incoming_fk() {
 
 cleanup:
     bound_alter_table_free(&bound_alter);
-    
     binder.schemas[2].constraints = binder.department_locations_constraint_ptrs;
     binder.schemas[2].num_constraints = 1;
     constraint_free(fk);
-    
     cleanup_ddl_binder_fixture(&binder);
     free_test_parser(parser, root);
     return result;
@@ -8673,10 +8650,8 @@ int test_bind_alter_drop_constraint_unrelated_fk() {
     int result = 1;
 
     DDLBinderTestFixture binder = {0};
-    
     Parser *parser = NULL;
     ASTNode *root = NULL;
-    
     BoundAlterTable bound_alter = {0};
     Constraint *fk = NULL;
 
@@ -8686,7 +8661,7 @@ int test_bind_alter_drop_constraint_unrelated_fk() {
 
     init_ddl_binder_fixture(&binder);
 
-    // An FK from department_locations references departments
+    // An FK from department_locations references departments.
     uint32_t local_columns[] = {0};
     uint32_t referenced_columns[] = {0};
     Constraint *constraints[2] = {&binder.department_locations_pk, NULL};
@@ -8695,7 +8670,6 @@ int test_bind_alter_drop_constraint_unrelated_fk() {
         "fk_incoming", local_columns, 1, "departments", referenced_columns, 1
     );
     ASSERT(fk != NULL);
-
     constraints[1] = fk;
     binder.schemas[2].constraints = constraints;
     binder.schemas[2].num_constraints = 2;
@@ -8717,7 +8691,7 @@ int test_bind_alter_drop_constraint_unrelated_fk() {
     ASSERT(schema_find_constraint_index(bound_alter.result_schema, "pk_departments") >= 0);
     ASSERT(schema_find_constraint_index(bound_alter.result_schema, "uq_departments_name") < 0);
 
-    // Binding does not mutate the live table or its physical indexes
+    // Binding does not mutate the live table or its physical indexes.
     ASSERT(binder.tables[1].table_schema == &binder.schemas[1]);
     ASSERT(binder.tables[1].primary_index == &binder.canonical_indexes[1]);
     ASSERT(binder.schemas[1].num_constraints == 2);
@@ -8727,11 +8701,9 @@ int test_bind_alter_drop_constraint_unrelated_fk() {
 
 cleanup:
     bound_alter_table_free(&bound_alter);
-    
     binder.schemas[2].constraints = binder.department_locations_constraint_ptrs;
     binder.schemas[2].num_constraints = 1;
     constraint_free(fk);
-    
     cleanup_ddl_binder_fixture(&binder);
     free_test_parser(parser, root);
     return result;
@@ -8741,10 +8713,8 @@ int test_bind_alter_drop_constraint_self_fk_rejected() {
     int result = 1;
 
     DDLBinderTestFixture binder = {0};
-    
     Parser *parser = NULL;
     ASTNode *root = NULL;
-    
     BoundAlterTable bound_alter = {0};
     Constraint *fk = NULL;
 
@@ -8756,7 +8726,9 @@ int test_bind_alter_drop_constraint_self_fk_rejected() {
 
     uint32_t local_columns[] = {0};
     uint32_t referenced_columns[] = {0};
-    Constraint *constraints[3] = { &binder.department_pk, &binder.department_unique, NULL };
+    Constraint *constraints[3] = {
+        &binder.department_pk, &binder.department_unique, NULL
+    };
 
     fk = constraint_create_foreign_keys(
         "fk_self", local_columns, 1, "departments", referenced_columns, 1
@@ -8777,7 +8749,7 @@ int test_bind_alter_drop_constraint_self_fk_rejected() {
     ASSERT(bound_alter.table == NULL);
     ASSERT(bound_alter.result_schema == NULL);
 
-    // Binding does not mutate the live table or its physical indexes
+    // Binding does not mutate the live table or its physical indexes.
     ASSERT(binder.tables[1].table_schema == &binder.schemas[1]);
     ASSERT(binder.tables[1].primary_index == &binder.canonical_indexes[1]);
     ASSERT(binder.schemas[1].num_constraints == 3);
@@ -8787,11 +8759,9 @@ int test_bind_alter_drop_constraint_self_fk_rejected() {
 
 cleanup:
     bound_alter_table_free(&bound_alter);
-    
     binder.schemas[1].constraints = binder.department_constraint_ptrs;
     binder.schemas[1].num_constraints = 2;
     constraint_free(fk);
-    
     cleanup_ddl_binder_fixture(&binder);
     free_test_parser(parser, root);
     return result;
@@ -8801,10 +8771,8 @@ int test_bind_alter_drop_constraint_self_fk_removed_first() {
     int result = 1;
 
     DDLBinderTestFixture binder = {0};
-    
     Parser *parser = NULL;
     ASTNode *root = NULL;
-    
     BoundAlterTable bound_alter = {0};
     Constraint *fk = NULL;
 
@@ -8817,13 +8785,14 @@ int test_bind_alter_drop_constraint_self_fk_removed_first() {
 
     uint32_t local_columns[] = {0};
     uint32_t referenced_columns[] = {0};
-    Constraint *constraints[3] = { &binder.department_pk, &binder.department_unique, NULL };
+    Constraint *constraints[3] = {
+        &binder.department_pk, &binder.department_unique, NULL
+    };
 
     fk = constraint_create_foreign_keys(
         "fk_self", local_columns, 1, "departments", referenced_columns, 1
     );
     ASSERT(fk != NULL);
-    
     constraints[2] = fk;
     binder.schemas[1].constraints = constraints;
     binder.schemas[1].num_constraints = 3;
@@ -8846,7 +8815,7 @@ int test_bind_alter_drop_constraint_self_fk_removed_first() {
     ASSERT(schema_find_constraint_index(bound_alter.result_schema, "fk_self") < 0);
     ASSERT(schema_find_constraint_index(bound_alter.result_schema, "pk_departments") < 0);
 
-    // Binding does not mutate the live table or its physical indexes
+    // Binding does not mutate the live table or its physical indexes.
     ASSERT(binder.tables[1].table_schema == &binder.schemas[1]);
     ASSERT(binder.tables[1].primary_index == &binder.canonical_indexes[1]);
     ASSERT(binder.schemas[1].num_constraints == 3);
@@ -8856,11 +8825,9 @@ int test_bind_alter_drop_constraint_self_fk_removed_first() {
 
 cleanup:
     bound_alter_table_free(&bound_alter);
-    
     binder.schemas[1].constraints = binder.department_constraint_ptrs;
     binder.schemas[1].num_constraints = 2;
     constraint_free(fk);
-    
     cleanup_ddl_binder_fixture(&binder);
     free_test_parser(parser, root);
     return result;
@@ -8870,10 +8837,8 @@ int test_bind_alter_drop_constraint_composite_pk_incoming_fk() {
     int result = 1;
 
     DDLBinderTestFixture binder = {0};
-    
     Parser *parser = NULL;
     ASTNode *root = NULL;
-    
     BoundAlterTable bound_alter = {0};
     Constraint *fk = NULL;
 
@@ -8892,7 +8857,6 @@ int test_bind_alter_drop_constraint_composite_pk_incoming_fk() {
         "department_locations", referenced_columns, 2
     );
     ASSERT(fk != NULL);
-
     constraints[0] = fk;
     binder.schemas[0].constraints = constraints;
     binder.schemas[0].num_constraints = 1;
@@ -8908,7 +8872,7 @@ int test_bind_alter_drop_constraint_composite_pk_incoming_fk() {
     ASSERT(bound_alter.table == NULL);
     ASSERT(bound_alter.result_schema == NULL);
 
-    // Binding does not mutate the live table or its physical indexes
+    // Binding does not mutate the live table or its physical indexes.
     ASSERT(binder.tables[2].table_schema == &binder.schemas[2]);
     ASSERT(binder.db.table_count == 3);
 
@@ -8916,11 +8880,9 @@ int test_bind_alter_drop_constraint_composite_pk_incoming_fk() {
 
 cleanup:
     bound_alter_table_free(&bound_alter);
-    
     binder.schemas[0].constraints = NULL;
     binder.schemas[0].num_constraints = 0;
     constraint_free(fk);
-    
     cleanup_ddl_binder_fixture(&binder);
     free_test_parser(parser, root);
     return result;
@@ -8930,10 +8892,8 @@ int test_bind_alter_drop_constraint_drop_added_check() {
     int result = 1;
 
     DDLBinderTestFixture binder = {0};
-    
     Parser *parser = NULL;
     ASTNode *root = NULL;
-    
     BoundAlterTable bound_alter = {0};
 
     TestToken tokens[] = {
@@ -8969,7 +8929,6 @@ int test_bind_alter_drop_constraint_drop_added_check() {
 
 cleanup:
     bound_alter_table_free(&bound_alter);
-    
     cleanup_ddl_binder_fixture(&binder);
     free_test_parser(parser, root);
     return result;
@@ -8979,10 +8938,8 @@ int test_bind_alter_drop_constraint_drop_added_not_null() {
     int result = 1;
 
     DDLBinderTestFixture binder = {0};
-    
     Parser *parser = NULL;
     ASTNode *root = NULL;
-    
     BoundAlterTable bound_alter = {0};
 
     TestToken tokens[] = {
@@ -9009,7 +8966,7 @@ int test_bind_alter_drop_constraint_drop_added_not_null() {
     ASSERT(bound_alter.result_schema->num_constraints == 0);
     ASSERT(schema_find_constraint_index(bound_alter.result_schema, "nn_age") < 0);
 
-    // Binding does not mutate the live table or its physical indexes
+    // Binding does not mutate the live table or its physical indexes.
     ASSERT(binder.tables[0].table_schema == &binder.schemas[0]);
     ASSERT(binder.schemas[0].num_constraints == 0);
     ASSERT(binder.db.table_count == 3);
@@ -9018,7 +8975,6 @@ int test_bind_alter_drop_constraint_drop_added_not_null() {
 
 cleanup:
     bound_alter_table_free(&bound_alter);
-    
     cleanup_ddl_binder_fixture(&binder);
     free_test_parser(parser, root);
     return result;
@@ -9028,10 +8984,8 @@ int test_bind_alter_drop_constraint_drop_added_default() {
     int result = 1;
 
     DDLBinderTestFixture binder = {0};
-    
     Parser *parser = NULL;
     ASTNode *root = NULL;
-    
     BoundAlterTable bound_alter = {0};
 
     TestToken tokens[] = {
@@ -9058,7 +9012,7 @@ int test_bind_alter_drop_constraint_drop_added_default() {
     ASSERT(bound_alter.result_schema->num_constraints == 0);
     ASSERT(schema_find_constraint_index(bound_alter.result_schema, "df_age") < 0);
 
-    // Binding does not mutate the live table or its physical indexes
+    // Binding does not mutate the live table or its physical indexes.
     ASSERT(binder.tables[0].table_schema == &binder.schemas[0]);
     ASSERT(binder.schemas[0].num_constraints == 0);
     ASSERT(binder.db.table_count == 3);
@@ -9067,7 +9021,6 @@ int test_bind_alter_drop_constraint_drop_added_default() {
 
 cleanup:
     bound_alter_table_free(&bound_alter);
-    
     cleanup_ddl_binder_fixture(&binder);
     free_test_parser(parser, root);
     return result;
@@ -9077,10 +9030,8 @@ int test_bind_alter_drop_constraint_drop_added_foreign_key() {
     int result = 1;
 
     DDLBinderTestFixture binder = {0};
-    
     Parser *parser = NULL;
     ASTNode *root = NULL;
-    
     BoundAlterTable bound_alter = {0};
 
     TestToken tokens[] = {
@@ -9108,7 +9059,7 @@ int test_bind_alter_drop_constraint_drop_added_foreign_key() {
     ASSERT(bound_alter.result_schema->num_constraints == 0);
     ASSERT(schema_find_constraint_index(bound_alter.result_schema, "fk_dept") < 0);
 
-    // Binding does not mutate the live table or its physical indexes
+    // Binding does not mutate the live table or its physical indexes.
     ASSERT(binder.tables[0].table_schema == &binder.schemas[0]);
     ASSERT(binder.schemas[0].num_constraints == 0);
     ASSERT(binder.db.table_count == 3);
@@ -9117,7 +9068,284 @@ int test_bind_alter_drop_constraint_drop_added_foreign_key() {
 
 cleanup:
     bound_alter_table_free(&bound_alter);
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+    return result;
+}
+
+/* ---------- ALTER TABLE RENAME TABLE binding tests ---------- */
+
+int test_bind_alter_rename_table_basic() {
+    int result = 1;
+
+    DDLBinderTestFixture binder = {0};
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+    BoundAlterTable bound_alter = {0};
+
+    TestToken tokens[] = {
+        {"ALTER TABLE", KEYWORD}, {"employees", IDENTIFIER},
+        {"RENAME", KEYWORD}, {"TO", KEYWORD}, {"staff", IDENTIFIER},
+        {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_ALTER_TABLE);
     
+    ASSERT( bind_alter_table(root, &binder.context, &bound_alter));
+
+    ASSERT(bound_alter.table == &binder.tables[0]);
+    ASSERT(bound_alter.alter_table == &root->node_contents.alter_table);
+    ASSERT(bound_alter.result_schema != NULL);
+    ASSERT(bound_alter.result_schema != &binder.schemas[0]);
+    ASSERT(bound_alter.result_schema->num_columns == 4);
+
+    // The binder must not rename the live table or alter its indexes.
+    ASSERT(strcmp(binder.tables[0].name, "employees") == 0);
+    ASSERT(binder.tables[0].table_schema == &binder.schemas[0]);
+    ASSERT(binder.tables[0].primary_index == &binder.canonical_indexes[0]);
+    ASSERT(binder.schemas[0].num_columns == 4);
+    ASSERT(binder.db.table_count == 3);
+
+    result = 0;
+
+cleanup:
+    bound_alter_table_free(&bound_alter);
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_alter_rename_table_existing_name() {
+    int result = 1;
+
+    DDLBinderTestFixture binder = {0};
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+    BoundAlterTable bound_alter = {0};
+
+    TestToken tokens[] = {
+        {"ALTER TABLE", KEYWORD}, {"employees", IDENTIFIER},
+        {"RENAME", KEYWORD}, {"TO", KEYWORD}, {"departments", IDENTIFIER},
+        {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_ALTER_TABLE);
+    
+    ASSERT(!bind_alter_table(root, &binder.context, &bound_alter));
+
+    ASSERT(bound_alter.table == NULL);
+    ASSERT(bound_alter.alter_table == NULL);
+    ASSERT(bound_alter.result_schema == NULL);
+
+    // The binder must not rename the live table or alter its indexes.
+    ASSERT(strcmp(binder.tables[0].name, "employees") == 0);
+    ASSERT(binder.tables[0].table_schema == &binder.schemas[0]);
+    ASSERT(binder.tables[0].primary_index == &binder.canonical_indexes[0]);
+    ASSERT(binder.schemas[0].num_columns == 4);
+    ASSERT(binder.db.table_count == 3);
+
+    result = 0;
+
+cleanup:
+    bound_alter_table_free(&bound_alter);
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_alter_rename_table_same_name() {
+    int result = 1;
+
+    DDLBinderTestFixture binder = {0};
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+    BoundAlterTable bound_alter = {0};
+
+    TestToken tokens[] = {
+        {"ALTER TABLE", KEYWORD}, {"employees", IDENTIFIER},
+        {"RENAME", KEYWORD}, {"TO", KEYWORD}, {"employees", IDENTIFIER},
+        {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_ALTER_TABLE);
+    
+    ASSERT(!bind_alter_table(root, &binder.context, &bound_alter));
+
+    ASSERT(bound_alter.table == NULL);
+    ASSERT(bound_alter.alter_table == NULL);
+    ASSERT(bound_alter.result_schema == NULL);
+
+    // The binder must not rename the live table or alter its indexes.
+    ASSERT(strcmp(binder.tables[0].name, "employees") == 0);
+    ASSERT(binder.tables[0].table_schema == &binder.schemas[0]);
+    ASSERT(binder.tables[0].primary_index == &binder.canonical_indexes[0]);
+    ASSERT(binder.schemas[0].num_columns == 4);
+    ASSERT(binder.db.table_count == 3);
+
+    result = 0;
+
+cleanup:
+    bound_alter_table_free(&bound_alter);
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_alter_rename_table_missing_table() {
+    int result = 1;
+
+    DDLBinderTestFixture binder = {0};
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+    BoundAlterTable bound_alter = {0};
+
+    TestToken tokens[] = {
+        {"ALTER TABLE", KEYWORD}, {"missing_table", IDENTIFIER},
+        {"RENAME", KEYWORD}, {"TO", KEYWORD}, {"staff", IDENTIFIER},
+        {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_ALTER_TABLE);
+    
+    ASSERT(!bind_alter_table(root, &binder.context, &bound_alter));
+
+    ASSERT(bound_alter.table == NULL);
+    ASSERT(bound_alter.alter_table == NULL);
+    ASSERT(bound_alter.result_schema == NULL);
+
+    // The binder must not rename the live table or alter its indexes.
+    ASSERT(strcmp(binder.tables[0].name, "employees") == 0);
+    ASSERT(binder.tables[0].table_schema == &binder.schemas[0]);
+    ASSERT(binder.tables[0].primary_index == &binder.canonical_indexes[0]);
+    ASSERT(binder.schemas[0].num_columns == 4);
+    ASSERT(binder.db.table_count == 3);
+
+    result = 0;
+
+cleanup:
+    bound_alter_table_free(&bound_alter);
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_alter_rename_table_empty_name() {
+    int result = 1;
+
+    DDLBinderTestFixture binder = {0};
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+    BoundAlterTable bound_alter = {0};
+
+    TestToken tokens[] = {
+        {"ALTER TABLE", KEYWORD}, {"employees", IDENTIFIER},
+        {"RENAME", KEYWORD}, {"TO", KEYWORD}, {"staff", IDENTIFIER},
+        {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_ALTER_TABLE);
+    root->node_contents.alter_table.actions[0].alter_contents.alter_rename_table.new_table_name[0] = '\0';
+    
+    ASSERT(!bind_alter_table(root, &binder.context, &bound_alter));
+
+    ASSERT(bound_alter.table == NULL);
+    ASSERT(bound_alter.alter_table == NULL);
+    ASSERT(bound_alter.result_schema == NULL);
+
+    // The binder must not rename the live table or alter its indexes
+    ASSERT(strcmp(binder.tables[0].name, "employees") == 0);
+    ASSERT(binder.tables[0].table_schema == &binder.schemas[0]);
+    ASSERT(binder.tables[0].primary_index == &binder.canonical_indexes[0]);
+    ASSERT(binder.schemas[0].num_columns == 4);
+    ASSERT(binder.db.table_count == 3);
+
+    result = 0;
+
+cleanup:
+    bound_alter_table_free(&bound_alter);
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_alter_rename_table_with_add_column() {
+    int result = 1;
+
+    DDLBinderTestFixture binder = {0};
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+    BoundAlterTable bound_alter = {0};
+
+    TestToken tokens[] = {
+        {"ALTER TABLE", KEYWORD}, {"employees", IDENTIFIER},
+        {"RENAME", KEYWORD}, {"TO", KEYWORD}, {"staff", IDENTIFIER}, {",", PUNCTUATION}, {"ADD", KEYWORD}, {"COLUMN", KEYWORD}, {"age", IDENTIFIER}, {"INTEGER", KEYWORD},
+        {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_ALTER_TABLE);
+    
+    ASSERT(bind_alter_table(root, &binder.context, &bound_alter));
+
+    ASSERT(bound_alter.table == &binder.tables[0]);
+    ASSERT(bound_alter.alter_table == &root->node_contents.alter_table);
+    ASSERT(bound_alter.result_schema != NULL);
+    ASSERT(bound_alter.result_schema != &binder.schemas[0]);
+    ASSERT(bound_alter.result_schema->num_columns == 5);
+    ASSERT(strcmp(bound_alter.result_schema->columns[4]->name, "age") == 0);
+
+    // The binder must not rename the live table or alter its indexes
+    ASSERT(strcmp(binder.tables[0].name, "employees") == 0);
+    ASSERT(binder.tables[0].table_schema == &binder.schemas[0]);
+    ASSERT(binder.tables[0].primary_index == &binder.canonical_indexes[0]);
+    ASSERT(binder.schemas[0].num_columns == 4);
+    ASSERT(binder.db.table_count == 3);
+
+    result = 0;
+
+cleanup:
+    bound_alter_table_free(&bound_alter);
     cleanup_ddl_binder_fixture(&binder);
     free_test_parser(parser, root);
     return result;
@@ -9445,6 +9673,19 @@ int main(int argc, char *argv[]) {
     generate_output(result, 151, "test_bind_alter_drop_constraint_drop_added_default");
     result = test_bind_alter_drop_constraint_drop_added_foreign_key();
     generate_output(result, 152, "test_bind_alter_drop_constraint_drop_added_foreign_key");
+
+    result = test_bind_alter_rename_table_basic();
+    generate_output(result, 153, "test_bind_alter_rename_table_basic");
+    result = test_bind_alter_rename_table_existing_name();
+    generate_output(result, 154, "test_bind_alter_rename_table_existing_name");
+    result = test_bind_alter_rename_table_same_name();
+    generate_output(result, 155, "test_bind_alter_rename_table_same_name");
+    result = test_bind_alter_rename_table_missing_table();
+    generate_output(result, 156, "test_bind_alter_rename_table_missing_table");
+    result = test_bind_alter_rename_table_empty_name();
+    generate_output(result, 157, "test_bind_alter_rename_table_empty_name");
+    result = test_bind_alter_rename_table_with_add_column();
+    generate_output(result, 158, "test_bind_alter_rename_table_with_add_column");
 
     return 0;
 }
