@@ -3906,10 +3906,104 @@ bool bind_alter_drop_constraint(AlterActionNode *action, BindingContext *context
         return false;
     }
 
-    if (!context) {
+    if (!context || !context->db || 
+        !context->relations || context->num_relations != 1 || !context->relations[0].table) {
         printf("bind_alter_drop_constraint: Invalid binding context.\n");
         return false;
     }
+
+    if (!working_schema || 
+        !working_schema->columns || working_schema->num_columns == 0 || 
+        (working_schema->num_constraints > 0 && !working_schema->constraints)) {
+        printf("bind_alter_drop_col: Invalid working schema.\n");
+        return false;
+    }
+
+    if (working_schema->num_columns > INT32_MAX) {
+        printf("bind_alter_drop_constraint: Column index limit exceeded.\n");
+        return false;
+    }
+
+    Table *table = context->relations[0].table;
+
+    uint32_t constraint_index = UINT32_MAX;
+    char *drop_constraint_name = action->alter_contents.alter_drop_constraint.constraint_name;
+
+    if (drop_constraint_name[0] == '\0') {
+        printf("bind_alter_drop_constraint: Invalid target constraint name.\n");
+        return false;
+    }
+
+    for (uint32_t i = 0; i < working_schema->num_constraints; i++) {
+        Constraint *constraint = working_schema->constraints[i];
+
+        if (!constraint || constraint->constraint_name[0] == '\0') {
+            printf("bind_alter_drop_constraint: Invalid existing constraint.\n");
+            return false;
+        }
+
+        // Skip constraints that don't match
+        if (strcmp(drop_constraint_name, constraint->constraint_name)) {
+            continue;
+        }
+
+        // At this point we've found the matching constraint
+        constraint_index = i;
+
+        switch (constraint->type) {
+            case PRIMARY_KEY:
+            case UNIQUE: {
+                bool referenced = false;
+
+                if (!constraint_is_referenced_by_foreign_key(
+                        context->db,
+                        table,
+                        working_schema,
+                        constraint,
+                        &referenced)) {
+                    printf("bind_alter_drop_constraint: FOREIGN KEY dependency inspection failed.\n");
+                    return false;
+                }
+
+                if (referenced) {
+                    printf("bind_alter_drop_constraint: Constraint is referenced by a FOREIGN KEY.\n");
+                    return false;
+                }
+
+                break;
+            }
+
+            case FOREIGN_KEY:
+            case CHECK:
+            case DEFAULT:
+            case NOT_NULL:
+                // Binding doesn't require any other checks for those constraint types
+                // And the any other tables are not affected by the removal of 
+                // the current table's FOREIGN KEY toward them 
+                break;
+
+            default:
+                printf("bind_alter_drop_constraint: Invalid constraint type.\n");
+                return false;
+        }
+
+        break;
+    }
+
+    if (constraint_index == UINT32_MAX) {
+        printf("bind_alter_drop_constraint: Target constraint doesn't exist in the working schema.\n");
+        return false;
+    }
+
+    // Update working schema by deallocating the target constraint
+    constraint_free(working_schema->constraints[constraint_index]);
+
+    for (uint32_t i = constraint_index; i + 1 < working_schema->num_constraints; i++) {
+        working_schema->constraints[i] = working_schema->constraints[i + 1];
+    }
+
+    working_schema->num_constraints--;
+    working_schema->constraints[working_schema->num_constraints] = NULL;
 
     return true;
 }
