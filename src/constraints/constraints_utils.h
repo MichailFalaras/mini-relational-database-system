@@ -26,8 +26,8 @@ extern bool constraint_validate_foreign_key(const Database *db, const Schema *lo
 extern bool constraint_validate_row(Pager *pager, const Constraint *constraint, const Schema *schema,
     const Row *row, const EvaluationContext *context);
 
-extern bool constraint_is_referenced_by_foreign_key(const Database *db, const Table *table, 
-    const Constraint *constraint);
+extern bool constraint_is_referenced_by_foreign_key(const Database *db, const Table *table,
+    const Schema *working_schema, const Constraint *target_constraint, bool *out_referenced);
 
 // Return a prefix based on the constraint type,
 // Used when internally assigning names to unnamed constraints in queries 
