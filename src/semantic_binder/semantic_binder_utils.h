@@ -38,6 +38,8 @@ typedef struct bound_expression_type BoundExpressionType;
 typedef struct bound_projection BoundProjection;
 typedef struct bound_insertion_values BoundInsertionValues;
 typedef struct bound_alter_table BoundAlterTable;
+typedef struct bound_drop_table BoundDropTable;
+
 
 /* ---------- CREATE TABLE Pending Column Bindings ---------- */
 
@@ -104,7 +106,7 @@ bool bind_delete(ASTNode *root, BindingContext *context, BoundDeleteValues *out_
 
 bool bind_create_table(ASTNode *root, BindingContext *context);
 
-bool bind_drop_table(ASTNode *root, BindingContext *context);
+bool bind_drop_table(ASTNode *root, BindingContext *context, BoundDropTable *drop);
 
 bool bind_truncate_table(ASTNode *root, BindingContext *context);
 
@@ -424,4 +426,10 @@ const char *binding_relation_current_name(const BindingRelation *relation);
 bool rewrite_check_identifiers(ExpressionNode *expr, int32_t target_column_index,
     const char *new_column_name, const char *old_table_name, const char *new_table_name,
     bool apply);
+
+
+/* ---------- DROP TABLE Helpers ---------- */
+
+// Validate that the current table is referenced by another table's FOREIGN KEY constriant
+bool has_external_incoming_fk(const Database *db, const Table *target_table);
 #endif

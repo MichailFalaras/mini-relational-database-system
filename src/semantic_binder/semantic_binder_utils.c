@@ -1491,7 +1491,60 @@ bool bind_create_table(ASTNode *root, BindingContext *context) {
     return true;
 }
 
-bool bind_drop_table(ASTNode *root, BindingContext *context);
+// Bind DROP TABLE query
+bool bind_drop_table(ASTNode *root, BindingContext *context, BoundDropTable *drop) {
+    if (!root || root->type != AST_DROP_TABLE) {
+        printf("bind_drop_table: Invalid AST root node.\n");
+        return false;
+    }
+
+    if (!context || !context->db || !drop) {
+        printf("bind_drop_table: Invalid binding context or output.\n");
+        return false;
+    }
+
+    // Empty context and bound statement are required
+    if (context->relations || context->num_relations != 0 || context->aggregate_depth != 0) {
+        printf("bind_drop_table: Expected fresh binding state.\n");
+        return false;
+    }
+
+    if (drop->table || drop->drop_table) {
+        printf("bind_drop_table: Invalid assigned output.\n");
+        return false;
+    }
+
+    DropTableNode *drop_table = &root->node_contents.drop_table;
+
+    if (!drop_table || drop_table->table_name[0] == '\0') {
+        printf("bind_drop_table: Invalid drop table node or target table name.\n");
+        return false;
+    }
+
+    if (!register_binding_relation(drop_table->table_name, "", context)) {
+        printf("bind_drop_table: Table could not be registered.\n");
+        return false;
+    }
+
+    Table *table = context->relations[0].table;
+
+    if (!table || !table->table_schema) {
+        printf("bind_drop_table: Invalid target table.\n");
+        return false;
+    }
+
+    // Reject DROP TABLE if another table references it
+    if (has_external_incoming_fk(context->db, table)) {
+        printf("bind_drop_table: Target table has incoming FOREIGN KEY dependencies.\n");
+        return false;
+    }
+
+    // Publish validated output
+    drop->table = table;
+    drop->drop_table = drop_table;
+
+    return true;
+}
 
 bool bind_truncate_table(ASTNode *root, BindingContext *context);
 
@@ -8486,4 +8539,62 @@ bool rewrite_check_identifiers(ExpressionNode *expr, int32_t target_column_index
         default:
             return false;
     }
+}
+
+
+/* ---------- DROP TABLE Helpers ---------- */
+
+// Validate that the current table is referenced by another table's FOREIGN KEY constriant
+bool has_external_incoming_fk(const Database *db, const Table *target_table) {
+    // Fail closed on invalid metadata
+    if (!db || !target_table ||target_table->name[0] == '\0' ||
+        (db->table_count > 0 && !db->tables)) {
+        printf("has_external_incoming_fk: Invalid inputs.\n");
+        return true;
+    }
+
+    // Iterate through all registered tables
+    for (uint32_t i = 0; i < db->table_count; i++) {
+        const Table *other = db->tables[i];
+
+        if (!other || !other->table_schema) {
+            printf("has_external_incoming_fk: Invalid database table.\n");
+            return true;
+        }
+
+        // Ignore self-referencing FOREIGN KEYs
+        if (other == target_table) {
+            continue;
+        }
+
+        const Schema *schema = other->table_schema;
+
+        if (schema->num_constraints > 0 && !schema->constraints) {
+            printf("has_external_incoming_fk: Invalid table schema.\n");
+            return true;
+        }
+
+        // Inspect every constraint of the other table
+        for (uint32_t j = 0; j < schema->num_constraints; j++) {
+            const Constraint *constraint = schema->constraints[j];
+
+            if (!constraint) {
+                printf("has_external_incoming_fk: Invalid schema constraint.\n");
+                return true;
+            }
+
+            if (constraint->type != FOREIGN_KEY) {
+                continue;
+            }
+
+            const ForeignKeyConstraint *fk = &constraint->constraint_data.foreign_key;
+
+            // Check whether the FK references the target table
+            if (!strcmp(fk->referenced_table_name, target_table->name)) {
+                return true;
+            }
+        }
+    }
+
+    return false;
 }

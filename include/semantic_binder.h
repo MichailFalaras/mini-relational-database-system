@@ -150,6 +150,15 @@ typedef struct bound_alter_table {
     Schema *result_schema;        // Owning
 } BoundAlterTable;
 
+// Metadata for a validated DROP TABLE statement
+typedef struct bound_drop_table {
+    // Existing table being dropped (non-owning)
+    Table *table;
+
+    // Validated DROP TABLE AST node (non-owning)
+    DropTableNode *drop_table;
+} BoundDropTable;
+
 // Final Bound Statement
 typedef enum bound_statement_type {
     BOUND_STATEMENT_NONE = 0,
@@ -158,7 +167,8 @@ typedef enum bound_statement_type {
     BOUND_STATEMENT_UPDATE = 3,
     BOUND_STATEMENT_DELETE = 4,
     BOUND_STATEMENT_CREATE_TABLE = 5,
-    BOUND_STATEMENT_ALTER_TABLE = 6
+    BOUND_STATEMENT_ALTER_TABLE = 6,
+    BOUND_STATEMENT_DROP_TABLE = 7
 } BoundStatementType;
 
 typedef struct bound_statement {
@@ -171,6 +181,7 @@ typedef struct bound_statement {
         BoundDeleteValues delete;
         BoundCreateTable create_table;
         BoundAlterTable alter_table;
+        BoundDropTable drop_table;
     } data;
 } BoundStatement;
 
@@ -190,6 +201,8 @@ extern void bound_delete_values_free(BoundDeleteValues *delete);
 extern void bound_create_table_free(BoundCreateTable *create_table);
 
 extern void bound_alter_table_free(BoundAlterTable *alter_table);
+
+extern void bound_drop_table_free(BoundDropTable *drop_table);
 
 extern void bound_statement_free(BoundStatement *statement);
 

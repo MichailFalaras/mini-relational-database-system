@@ -102,14 +102,20 @@ bool bind_statement(ASTNode *root, Database *db, BoundStatement *out_statement) 
             break;
         }
 
+        case AST_DROP_TABLE: {
+            BoundDropTable drop = {0};
 
-#if 0
-        case AST_DROP_TABLE:
-            success = bind_drop_table(root, &context);
+            success = bind_drop_table(root, &context, &drop);
+
+            if (success) {
+                out_statement->type = BOUND_STATEMENT_DROP_TABLE;
+                out_statement->data.drop_table = drop;
+            }
+
             break;
-
-        
-
+        }
+   
+#if 0
         case AST_TRUNCATE_TABLE:
             success = bind_truncate_table(root, &context);
             break;
@@ -198,6 +204,15 @@ void bound_alter_table_free(BoundAlterTable *alter_table) {
     alter_table->alter_table = NULL;
 }
 
+void bound_drop_table_free(BoundDropTable *drop_table) {
+    if (!drop_table) {
+        return;
+    }
+
+    drop_table->table = NULL;
+    drop_table->drop_table = NULL;
+}
+
 /* Free bound statement metadata */
 void bound_statement_free(BoundStatement *statement) {
     if (!statement) {
@@ -227,6 +242,10 @@ void bound_statement_free(BoundStatement *statement) {
 
         case BOUND_STATEMENT_ALTER_TABLE:
             bound_alter_table_free(&statement->data.alter_table);
+            break;
+
+        case BOUND_STATEMENT_DROP_TABLE:
+            bound_drop_table_free(&statement->data.drop_table);
             break;
 
         default:
