@@ -11478,6 +11478,457 @@ cleanup:
     return result;
 }
 
+
+
+/* ---------- bind_truncate_table unit tests ---------- */
+
+int test_bind_truncate_table_basic() {
+    int result = 1;
+    DDLBinderTestFixture binder = {0};
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+    BoundTruncateTable bound_truncate = {0};
+
+    TestToken tokens[] = {
+        {"TRUNCATE TABLE", KEYWORD}, {"employees", IDENTIFIER}, {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+    
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_TRUNCATE_TABLE);
+
+    ASSERT(bind_truncate_table(root, &binder.context, &bound_truncate));
+    ASSERT(bound_truncate.table == &binder.tables[0]);
+    ASSERT(bound_truncate.truncate_table == &root->node_contents.truncate_table);
+
+    // Binding must preserve the live table registry, schemas, and indexes.
+    ASSERT(binder.db.table_count == 3);
+    ASSERT(binder.db.tables[0] == &binder.tables[0]);
+    ASSERT(binder.db.tables[1] == &binder.tables[1]);
+    ASSERT(binder.db.tables[2] == &binder.tables[2]);
+    
+    ASSERT(!strcmp(binder.tables[0].name, "employees"));
+    ASSERT(!strcmp(binder.tables[1].name, "departments"));
+    ASSERT(!strcmp(binder.tables[2].name, "department_locations"));
+    
+    ASSERT(binder.tables[0].table_schema == &binder.schemas[0]);
+    ASSERT(binder.tables[1].table_schema == &binder.schemas[1]);
+    ASSERT(binder.tables[2].table_schema == &binder.schemas[2]);
+    ASSERT(binder.tables[0].primary_index == &binder.canonical_indexes[0]);
+    ASSERT(binder.tables[1].primary_index == &binder.canonical_indexes[1]);
+    ASSERT(binder.tables[2].primary_index == &binder.canonical_indexes[2]);
+
+    result = 0;
+
+cleanup:
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_truncate_table_with_existing_constraints() {
+    int result = 1;
+    DDLBinderTestFixture binder = {0};
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+    BoundTruncateTable bound_truncate = {0};
+
+    TestToken tokens[] = {
+        {"TRUNCATE TABLE", KEYWORD}, {"departments", IDENTIFIER}, {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+    
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_TRUNCATE_TABLE);
+
+    ASSERT(bind_truncate_table(root, &binder.context, &bound_truncate));
+    ASSERT(bound_truncate.table == &binder.tables[1]);
+    ASSERT(bound_truncate.truncate_table == &root->node_contents.truncate_table);
+
+    // Binding must preserve the live table registry, schemas, and indexes.
+    ASSERT(binder.db.table_count == 3);
+    ASSERT(binder.db.tables[0] == &binder.tables[0]);
+    ASSERT(binder.db.tables[1] == &binder.tables[1]);
+    ASSERT(binder.db.tables[2] == &binder.tables[2]);
+    
+    ASSERT(!strcmp(binder.tables[0].name, "employees"));
+    ASSERT(!strcmp(binder.tables[1].name, "departments"));
+    ASSERT(!strcmp(binder.tables[2].name, "department_locations"));
+    
+    ASSERT(binder.tables[0].table_schema == &binder.schemas[0]);
+    ASSERT(binder.tables[1].table_schema == &binder.schemas[1]);
+    ASSERT(binder.tables[2].table_schema == &binder.schemas[2]);
+    ASSERT(binder.tables[0].primary_index == &binder.canonical_indexes[0]);
+    ASSERT(binder.tables[1].primary_index == &binder.canonical_indexes[1]);
+    ASSERT(binder.tables[2].primary_index == &binder.canonical_indexes[2]);
+
+    result = 0;
+
+cleanup:
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_truncate_table_missing_table() {
+    int result = 1;
+    DDLBinderTestFixture binder = {0};
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+    BoundTruncateTable bound_truncate = {0};
+
+    TestToken tokens[] = {
+        {"TRUNCATE TABLE", KEYWORD}, {"unknown_table", IDENTIFIER}, {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+    
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_TRUNCATE_TABLE);
+
+    ASSERT(!bind_truncate_table(root, &binder.context, &bound_truncate));
+    ASSERT(bound_truncate.table == NULL);
+    ASSERT(bound_truncate.truncate_table == NULL);
+
+    // Binding must preserve the live table registry, schemas, and indexes.
+    ASSERT(binder.db.table_count == 3);
+    ASSERT(binder.db.tables[0] == &binder.tables[0]);
+    ASSERT(binder.db.tables[1] == &binder.tables[1]);
+    ASSERT(binder.db.tables[2] == &binder.tables[2]);
+    
+    ASSERT(!strcmp(binder.tables[0].name, "employees"));
+    ASSERT(!strcmp(binder.tables[1].name, "departments"));
+    ASSERT(!strcmp(binder.tables[2].name, "department_locations"));
+    
+    ASSERT(binder.tables[0].table_schema == &binder.schemas[0]);
+    ASSERT(binder.tables[1].table_schema == &binder.schemas[1]);
+    ASSERT(binder.tables[2].table_schema == &binder.schemas[2]);
+    ASSERT(binder.tables[0].primary_index == &binder.canonical_indexes[0]);
+    ASSERT(binder.tables[1].primary_index == &binder.canonical_indexes[1]);
+    ASSERT(binder.tables[2].primary_index == &binder.canonical_indexes[2]);
+
+    result = 0;
+
+cleanup:
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_truncate_table_external_incoming_fk() {
+    int result = 1;
+    DDLBinderTestFixture binder = {0};
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+    BoundTruncateTable bound_truncate = {0};
+    Constraint *fk = NULL;
+    Constraint *fixture_constraints[2] = {NULL, NULL};
+
+    TestToken tokens[] = {
+        {"TRUNCATE TABLE", KEYWORD}, {"departments", IDENTIFIER}, {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    // Add a runtime FOREIGN KEY to exercise incoming-dependency detection.
+    uint32_t local_columns[] = {0};
+    uint32_t referenced_columns[] = {0};
+    fk = constraint_create_foreign_keys(
+        "fk_truncate_test", local_columns, 1, "departments", referenced_columns, 1
+    );
+    ASSERT(fk != NULL);
+    fixture_constraints[0] = fk;
+    binder.schemas[0].constraints = fixture_constraints;
+    binder.schemas[0].num_constraints = 1;
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+    
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_TRUNCATE_TABLE);
+
+    ASSERT(!bind_truncate_table(root, &binder.context, &bound_truncate));
+    ASSERT(bound_truncate.table == NULL);
+    ASSERT(bound_truncate.truncate_table == NULL);
+
+    // Binding must preserve the live table registry, schemas, and indexes.
+    ASSERT(binder.db.table_count == 3);
+    ASSERT(binder.db.tables[0] == &binder.tables[0]);
+    ASSERT(binder.db.tables[1] == &binder.tables[1]);
+    ASSERT(binder.db.tables[2] == &binder.tables[2]);
+    
+    ASSERT(!strcmp(binder.tables[0].name, "employees"));
+    ASSERT(!strcmp(binder.tables[1].name, "departments"));
+    ASSERT(!strcmp(binder.tables[2].name, "department_locations"));
+    
+    ASSERT(binder.tables[0].table_schema == &binder.schemas[0]);
+    ASSERT(binder.tables[1].table_schema == &binder.schemas[1]);
+    ASSERT(binder.tables[2].table_schema == &binder.schemas[2]);
+    ASSERT(binder.tables[0].primary_index == &binder.canonical_indexes[0]);
+    ASSERT(binder.tables[1].primary_index == &binder.canonical_indexes[1]);
+    ASSERT(binder.tables[2].primary_index == &binder.canonical_indexes[2]);
+
+    result = 0;
+
+cleanup:
+    binder.schemas[0].constraints = NULL;
+    binder.schemas[0].num_constraints = 0;
+    constraint_free(fk);
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_truncate_table_unrelated_external_fk() {
+    int result = 1;
+    DDLBinderTestFixture binder = {0};
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+    BoundTruncateTable bound_truncate = {0};
+    Constraint *fk = NULL;
+    Constraint *fixture_constraints[2] = {NULL, NULL};
+
+    TestToken tokens[] = {
+        {"TRUNCATE TABLE", KEYWORD}, {"department_locations", IDENTIFIER}, {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    // Add a runtime FOREIGN KEY to exercise incoming-dependency detection.
+    uint32_t local_columns[] = {0};
+    uint32_t referenced_columns[] = {0};
+    fk = constraint_create_foreign_keys(
+        "fk_truncate_test", local_columns, 1, "departments", referenced_columns, 1
+    );
+    ASSERT(fk != NULL);
+    fixture_constraints[0] = fk;
+    binder.schemas[0].constraints = fixture_constraints;
+    binder.schemas[0].num_constraints = 1;
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+    
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_TRUNCATE_TABLE);
+
+    ASSERT(bind_truncate_table(root, &binder.context, &bound_truncate));
+    ASSERT(bound_truncate.table == &binder.tables[2]);
+    ASSERT(bound_truncate.truncate_table == &root->node_contents.truncate_table);
+
+    // Binding must preserve the live table registry, schemas, and indexes.
+    ASSERT(binder.db.table_count == 3);
+    ASSERT(binder.db.tables[0] == &binder.tables[0]);
+    ASSERT(binder.db.tables[1] == &binder.tables[1]);
+    ASSERT(binder.db.tables[2] == &binder.tables[2]);
+    
+    ASSERT(!strcmp(binder.tables[0].name, "employees"));
+    ASSERT(!strcmp(binder.tables[1].name, "departments"));
+    ASSERT(!strcmp(binder.tables[2].name, "department_locations"));
+    
+    ASSERT(binder.tables[0].table_schema == &binder.schemas[0]);
+    ASSERT(binder.tables[1].table_schema == &binder.schemas[1]);
+    ASSERT(binder.tables[2].table_schema == &binder.schemas[2]);
+    ASSERT(binder.tables[0].primary_index == &binder.canonical_indexes[0]);
+    ASSERT(binder.tables[1].primary_index == &binder.canonical_indexes[1]);
+    ASSERT(binder.tables[2].primary_index == &binder.canonical_indexes[2]);
+
+    result = 0;
+
+cleanup:
+    binder.schemas[0].constraints = NULL;
+    binder.schemas[0].num_constraints = 0;
+    constraint_free(fk);
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_truncate_table_self_referencing_fk() {
+    int result = 1;
+    
+    DDLBinderTestFixture binder = {0};
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+    BoundTruncateTable bound_truncate = {0};
+    Constraint *fk = NULL;
+    Constraint *fixture_constraints[2] = {NULL, NULL};
+
+    TestToken tokens[] = {
+        {"TRUNCATE TABLE", KEYWORD}, {"employees", IDENTIFIER}, {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    // Add a runtime FOREIGN KEY to exercise incoming-dependency detection.
+    uint32_t local_columns[] = {0};
+    uint32_t referenced_columns[] = {0};
+    fk = constraint_create_foreign_keys(
+        "fk_truncate_test", local_columns, 1, "employees", referenced_columns, 1
+    );
+    ASSERT(fk != NULL);
+
+    fixture_constraints[0] = fk;
+    binder.schemas[0].constraints = fixture_constraints;
+    binder.schemas[0].num_constraints = 1;
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_TRUNCATE_TABLE);
+
+    ASSERT(bind_truncate_table(root, &binder.context, &bound_truncate));
+    ASSERT(bound_truncate.table == &binder.tables[0]);
+    ASSERT(bound_truncate.truncate_table == &root->node_contents.truncate_table);
+
+    // Binding must preserve the live table registry, schemas, and indexes.
+    ASSERT(binder.db.table_count == 3);
+    ASSERT(binder.db.tables[0] == &binder.tables[0]);
+    ASSERT(binder.db.tables[1] == &binder.tables[1]);
+    ASSERT(binder.db.tables[2] == &binder.tables[2]);
+    
+    ASSERT(!strcmp(binder.tables[0].name, "employees"));
+    ASSERT(!strcmp(binder.tables[1].name, "departments"));
+    ASSERT(!strcmp(binder.tables[2].name, "department_locations"));
+    
+    ASSERT(binder.tables[0].table_schema == &binder.schemas[0]);
+    ASSERT(binder.tables[1].table_schema == &binder.schemas[1]);
+    ASSERT(binder.tables[2].table_schema == &binder.schemas[2]);
+    ASSERT(binder.tables[0].primary_index == &binder.canonical_indexes[0]);
+    ASSERT(binder.tables[1].primary_index == &binder.canonical_indexes[1]);
+    ASSERT(binder.tables[2].primary_index == &binder.canonical_indexes[2]);
+
+    result = 0;
+
+cleanup:
+    binder.schemas[0].constraints = NULL;
+    binder.schemas[0].num_constraints = 0;
+    constraint_free(fk);
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_truncate_table_nonempty_output() {
+    int result = 1;
+    DDLBinderTestFixture binder = {0};
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+    BoundTruncateTable bound_truncate = {0};
+
+    TestToken tokens[] = {
+        {"TRUNCATE TABLE", KEYWORD}, {"employees", IDENTIFIER}, {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+    
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_TRUNCATE_TABLE);
+
+    bound_truncate.table = &binder.tables[0];
+    ASSERT(!bind_truncate_table(root, &binder.context, &bound_truncate));
+    
+    ASSERT(bound_truncate.table == &binder.tables[0]);
+    ASSERT(bound_truncate.truncate_table == NULL);
+
+    // Binding must preserve the live table registry, schemas, and indexes.
+    ASSERT(binder.db.table_count == 3);
+    ASSERT(binder.db.tables[0] == &binder.tables[0]);
+    ASSERT(binder.db.tables[1] == &binder.tables[1]);
+    ASSERT(binder.db.tables[2] == &binder.tables[2]);
+    
+    ASSERT(!strcmp(binder.tables[0].name, "employees"));
+    ASSERT(!strcmp(binder.tables[1].name, "departments"));
+    ASSERT(!strcmp(binder.tables[2].name, "department_locations"));
+    
+    ASSERT(binder.tables[0].table_schema == &binder.schemas[0]);
+    ASSERT(binder.tables[1].table_schema == &binder.schemas[1]);
+    ASSERT(binder.tables[2].table_schema == &binder.schemas[2]);
+    ASSERT(binder.tables[0].primary_index == &binder.canonical_indexes[0]);
+    ASSERT(binder.tables[1].primary_index == &binder.canonical_indexes[1]);
+    ASSERT(binder.tables[2].primary_index == &binder.canonical_indexes[2]);
+
+    result = 0;
+
+cleanup:
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_truncate_table_wrong_ast_type() {
+    int result = 1;
+
+    DDLBinderTestFixture binder = {0};
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+    BoundTruncateTable bound_truncate = {0};
+
+    TestToken tokens[] = {
+        {"TRUNCATE TABLE", KEYWORD}, {"employees", IDENTIFIER}, {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+    
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_TRUNCATE_TABLE);
+
+    root->type = AST_CREATE_TABLE;
+    ASSERT(!bind_truncate_table(root, &binder.context, &bound_truncate));
+
+    root->type = AST_TRUNCATE_TABLE;
+    ASSERT(bound_truncate.table == NULL && bound_truncate.truncate_table == NULL);
+
+    // Binding must preserve the live table registry, schemas, and indexes.
+    ASSERT(binder.db.table_count == 3);
+    ASSERT(binder.db.tables[0] == &binder.tables[0]);
+    ASSERT(binder.db.tables[1] == &binder.tables[1]);
+    ASSERT(binder.db.tables[2] == &binder.tables[2]);
+    
+    ASSERT(!strcmp(binder.tables[0].name, "employees"));
+    ASSERT(!strcmp(binder.tables[1].name, "departments"));
+    ASSERT(!strcmp(binder.tables[2].name, "department_locations"));
+    
+    ASSERT(binder.tables[0].table_schema == &binder.schemas[0]);
+    ASSERT(binder.tables[1].table_schema == &binder.schemas[1]);
+    ASSERT(binder.tables[2].table_schema == &binder.schemas[2]);
+    ASSERT(binder.tables[0].primary_index == &binder.canonical_indexes[0]);
+    ASSERT(binder.tables[1].primary_index == &binder.canonical_indexes[1]);
+    ASSERT(binder.tables[2].primary_index == &binder.canonical_indexes[2]);
+
+    result = 0;
+
+cleanup:
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+    return result;
+}
+
 int main(int argc, char *argv[]) {
     int result;
 
@@ -11871,7 +12322,6 @@ int main(int argc, char *argv[]) {
     result = test_bind_alter_rename_column_preserves_fk_indexes();
     generate_output(result, 186, "test_bind_alter_rename_column_preserves_fk_indexes");
 
-
     /* ---------- bind_drop_table unit tests ---------- */
     result = test_bind_drop_table_basic();
     generate_output(result, 187, "test_bind_drop_table_basic");
@@ -11889,6 +12339,24 @@ int main(int argc, char *argv[]) {
     generate_output(result, 193, "test_bind_drop_table_nonempty_output");
     result = test_bind_drop_table_wrong_ast_type();
     generate_output(result, 194, "test_bind_drop_table_wrong_ast_type");
+
+    /* ---------- bind_truncate_table unit tests ---------- */
+    result = test_bind_truncate_table_basic();
+    generate_output(result, 195, "test_bind_truncate_table_basic");
+    result = test_bind_truncate_table_with_existing_constraints();
+    generate_output(result, 196, "test_bind_truncate_table_with_existing_constraints");
+    result = test_bind_truncate_table_missing_table();
+    generate_output(result, 197, "test_bind_truncate_table_missing_table");
+    result = test_bind_truncate_table_external_incoming_fk();
+    generate_output(result, 198, "test_bind_truncate_table_external_incoming_fk");
+    result = test_bind_truncate_table_unrelated_external_fk();
+    generate_output(result, 199, "test_bind_truncate_table_unrelated_external_fk");
+    result = test_bind_truncate_table_self_referencing_fk();
+    generate_output(result, 200, "test_bind_truncate_table_self_referencing_fk");
+    result = test_bind_truncate_table_nonempty_output();
+    generate_output(result, 201, "test_bind_truncate_table_nonempty_output");
+    result = test_bind_truncate_table_wrong_ast_type();
+    generate_output(result, 202, "test_bind_truncate_table_wrong_ast_type");
 
     return 0;
 }
