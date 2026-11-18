@@ -11929,6 +11929,952 @@ cleanup:
     return result;
 }
 
+
+
+/* ---------- bind_create_index unit tests ---------- */
+
+int test_bind_create_index_basic() {
+    int result = 1;
+    DDLBinderTestFixture binder = {0};
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+    BoundCreateIndex bound_index = {0};
+    Index *other_secondary[MAX_INDEXES] = {0};
+
+    TestToken tokens[] = {
+        {"CREATE INDEX", KEYWORD}, {"idx_new_basic", IDENTIFIER}, {"ON", KEYWORD},
+        {"employees", IDENTIFIER}, {"(", PUNCTUATION}, {"salary", IDENTIFIER}, {")", PUNCTUATION},
+        {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    // CREATE INDEX requires a live, materialized target and index registry.
+    for (uint32_t i = 0; i < 3; i++) {
+        binder.tables[i].is_materialized = true;
+    }
+
+    binder.tables[1].secondary_indexes = other_secondary;
+    binder.tables[2].secondary_indexes = other_secondary;
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+    
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_CREATE_INDEX);
+    
+    ASSERT(bind_create_index(root, &binder.context, &bound_index));
+    
+    ASSERT(bound_index.table == &binder.tables[0]);
+    ASSERT(bound_index.create_index == &root->node_contents.create_index);
+    ASSERT(bound_index.column_indexes != NULL);
+    ASSERT(bound_index.num_columns == 1);
+    ASSERT(bound_index.column_indexes[0] == 2);
+    
+    ASSERT(root->node_contents.create_index.column_refs[0]->expression_data.column_value.relation_index == 0);
+    ASSERT(root->node_contents.create_index.column_refs[0]->expression_data.column_value.column_index == 2);
+
+    // Semantic binding must not create an index or mutate the table registry.
+    ASSERT(binder.db.table_count == 3);
+    ASSERT(binder.tables[0].primary_index == &binder.canonical_indexes[0]);
+    ASSERT(binder.tables[1].primary_index == &binder.canonical_indexes[1]);
+    ASSERT(binder.tables[2].primary_index == &binder.canonical_indexes[2]);
+    ASSERT(binder.tables[0].secondary_indexes == binder.employee_secondary_indexes);
+    ASSERT(binder.tables[0].secondary_indexes[0] == &binder.employee_name_index);
+    ASSERT(binder.tables[0].total_secondary_indexes == 1);
+
+    result = 0;
+
+cleanup:
+    free(bound_index.column_indexes);
+    bound_index.column_indexes = NULL;
+
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_create_index_composite() {
+    int result = 1;
+    DDLBinderTestFixture binder = {0};
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+    BoundCreateIndex bound_index = {0};
+    Index *other_secondary[MAX_INDEXES] = {0};
+
+    TestToken tokens[] = {
+        {"CREATE INDEX", KEYWORD}, {"idx_new_composite", IDENTIFIER}, {"ON", KEYWORD},
+        {"employees", IDENTIFIER}, {"(", PUNCTUATION}, {"department_id", IDENTIFIER}, 
+        {",", PUNCTUATION}, {"salary", IDENTIFIER}, {")", PUNCTUATION},
+        {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    // CREATE INDEX requires a live, materialized target and index registry.
+    for (uint32_t i = 0; i < 3; i++) {
+        binder.tables[i].is_materialized = true;
+    }
+
+    binder.tables[1].secondary_indexes = other_secondary;
+    binder.tables[2].secondary_indexes = other_secondary;
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+    
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_CREATE_INDEX);
+    
+    ASSERT(bind_create_index(root, &binder.context, &bound_index));
+    
+    ASSERT(bound_index.table == &binder.tables[0]);
+    ASSERT(bound_index.create_index == &root->node_contents.create_index);
+    ASSERT(bound_index.column_indexes != NULL);
+    ASSERT(bound_index.num_columns == 2);
+    ASSERT(bound_index.column_indexes[0] == 3);
+    ASSERT(bound_index.column_indexes[1] == 2);
+    ASSERT(root->node_contents.create_index.column_refs[0]->expression_data.column_value.relation_index == 0);
+    ASSERT(root->node_contents.create_index.column_refs[0]->expression_data.column_value.column_index == 3);
+    ASSERT(root->node_contents.create_index.column_refs[1]->expression_data.column_value.relation_index == 0);
+    ASSERT(root->node_contents.create_index.column_refs[1]->expression_data.column_value.column_index == 2);
+
+    // Semantic binding must not create an index or mutate the table registry.
+    ASSERT(binder.db.table_count == 3);
+    ASSERT(binder.tables[0].primary_index == &binder.canonical_indexes[0]);
+    ASSERT(binder.tables[1].primary_index == &binder.canonical_indexes[1]);
+    ASSERT(binder.tables[2].primary_index == &binder.canonical_indexes[2]);
+    ASSERT(binder.tables[0].secondary_indexes == binder.employee_secondary_indexes);
+    ASSERT(binder.tables[0].secondary_indexes[0] == &binder.employee_name_index);
+    ASSERT(binder.tables[0].total_secondary_indexes == 1);
+
+    result = 0;
+
+cleanup:
+    free(bound_index.column_indexes);
+    bound_index.column_indexes = NULL;
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_create_index_composite_order() {
+    int result = 1;
+    DDLBinderTestFixture binder = {0};
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+    BoundCreateIndex bound_index = {0};
+    Index *other_secondary[MAX_INDEXES] = {0};
+
+    TestToken tokens[] = {
+        {"CREATE INDEX", KEYWORD}, {"idx_new_composite_order", IDENTIFIER}, {"ON", KEYWORD},
+        {"employees", IDENTIFIER}, {"(", PUNCTUATION}, {"salary", IDENTIFIER},
+        {",", PUNCTUATION}, {"department_id", IDENTIFIER}, {")", PUNCTUATION}, {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    // CREATE INDEX requires a live, materialized target and index registry.
+    for (uint32_t i = 0; i < 3; i++) {
+        binder.tables[i].is_materialized = true;
+    }
+
+    binder.tables[1].secondary_indexes = other_secondary;
+    binder.tables[2].secondary_indexes = other_secondary;
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+    
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_CREATE_INDEX);
+    
+    ASSERT(bind_create_index(root, &binder.context, &bound_index));
+    
+    ASSERT(bound_index.table == &binder.tables[0]);
+    ASSERT(bound_index.create_index == &root->node_contents.create_index);
+    ASSERT(bound_index.column_indexes != NULL);
+    ASSERT(bound_index.num_columns == 2);
+    ASSERT(bound_index.column_indexes[0] == 2);
+    ASSERT(bound_index.column_indexes[1] == 3);
+    ASSERT(root->node_contents.create_index.column_refs[0]->expression_data.column_value.relation_index == 0);
+    ASSERT(root->node_contents.create_index.column_refs[0]->expression_data.column_value.column_index == 2);
+    ASSERT(root->node_contents.create_index.column_refs[1]->expression_data.column_value.relation_index == 0);
+    ASSERT(root->node_contents.create_index.column_refs[1]->expression_data.column_value.column_index == 3);
+
+    // Semantic binding must not create an index or mutate the table registry.
+    ASSERT(binder.db.table_count == 3);
+    ASSERT(binder.tables[0].primary_index == &binder.canonical_indexes[0]);
+    ASSERT(binder.tables[1].primary_index == &binder.canonical_indexes[1]);
+    ASSERT(binder.tables[2].primary_index == &binder.canonical_indexes[2]);
+    ASSERT(binder.tables[0].secondary_indexes == binder.employee_secondary_indexes);
+    ASSERT(binder.tables[0].secondary_indexes[0] == &binder.employee_name_index);
+    ASSERT(binder.tables[0].total_secondary_indexes == 1);
+
+    result = 0;
+
+cleanup:
+    free(bound_index.column_indexes);
+    bound_index.column_indexes = NULL;
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_create_index_other_table() {
+    int result = 1;
+    DDLBinderTestFixture binder = {0};
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+    BoundCreateIndex bound_index = {0};
+    Index *other_secondary[MAX_INDEXES] = {0};
+
+    TestToken tokens[] = {
+        {"CREATE INDEX", KEYWORD}, {"idx_new_other_table", IDENTIFIER}, {"ON", KEYWORD},
+        {"departments", IDENTIFIER}, {"(", PUNCTUATION}, {"budget", IDENTIFIER}, {")", PUNCTUATION},
+        {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    // CREATE INDEX requires a live, materialized target and index registry.
+    for (uint32_t i = 0; i < 3; i++) {
+        binder.tables[i].is_materialized = true;
+    }
+
+    binder.tables[1].secondary_indexes = other_secondary;
+    binder.tables[2].secondary_indexes = other_secondary;
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+    
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_CREATE_INDEX);
+    
+    ASSERT(bind_create_index(root, &binder.context, &bound_index));
+    
+    ASSERT(bound_index.table == &binder.tables[1]);
+    ASSERT(bound_index.create_index == &root->node_contents.create_index);
+    ASSERT(bound_index.column_indexes != NULL);
+    ASSERT(bound_index.num_columns == 1);
+    ASSERT(bound_index.column_indexes[0] == 2);
+    ASSERT(root->node_contents.create_index.column_refs[0]->expression_data.column_value.relation_index == 0);
+    ASSERT(root->node_contents.create_index.column_refs[0]->expression_data.column_value.column_index == 2);
+
+    // Semantic binding must not create an index or mutate the table registry.
+    ASSERT(binder.db.table_count == 3);
+    ASSERT(binder.tables[0].primary_index == &binder.canonical_indexes[0]);
+    ASSERT(binder.tables[1].primary_index == &binder.canonical_indexes[1]);
+    ASSERT(binder.tables[2].primary_index == &binder.canonical_indexes[2]);
+    ASSERT(binder.tables[0].secondary_indexes == binder.employee_secondary_indexes);
+    ASSERT(binder.tables[0].secondary_indexes[0] == &binder.employee_name_index);
+    ASSERT(binder.tables[0].total_secondary_indexes == 1);
+
+    result = 0;
+
+cleanup:
+    free(bound_index.column_indexes);
+    bound_index.column_indexes = NULL;
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_create_index_missing_table() {
+    int result = 1;
+    DDLBinderTestFixture binder = {0};
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+    BoundCreateIndex bound_index = {0};
+    Index *other_secondary[MAX_INDEXES] = {0};
+
+    TestToken tokens[] = {
+        {"CREATE INDEX", KEYWORD}, {"idx_new_missing_table", IDENTIFIER}, {"ON", KEYWORD},
+        {"unknown_table", IDENTIFIER}, {"(", PUNCTUATION}, {"salary", IDENTIFIER},
+        {")", PUNCTUATION}, {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    // CREATE INDEX requires a live, materialized target and index registry.
+    for (uint32_t i = 0; i < 3; i++) {
+        binder.tables[i].is_materialized = true;
+    }
+
+    binder.tables[1].secondary_indexes = other_secondary;
+    binder.tables[2].secondary_indexes = other_secondary;
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+    
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_CREATE_INDEX);
+    
+    ASSERT(!bind_create_index(root, &binder.context, &bound_index));
+    
+    ASSERT(bound_index.table == NULL);
+    ASSERT(bound_index.create_index == NULL);
+    ASSERT(bound_index.column_indexes == NULL);
+    ASSERT(bound_index.num_columns == 0);
+
+    // Semantic binding must not create an index or mutate the table registry.
+    ASSERT(binder.db.table_count == 3);
+    ASSERT(binder.tables[0].primary_index == &binder.canonical_indexes[0]);
+    ASSERT(binder.tables[1].primary_index == &binder.canonical_indexes[1]);
+    ASSERT(binder.tables[2].primary_index == &binder.canonical_indexes[2]);
+    ASSERT(binder.tables[0].secondary_indexes == binder.employee_secondary_indexes);
+    ASSERT(binder.tables[0].secondary_indexes[0] == &binder.employee_name_index);
+    ASSERT(binder.tables[0].total_secondary_indexes == 1);
+
+    result = 0;
+
+cleanup:
+    free(bound_index.column_indexes);
+    bound_index.column_indexes = NULL;
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_create_index_missing_column() {
+    int result = 1;
+    DDLBinderTestFixture binder = {0};
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+    BoundCreateIndex bound_index = {0};
+    Index *other_secondary[MAX_INDEXES] = {0};
+
+    TestToken tokens[] = {
+        {"CREATE INDEX", KEYWORD}, {"idx_new_missing_column", IDENTIFIER}, {"ON", KEYWORD},
+        {"employees", IDENTIFIER}, {"(", PUNCTUATION}, {"missing_column", IDENTIFIER},
+        {")", PUNCTUATION}, {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    // CREATE INDEX requires a live, materialized target and index registry.
+    for (uint32_t i = 0; i < 3; i++) {
+        binder.tables[i].is_materialized = true;
+    }
+
+    binder.tables[1].secondary_indexes = other_secondary;
+    binder.tables[2].secondary_indexes = other_secondary;
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+    
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_CREATE_INDEX);
+    
+    ASSERT(!bind_create_index(root, &binder.context, &bound_index));
+    
+    ASSERT(bound_index.table == NULL);
+    ASSERT(bound_index.create_index == NULL);
+    ASSERT(bound_index.column_indexes == NULL);
+    ASSERT(bound_index.num_columns == 0);
+
+    // Semantic binding must not create an index or mutate the table registry.
+    ASSERT(binder.db.table_count == 3);
+    ASSERT(binder.tables[0].primary_index == &binder.canonical_indexes[0]);
+    ASSERT(binder.tables[1].primary_index == &binder.canonical_indexes[1]);
+    ASSERT(binder.tables[2].primary_index == &binder.canonical_indexes[2]);
+    ASSERT(binder.tables[0].secondary_indexes == binder.employee_secondary_indexes);
+    ASSERT(binder.tables[0].secondary_indexes[0] == &binder.employee_name_index);
+    ASSERT(binder.tables[0].total_secondary_indexes == 1);
+
+    result = 0;
+
+cleanup:
+    free(bound_index.column_indexes);
+    bound_index.column_indexes = NULL;
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_create_index_duplicate_index_name() {
+    int result = 1;
+    DDLBinderTestFixture binder = {0};
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+    BoundCreateIndex bound_index = {0};
+    Index *other_secondary[MAX_INDEXES] = {0};
+
+    TestToken tokens[] = {
+        {"CREATE INDEX", KEYWORD}, {"idx_employees_name", IDENTIFIER}, {"ON", KEYWORD},
+        {"employees", IDENTIFIER}, {"(", PUNCTUATION}, {"salary", IDENTIFIER},
+        {")", PUNCTUATION}, {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    // CREATE INDEX requires a live, materialized target and index registry.
+    for (uint32_t i = 0; i < 3; i++) {
+        binder.tables[i].is_materialized = true;
+    }
+
+    binder.tables[1].secondary_indexes = other_secondary;
+    binder.tables[2].secondary_indexes = other_secondary;
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+    
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_CREATE_INDEX);
+    
+    ASSERT(!bind_create_index(root, &binder.context, &bound_index));
+    
+    ASSERT(bound_index.table == NULL);
+    ASSERT(bound_index.create_index == NULL);
+    ASSERT(bound_index.column_indexes == NULL);
+    ASSERT(bound_index.num_columns == 0);
+
+    // Semantic binding must not create an index or mutate the table registry.
+    ASSERT(binder.db.table_count == 3);
+    ASSERT(binder.tables[0].primary_index == &binder.canonical_indexes[0]);
+    ASSERT(binder.tables[1].primary_index == &binder.canonical_indexes[1]);
+    ASSERT(binder.tables[2].primary_index == &binder.canonical_indexes[2]);
+    ASSERT(binder.tables[0].secondary_indexes == binder.employee_secondary_indexes);
+    ASSERT(binder.tables[0].secondary_indexes[0] == &binder.employee_name_index);
+    ASSERT(binder.tables[0].total_secondary_indexes == 1);
+
+    result = 0;
+
+cleanup:
+    free(bound_index.column_indexes);
+    bound_index.column_indexes = NULL;
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_create_index_duplicate_secondary_key() {
+    int result = 1;
+    DDLBinderTestFixture binder = {0};
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+    BoundCreateIndex bound_index = {0};
+    Index *other_secondary[MAX_INDEXES] = {0};
+
+    TestToken tokens[] = {
+        {"CREATE INDEX", KEYWORD}, {"idx_new_duplicate_secondary_key", IDENTIFIER},
+        {"ON", KEYWORD}, {"employees", IDENTIFIER}, {"(", PUNCTUATION},
+        {"name", IDENTIFIER}, {")", PUNCTUATION}, {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    // CREATE INDEX requires a live, materialized target and index registry.
+    for (uint32_t i = 0; i < 3; i++) {
+        binder.tables[i].is_materialized = true;
+    }
+
+    binder.tables[1].secondary_indexes = other_secondary;
+    binder.tables[2].secondary_indexes = other_secondary;
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+    
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_CREATE_INDEX);
+    
+    ASSERT(!bind_create_index(root, &binder.context, &bound_index));
+    
+    ASSERT(bound_index.table == NULL);
+    ASSERT(bound_index.create_index == NULL);
+    ASSERT(bound_index.column_indexes == NULL);
+    ASSERT(bound_index.num_columns == 0);
+
+    // Semantic binding must not create an index or mutate the table registry.
+    ASSERT(binder.db.table_count == 3);
+    ASSERT(binder.tables[0].primary_index == &binder.canonical_indexes[0]);
+    ASSERT(binder.tables[1].primary_index == &binder.canonical_indexes[1]);
+    ASSERT(binder.tables[2].primary_index == &binder.canonical_indexes[2]);
+    ASSERT(binder.tables[0].secondary_indexes == binder.employee_secondary_indexes);
+    ASSERT(binder.tables[0].secondary_indexes[0] == &binder.employee_name_index);
+    ASSERT(binder.tables[0].total_secondary_indexes == 1);
+
+    result = 0;
+
+cleanup:
+    free(bound_index.column_indexes);
+    bound_index.column_indexes = NULL;
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_create_index_duplicate_primary_key() {
+    int result = 1;
+    DDLBinderTestFixture binder = {0};
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+    BoundCreateIndex bound_index = {0};
+    Index *other_secondary[MAX_INDEXES] = {0};
+
+    TestToken tokens[] = {
+        {"CREATE INDEX", KEYWORD}, {"idx_new_duplicate_primary_key", IDENTIFIER},
+        {"ON", KEYWORD}, {"employees", IDENTIFIER}, {"(", PUNCTUATION},
+        {"id", IDENTIFIER}, {")", PUNCTUATION}, {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    // CREATE INDEX requires a live, materialized target and index registry.
+    for (uint32_t i = 0; i < 3; i++) {
+        binder.tables[i].is_materialized = true;
+    }
+
+    binder.tables[1].secondary_indexes = other_secondary;
+    binder.tables[2].secondary_indexes = other_secondary;
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+    
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_CREATE_INDEX);
+    
+    ASSERT(!bind_create_index(root, &binder.context, &bound_index));
+    
+    ASSERT(bound_index.table == NULL);
+    ASSERT(bound_index.create_index == NULL);
+    ASSERT(bound_index.column_indexes == NULL);
+    ASSERT(bound_index.num_columns == 0);
+
+    // Semantic binding must not create an index or mutate the table registry.
+    ASSERT(binder.db.table_count == 3);
+    ASSERT(binder.tables[0].primary_index == &binder.canonical_indexes[0]);
+    ASSERT(binder.tables[1].primary_index == &binder.canonical_indexes[1]);
+    ASSERT(binder.tables[2].primary_index == &binder.canonical_indexes[2]);
+    ASSERT(binder.tables[0].secondary_indexes == binder.employee_secondary_indexes);
+    ASSERT(binder.tables[0].secondary_indexes[0] == &binder.employee_name_index);
+    ASSERT(binder.tables[0].total_secondary_indexes == 1);
+
+    result = 0;
+
+cleanup:
+    free(bound_index.column_indexes);
+    bound_index.column_indexes = NULL;
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_create_index_repeated_column() {
+    int result = 1;
+    DDLBinderTestFixture binder = {0};
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+    BoundCreateIndex bound_index = {0};
+    Index *other_secondary[MAX_INDEXES] = {0};
+
+    TestToken tokens[] = {
+        {"CREATE INDEX", KEYWORD}, {"idx_new_repeated_column", IDENTIFIER}, {"ON", KEYWORD},
+        {"employees", IDENTIFIER}, {"(", PUNCTUATION}, {"salary", IDENTIFIER},
+        {",", PUNCTUATION}, {"salary", IDENTIFIER}, {")", PUNCTUATION}, {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    // CREATE INDEX requires a live, materialized target and index registry.
+    for (uint32_t i = 0; i < 3; i++) {
+        binder.tables[i].is_materialized = true;
+    }
+
+    binder.tables[1].secondary_indexes = other_secondary;
+    binder.tables[2].secondary_indexes = other_secondary;
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+    
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_CREATE_INDEX);
+    
+    ASSERT(!bind_create_index(root, &binder.context, &bound_index));
+    
+    ASSERT(bound_index.table == NULL);
+    ASSERT(bound_index.create_index == NULL);
+    ASSERT(bound_index.column_indexes == NULL);
+    ASSERT(bound_index.num_columns == 0);
+
+    // Semantic binding must not create an index or mutate the table registry.
+    ASSERT(binder.db.table_count == 3);
+    ASSERT(binder.tables[0].primary_index == &binder.canonical_indexes[0]);
+    ASSERT(binder.tables[1].primary_index == &binder.canonical_indexes[1]);
+    ASSERT(binder.tables[2].primary_index == &binder.canonical_indexes[2]);
+    ASSERT(binder.tables[0].secondary_indexes == binder.employee_secondary_indexes);
+    ASSERT(binder.tables[0].secondary_indexes[0] == &binder.employee_name_index);
+    ASSERT(binder.tables[0].total_secondary_indexes == 1);
+
+    result = 0;
+
+cleanup:
+    free(bound_index.column_indexes);
+    bound_index.column_indexes = NULL;
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_create_index_secondary_limit() {
+    int result = 1;
+    DDLBinderTestFixture binder = {0};
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+    BoundCreateIndex bound_index = {0};
+    Index *other_secondary[MAX_INDEXES] = {0};
+
+    TestToken tokens[] = {
+        {"CREATE INDEX", KEYWORD}, {"idx_new_secondary_limit", IDENTIFIER},
+        {"ON", KEYWORD}, {"employees", IDENTIFIER}, {"(", PUNCTUATION},
+        {"salary", IDENTIFIER}, {")", PUNCTUATION}, {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    // CREATE INDEX requires a live, materialized target and index registry.
+    for (uint32_t i = 0; i < 3; i++) {
+        binder.tables[i].is_materialized = true;
+    }
+
+    binder.tables[1].secondary_indexes = other_secondary;
+    binder.tables[2].secondary_indexes = other_secondary;
+    binder.tables[0].total_secondary_indexes = MAX_INDEXES;
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+    
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_CREATE_INDEX);
+    
+    ASSERT(!bind_create_index(root, &binder.context, &bound_index));
+    
+    ASSERT(bound_index.table == NULL);
+    ASSERT(bound_index.create_index == NULL);
+    ASSERT(bound_index.column_indexes == NULL);
+    ASSERT(bound_index.num_columns == 0);
+
+    // Semantic binding must not create an index or mutate the table registry.
+    ASSERT(binder.db.table_count == 3);
+    ASSERT(binder.tables[0].primary_index == &binder.canonical_indexes[0]);
+    ASSERT(binder.tables[1].primary_index == &binder.canonical_indexes[1]);
+    ASSERT(binder.tables[2].primary_index == &binder.canonical_indexes[2]);
+    ASSERT(binder.tables[0].secondary_indexes == binder.employee_secondary_indexes);
+    ASSERT(binder.tables[0].secondary_indexes[0] == &binder.employee_name_index);
+    ASSERT(binder.tables[0].total_secondary_indexes == MAX_INDEXES);
+
+    result = 0;
+
+cleanup:
+    free(bound_index.column_indexes);
+    bound_index.column_indexes = NULL;
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_create_index_unsupported_type() {
+    int result = 1;
+    DDLBinderTestFixture binder = {0};
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+    BoundCreateIndex bound_index = {0};
+    Index *other_secondary[MAX_INDEXES] = {0};
+
+    TestToken tokens[] = {
+        {"CREATE INDEX", KEYWORD}, {"idx_new_unsupported_type", IDENTIFIER},
+        {"ON", KEYWORD}, {"employees", IDENTIFIER}, {"(", PUNCTUATION},
+        {"salary", IDENTIFIER}, {")", PUNCTUATION}, {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    // CREATE INDEX requires a live, materialized target and index registry.
+    for (uint32_t i = 0; i < 3; i++) {
+        binder.tables[i].is_materialized = true;
+    }
+
+    binder.tables[1].secondary_indexes = other_secondary;
+    binder.tables[2].secondary_indexes = other_secondary;
+    binder.employee_columns[2].type = JSONB;
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+    
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_CREATE_INDEX);
+    
+    ASSERT(!bind_create_index(root, &binder.context, &bound_index));
+    
+    ASSERT(bound_index.table == NULL);
+    ASSERT(bound_index.create_index == NULL);
+    ASSERT(bound_index.column_indexes == NULL);
+    ASSERT(bound_index.num_columns == 0);
+
+    // Semantic binding must not create an index or mutate the table registry.
+    ASSERT(binder.db.table_count == 3);
+    ASSERT(binder.tables[0].primary_index == &binder.canonical_indexes[0]);
+    ASSERT(binder.tables[1].primary_index == &binder.canonical_indexes[1]);
+    ASSERT(binder.tables[2].primary_index == &binder.canonical_indexes[2]);
+    ASSERT(binder.tables[0].secondary_indexes == binder.employee_secondary_indexes);
+    ASSERT(binder.tables[0].secondary_indexes[0] == &binder.employee_name_index);
+    ASSERT(binder.tables[0].total_secondary_indexes == 1);
+
+    result = 0;
+
+cleanup:
+    free(bound_index.column_indexes);
+    bound_index.column_indexes = NULL;
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_create_index_non_materialized_table() {
+    int result = 1;
+    DDLBinderTestFixture binder = {0};
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+    BoundCreateIndex bound_index = {0};
+    Index *other_secondary[MAX_INDEXES] = {0};
+
+    TestToken tokens[] = {
+        {"CREATE INDEX", KEYWORD}, {"idx_new_non_materialized_table", IDENTIFIER},
+        {"ON", KEYWORD}, {"employees", IDENTIFIER}, {"(", PUNCTUATION},
+        {"salary", IDENTIFIER}, {")", PUNCTUATION}, {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    // CREATE INDEX requires a live, materialized target and index registry.
+    for (uint32_t i = 0; i < 3; i++) {
+        binder.tables[i].is_materialized = true;
+    }
+
+    binder.tables[1].secondary_indexes = other_secondary;
+    binder.tables[2].secondary_indexes = other_secondary;
+    binder.tables[0].is_materialized = false;
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+    
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_CREATE_INDEX);
+    
+    ASSERT(!bind_create_index(root, &binder.context, &bound_index));
+    
+    ASSERT(bound_index.table == NULL);
+    ASSERT(bound_index.create_index == NULL);
+    ASSERT(bound_index.column_indexes == NULL);
+    ASSERT(bound_index.num_columns == 0);
+
+    // Semantic binding must not create an index or mutate the table registry.
+    ASSERT(binder.db.table_count == 3);
+    ASSERT(binder.tables[0].primary_index == &binder.canonical_indexes[0]);
+    ASSERT(binder.tables[1].primary_index == &binder.canonical_indexes[1]);
+    ASSERT(binder.tables[2].primary_index == &binder.canonical_indexes[2]);
+    ASSERT(binder.tables[0].secondary_indexes == binder.employee_secondary_indexes);
+    ASSERT(binder.tables[0].secondary_indexes[0] == &binder.employee_name_index);
+    ASSERT(binder.tables[0].total_secondary_indexes == 1);
+
+    result = 0;
+
+cleanup:
+    free(bound_index.column_indexes);
+    bound_index.column_indexes = NULL;
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_create_index_nonempty_output() {
+    int result = 1;
+    DDLBinderTestFixture binder = {0};
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+    BoundCreateIndex bound_index = {0};
+    Index *other_secondary[MAX_INDEXES] = {0};
+
+    TestToken tokens[] = {
+        {"CREATE INDEX", KEYWORD}, {"idx_new_nonempty_output", IDENTIFIER},
+        {"ON", KEYWORD}, {"employees", IDENTIFIER}, {"(", PUNCTUATION},
+        {"salary", IDENTIFIER}, {")", PUNCTUATION}, {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    // CREATE INDEX requires a live, materialized target and index registry.
+    for (uint32_t i = 0; i < 3; i++) {
+        binder.tables[i].is_materialized = true;
+    }
+
+    binder.tables[1].secondary_indexes = other_secondary;
+    binder.tables[2].secondary_indexes = other_secondary;
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+    
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_CREATE_INDEX);
+    bound_index.table = &binder.tables[0];
+    
+    ASSERT(!bind_create_index(root, &binder.context, &bound_index));
+
+    // Semantic binding must not create an index or mutate the table registry.
+    ASSERT(binder.db.table_count == 3);
+    ASSERT(binder.tables[0].primary_index == &binder.canonical_indexes[0]);
+    ASSERT(binder.tables[1].primary_index == &binder.canonical_indexes[1]);
+    ASSERT(binder.tables[2].primary_index == &binder.canonical_indexes[2]);
+    ASSERT(binder.tables[0].secondary_indexes == binder.employee_secondary_indexes);
+    ASSERT(binder.tables[0].secondary_indexes[0] == &binder.employee_name_index);
+    ASSERT(binder.tables[0].total_secondary_indexes == 1);
+
+    result = 0;
+
+cleanup:
+    free(bound_index.column_indexes);
+    bound_index.column_indexes = NULL;
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_create_index_wrong_ast_type() {
+    int result = 1;
+    DDLBinderTestFixture binder = {0};
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+    BoundCreateIndex bound_index = {0};
+    Index *other_secondary[MAX_INDEXES] = {0};
+
+    TestToken tokens[] = {
+        {"CREATE INDEX", KEYWORD}, {"idx_new_wrong_ast_type", IDENTIFIER}, {"ON", KEYWORD},
+        {"employees", IDENTIFIER}, {"(", PUNCTUATION}, {"salary", IDENTIFIER},
+        {")", PUNCTUATION}, {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    // CREATE INDEX requires a live, materialized target and index registry.
+    for (uint32_t i = 0; i < 3; i++) {
+        binder.tables[i].is_materialized = true;
+    }
+
+    binder.tables[1].secondary_indexes = other_secondary;
+    binder.tables[2].secondary_indexes = other_secondary;
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+    
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_CREATE_INDEX);
+    root->type = AST_DROP_INDEX;
+    
+    ASSERT(!bind_create_index(root, &binder.context, &bound_index));
+    
+    ASSERT(bound_index.table == NULL);
+    ASSERT(bound_index.create_index == NULL);
+    ASSERT(bound_index.column_indexes == NULL);
+    ASSERT(bound_index.num_columns == 0);
+
+    // Semantic binding must not create an index or mutate the table registry.
+    ASSERT(binder.db.table_count == 3);
+    ASSERT(binder.tables[0].primary_index == &binder.canonical_indexes[0]);
+    ASSERT(binder.tables[1].primary_index == &binder.canonical_indexes[1]);
+    ASSERT(binder.tables[2].primary_index == &binder.canonical_indexes[2]);
+    ASSERT(binder.tables[0].secondary_indexes == binder.employee_secondary_indexes);
+    ASSERT(binder.tables[0].secondary_indexes[0] == &binder.employee_name_index);
+    ASSERT(binder.tables[0].total_secondary_indexes == 1);
+
+    result = 0;
+
+cleanup:
+    free(bound_index.column_indexes);
+    bound_index.column_indexes = NULL;
+    cleanup_ddl_binder_fixture(&binder);
+    if (root) root->type = AST_CREATE_INDEX;
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_create_index_invalid_column_expression() {
+    int result = 1;
+    DDLBinderTestFixture binder = {0};
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+    BoundCreateIndex bound_index = {0};
+    Index *other_secondary[MAX_INDEXES] = {0};
+
+    TestToken tokens[] = {
+        {"CREATE INDEX", KEYWORD}, {"idx_new_invalid_column_expression", IDENTIFIER},
+        {"ON", KEYWORD}, {"employees", IDENTIFIER}, {"(", PUNCTUATION},
+        {"salary", IDENTIFIER}, {")", PUNCTUATION}, {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    // CREATE INDEX requires a live, materialized target and index registry.
+    for (uint32_t i = 0; i < 3; i++) {
+        binder.tables[i].is_materialized = true;
+    }
+
+    binder.tables[1].secondary_indexes = other_secondary;
+    binder.tables[2].secondary_indexes = other_secondary;
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+    
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_CREATE_INDEX);
+    // A malformed AST must not accept non-column expressions as index keys.
+    ASSERT(root->node_contents.create_index.column_refs != NULL);
+    ASSERT(root->node_contents.create_index.column_refs[0] != NULL);
+    root->node_contents.create_index.column_refs[0]->type = EXPR_LITERAL;
+    
+    ASSERT(!bind_create_index(root, &binder.context, &bound_index));
+    
+    ASSERT(bound_index.table == NULL);
+    ASSERT(bound_index.create_index == NULL);
+    ASSERT(bound_index.column_indexes == NULL);
+    ASSERT(bound_index.num_columns == 0);
+
+    // Semantic binding must not create an index or mutate the table registry.
+    ASSERT(binder.db.table_count == 3);
+    ASSERT(binder.tables[0].primary_index == &binder.canonical_indexes[0]);
+    ASSERT(binder.tables[1].primary_index == &binder.canonical_indexes[1]);
+    ASSERT(binder.tables[2].primary_index == &binder.canonical_indexes[2]);
+    ASSERT(binder.tables[0].secondary_indexes == binder.employee_secondary_indexes);
+    ASSERT(binder.tables[0].secondary_indexes[0] == &binder.employee_name_index);
+    ASSERT(binder.tables[0].total_secondary_indexes == 1);
+
+    result = 0;
+
+cleanup:
+    free(bound_index.column_indexes);
+    bound_index.column_indexes = NULL;
+    cleanup_ddl_binder_fixture(&binder);
+    if (root && root->node_contents.create_index.column_refs &&
+        root->node_contents.create_index.column_refs[0]) {
+        root->node_contents.create_index.column_refs[0]->type = EXPR_COLUMN_REF;
+    }
+    free_test_parser(parser, root);
+    return result;
+}
+
 int main(int argc, char *argv[]) {
     int result;
 
@@ -12357,6 +13303,41 @@ int main(int argc, char *argv[]) {
     generate_output(result, 201, "test_bind_truncate_table_nonempty_output");
     result = test_bind_truncate_table_wrong_ast_type();
     generate_output(result, 202, "test_bind_truncate_table_wrong_ast_type");
+
+
+    /* ---------- bind_create_index unit tests ---------- */
+    result = test_bind_create_index_basic();
+    generate_output(result, 203, "test_bind_create_index_basic");
+    result = test_bind_create_index_composite();
+    generate_output(result, 204, "test_bind_create_index_composite");
+    result = test_bind_create_index_composite_order();
+    generate_output(result, 205, "test_bind_create_index_composite_order");
+    result = test_bind_create_index_other_table();
+    generate_output(result, 206, "test_bind_create_index_other_table");
+    result = test_bind_create_index_missing_table();
+    generate_output(result, 207, "test_bind_create_index_missing_table");
+    result = test_bind_create_index_missing_column();
+    generate_output(result, 208, "test_bind_create_index_missing_column");
+    result = test_bind_create_index_duplicate_index_name();
+    generate_output(result, 209, "test_bind_create_index_duplicate_index_name");
+    result = test_bind_create_index_duplicate_secondary_key();
+    generate_output(result, 210, "test_bind_create_index_duplicate_secondary_key");
+    result = test_bind_create_index_duplicate_primary_key();
+    generate_output(result, 211, "test_bind_create_index_duplicate_primary_key");
+    result = test_bind_create_index_repeated_column();
+    generate_output(result, 212, "test_bind_create_index_repeated_column");
+    result = test_bind_create_index_secondary_limit();
+    generate_output(result, 213, "test_bind_create_index_secondary_limit");
+    result = test_bind_create_index_unsupported_type();
+    generate_output(result, 214, "test_bind_create_index_unsupported_type");
+    result = test_bind_create_index_non_materialized_table();
+    generate_output(result, 215, "test_bind_create_index_non_materialized_table");
+    result = test_bind_create_index_nonempty_output();
+    generate_output(result, 216, "test_bind_create_index_nonempty_output");
+    result = test_bind_create_index_wrong_ast_type();
+    generate_output(result, 217, "test_bind_create_index_wrong_ast_type");
+    result = test_bind_create_index_invalid_column_expression();
+    generate_output(result, 218, "test_bind_create_index_invalid_column_expression");
 
     return 0;
 }
