@@ -129,11 +129,19 @@ bool bind_statement(ASTNode *root, Database *db, BoundStatement *out_statement) 
             break;
         }
 
-#if 0
-        case AST_CREATE_INDEX:
-            success = bind_create_index(root, &context);
-            break;
+        case AST_CREATE_INDEX: {
+            BoundCreateIndex create_index = {0};
 
+            success = bind_create_index(root, &context, &create_index);
+
+            if (success) {
+                out_statement->type = BOUND_STATEMENT_CREATE_INDEX;
+                out_statement->data.create_index = create_index;
+            }
+
+            break;
+        }
+#if 0
         case AST_DROP_INDEX:
             success = bind_drop_index(root, &context);
             break;
@@ -232,6 +240,16 @@ void bound_truncate_table_free(BoundTruncateTable *truncate_table) {
     truncate_table->truncate_table = NULL;
 }
 
+void bound_create_index_free(BoundCreateIndex *create_index) {
+    if (!create_index) {
+        return;
+    }
+
+    free(create_index->column_indexes);
+    
+    *create_index = (BoundCreateIndex){0};
+}
+
 /* Free bound statement metadata */
 void bound_statement_free(BoundStatement *statement) {
     if (!statement) {
@@ -269,6 +287,10 @@ void bound_statement_free(BoundStatement *statement) {
 
         case BOUND_STATEMENT_TRUNCATE_TABLE:
             bound_truncate_table_free(&statement->data.truncate_table);
+            break;
+
+        case BOUND_STATEMENT_CREATE_INDEX:
+            bound_create_index_free(&statement->data.create_index);
             break;
 
         default:

@@ -168,6 +168,15 @@ typedef struct bound_truncate_table {
     TruncateTableNode *truncate_table;
 } BoundTruncateTable;
 
+typedef struct bound_create_index {
+    Table *table;                  // Non-owning
+    CreateIndexNode *create_index; // Non-owning AST pointer
+
+    // Resolved index columns, in the requested order
+    uint32_t *column_indexes;      // Owning
+    uint32_t num_columns;
+} BoundCreateIndex;
+
 // Final Bound Statement
 typedef enum bound_statement_type {
     BOUND_STATEMENT_NONE = 0,
@@ -178,7 +187,8 @@ typedef enum bound_statement_type {
     BOUND_STATEMENT_CREATE_TABLE = 5,
     BOUND_STATEMENT_ALTER_TABLE = 6,
     BOUND_STATEMENT_DROP_TABLE = 7,
-    BOUND_STATEMENT_TRUNCATE_TABLE = 8
+    BOUND_STATEMENT_TRUNCATE_TABLE = 8,
+    BOUND_STATEMENT_CREATE_INDEX = 9
 } BoundStatementType;
 
 typedef struct bound_statement {
@@ -193,6 +203,7 @@ typedef struct bound_statement {
         BoundAlterTable alter_table;
         BoundDropTable drop_table;
         BoundTruncateTable truncate_table;
+        BoundCreateIndex create_index;
     } data;
 } BoundStatement;
 
@@ -217,7 +228,10 @@ extern void bound_drop_table_free(BoundDropTable *drop_table);
 
 extern void bound_truncate_table_free(BoundTruncateTable *drop_table);
 
+extern void bound_create_index_free(BoundCreateIndex *index);
+
 extern void bound_statement_free(BoundStatement *statement);
+
 
 /* ---------- AlterColumnMap Helpers ---------- */
 

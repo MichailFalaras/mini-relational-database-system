@@ -1510,7 +1510,7 @@ bool bind_drop_table(ASTNode *root, BindingContext *context, BoundDropTable *dro
     }
 
     if (drop->table || drop->drop_table) {
-        printf("bind_drop_table: Invalid assigned output.\n");
+        printf("bind_drop_table: Invalid initialized output.\n");
         return false;
     }
 
@@ -1628,7 +1628,7 @@ bool bind_alter_table(ASTNode *root, BindingContext *context, BoundAlterTable *o
     }
 
     Table *table = context->relations[0].table;
-
+    
     if (!table || !table->table_schema) {
         printf("bind_alter_table: Invalid Table.\n");
         return false;
@@ -1697,7 +1697,191 @@ cleanup:
     return success;
 }
 
-bool bind_create_index(ASTNode *root, BindingContext *context);
+bool bind_create_index(ASTNode *root, BindingContext *context, BoundCreateIndex *create_index) {
+    if (!root || root->type != AST_CREATE_INDEX || !create_index) {
+        printf("bind_create_index: Invalid AST root node or output.\n");
+        return false;
+    }
+
+    if (!context || !context->db) {
+        printf("bind_create_index: Invalid binding context.\n");
+        return false;
+    }
+
+    // Empty context and bound output are required
+    if (context->relations || context->num_relations != 0 || context->aggregate_depth != 0) {
+        printf("bind_create_index: Expected fresh binding state.\n");
+        return false;
+    }
+
+    if (create_index->create_index || create_index->table || 
+        create_index->column_indexes || create_index->num_columns != 0) {
+        printf("bind_create_index: Invalid initialized output.\n");
+        return false;
+    }
+
+    CreateIndexNode *index = &root->node_contents.create_index;
+
+    if (!index || 
+        index->index_name[0] == '\0' ||
+        index->table_name[0] == '\0' ||
+        !index->column_refs || index->num_column_refs == 0) {
+        printf("bind_create_index: Invalid create index node.\n");
+        return false;
+    }
+
+    uint32_t num_columns = index->num_column_refs;
+
+    // Allocate the column index array
+    if ((size_t)num_columns > SIZE_MAX / sizeof(uint32_t)) {
+        printf("bind_create_index: Number of index key columns exceeds maximum size.\n");
+        return false;
+    }
+
+    // Validate the table exists
+    if (!register_binding_relation(index->table_name, "", context)) {
+        printf("bind_create_index: Table could not be registered.\n");
+        return false;
+    }
+
+    Table *table = context->relations[0].table;
+
+    if (!table || table->name[0] == '\0' || !table->table_schema ||  
+        table->is_deleted || !table->is_materialized ||
+        !table->primary_index ||
+        (table->total_secondary_indexes > 0 && !table->secondary_indexes)) {
+        printf("bind_create_index: Invalid table.\n");
+        return false;
+    }
+
+    if (table->total_secondary_indexes >= MAX_INDEXES) {
+        printf("bind_create_index: Secondary index limit reached.\n");
+        return false;
+    }
+
+
+    uint32_t *resolved_indexes = malloc((size_t)num_columns * sizeof(*resolved_indexes));
+
+    if (!resolved_indexes) {
+        printf("bind_create_index: Column index allocation failed.\n");
+        return false;
+    }
+
+    // Resolve all indexed column references
+    for (uint32_t i = 0; i < num_columns; i++) {
+        ExpressionNode *column_expr = index->column_refs[i];
+
+        if (!column_expr || column_expr->type != EXPR_COLUMN_REF) {
+            printf("bind_create_index: Invalid column reference.\n");
+            free(resolved_indexes);
+            return false;
+        }
+
+        ColumnRef *column_ref = &column_expr->expression_data.column_value;
+
+        // CREATE INDEX requires unqualified column names
+        if (column_ref->table_name[0] != '\0') {
+            printf("bind_create_index: Qualified column reference.\n");
+            free(resolved_indexes);
+            return false;
+        }
+
+        BoundExpressionType result_type = {0};
+
+        if (!bind_scalar_expression(column_expr, context, &result_type)) {
+            printf("bind_create_index: Column binding failed.\n");
+            free(resolved_indexes);
+            return false;
+        }
+
+        // The only registered relation is the indexed table.
+        if (column_ref->relation_index != 0 || column_ref->column_index < 0 ||
+            (uint32_t)column_ref->column_index >= table->table_schema->num_columns) {
+            free(resolved_indexes);
+            return false;
+        }
+
+        uint32_t column_id = (uint32_t)column_ref->column_index;
+
+        // Reject duplicate columns in the same index key
+        for (uint32_t j = 0; j < i; j++) {
+            if (resolved_indexes[j] == column_id) {
+                printf("bind_create_index: Duplicate indexed column.\n");
+                free(resolved_indexes);
+                return false;
+            }
+        }
+
+        // Reject types that do not support index ordering
+        if (result_type.is_untyped_null || !supports_ordering(result_type.type)) {
+            printf("bind_create_index: Unsupported indexed type.\n");
+            free(resolved_indexes);
+            return false;
+        }
+
+        resolved_indexes[i] = column_id;
+    }
+
+
+    // Validate that no other index has the same name
+    if (table_find_index(table, index->index_name)) {
+        printf("bind_create_index: Index name is already in use.\n");
+        free(resolved_indexes);
+        return false;
+    }
+
+    // Validate that no existing index has the same key
+    // Primary index
+    if (index_key_matches_key(table->primary_index, resolved_indexes, num_columns)) {
+        printf("bind_create_index: New index key matches the primary index.\n");
+        free(resolved_indexes);
+        return false;
+    }
+
+    // Secondary indexes
+    for (uint32_t i = 0; i < table->total_secondary_indexes; i++) {
+        Index *current_index = table->secondary_indexes[i];
+        
+        if (!current_index || 
+            !current_index->key || 
+            !current_index->key->column_index_array || 
+            current_index->key->num_columns == 0) {
+            printf("bind_create_index: Invalid secondary index.\n");
+            free(resolved_indexes);
+            return false;
+        }
+
+        if (index_key_matches_key(current_index, resolved_indexes, num_columns)) {
+            printf("bind_create_index: New index key matches a secondary index.\n");
+            free(resolved_indexes);
+            return false;
+        }
+    }
+
+    // Validate the new index key definition    
+    IndexKey candidate_key = {0};
+
+    candidate_key.column_index_array = resolved_indexes;
+    candidate_key.num_columns = num_columns;
+
+    Index candidate_index = {0};
+    candidate_index.key = &candidate_key;
+    candidate_index.type = SECONDARY_INDEX;
+
+    if (!btree_index_definition_fits(&candidate_index, table->table_schema)) {
+        printf("bind_create_index: Invalid index definition.\n");
+        free(resolved_indexes);
+        return false;
+    }
+
+    // Publish validated output
+    create_index->table = table;
+    create_index->create_index = index;
+    create_index->column_indexes = resolved_indexes;
+    create_index->num_columns = num_columns;
+
+    return true;
+}
 
 bool bind_drop_index(ASTNode *root, BindingContext *context);
 

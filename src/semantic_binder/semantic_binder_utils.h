@@ -40,6 +40,7 @@ typedef struct bound_insertion_values BoundInsertionValues;
 typedef struct bound_alter_table BoundAlterTable;
 typedef struct bound_drop_table BoundDropTable;
 typedef struct bound_truncate_table BoundTruncateTable;
+typedef struct bound_create_index BoundCreateIndex;
 
 
 /* ---------- CREATE TABLE Pending Column Bindings ---------- */
@@ -113,7 +114,7 @@ bool bind_truncate_table(ASTNode *root, BindingContext *context, BoundTruncateTa
 
 bool bind_alter_table(ASTNode *root, BindingContext *context, BoundAlterTable *out_alter);
 
-bool bind_create_index(ASTNode *root, BindingContext *context);
+bool bind_create_index(ASTNode *root, BindingContext *context, BoundCreateIndex *create_index);
 
 bool bind_drop_index(ASTNode *root, BindingContext *context);
 
@@ -433,4 +434,5 @@ bool rewrite_check_identifiers(ExpressionNode *expr, int32_t target_column_index
 
 // Validate that the current table is referenced by another table's FOREIGN KEY constriant
 bool has_external_incoming_fk(const Database *db, const Table *target_table);
+
 #endif
