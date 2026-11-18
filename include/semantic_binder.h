@@ -39,7 +39,17 @@ typedef struct binding_relation {
     // Only populated during ALTER TABLE CHECK binding
     Schema *proposed_schema;
     ColumnDefNode *proposed_column;
+    char proposed_table_name[64];
 } BindingRelation;
+
+#define ALTER_NEW_COLUMN UINT32_MAX
+
+// Map structure between the working and actual column indexes
+// Useful for ALTER TABLE operations that can add/remove/rename columns
+typedef struct AlterColumnMap {
+    uint32_t *working_to_original;
+    uint32_t num_columns;
+} AlterColumnMap;
 
 // Context used by bind utilities to verify table ownership of columns
 // that are presented in the various expressions
@@ -50,6 +60,8 @@ typedef struct binding_context {
 
     BindingClause current_clause;
     uint32_t aggregate_depth;
+
+    AlterColumnMap *alter_column_map;
 } BindingContext;
 
 // Result type of a bound expression
@@ -180,5 +192,26 @@ extern void bound_create_table_free(BoundCreateTable *create_table);
 extern void bound_alter_table_free(BoundAlterTable *alter_table);
 
 extern void bound_statement_free(BoundStatement *statement);
+
+/* ---------- AlterColumnMap Helpers ---------- */
+
+extern bool alter_column_map_init(AlterColumnMap *map, uint32_t original_count);
+
+extern void alter_column_map_free(AlterColumnMap *map);
+
+// Retrieve the original column index based on the working index
+extern bool alter_map_get_original(const AlterColumnMap *map, uint32_t working_index, 
+    uint32_t *out_original);
+
+// Retrieve the working column index based on the original index
+extern bool alter_map_find_working(const AlterColumnMap *map, uint32_t original_index,
+    uint32_t *out_working);
+
+// Add new working index
+extern bool alter_column_map_add(AlterColumnMap *map);
+
+// Remove working index
+extern bool alter_column_map_drop(AlterColumnMap *map, uint32_t working_index);
+
 
 #endif
