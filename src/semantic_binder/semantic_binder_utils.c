@@ -1546,7 +1546,54 @@ bool bind_drop_table(ASTNode *root, BindingContext *context, BoundDropTable *dro
     return true;
 }
 
-bool bind_truncate_table(ASTNode *root, BindingContext *context);
+// Bind TRUNCATE TABLE query
+bool bind_truncate_table(ASTNode *root, BindingContext *context, BoundTruncateTable *truncate) {
+    if (!root || root->type != AST_TRUNCATE_TABLE) {
+        printf("bind_truncate_table: Invalid AST root node.\n");
+        return false;
+    }
+
+    if (!context || !context->db || !truncate) {
+        printf("bind_truncate_table: Invalid binding context or output.\n");
+        return false;
+    }
+
+    // Empty context and bound statement are required
+    if (context->relations || context->num_relations != 0 || context->aggregate_depth != 0) {
+        printf("bind_truncate_table: Expected fresh binding state.\n");
+        return false;
+    }
+
+    if (truncate->table || truncate->truncate_table) {
+        printf("bind_truncate_table: Invalid assigned output.\n");
+        return false;
+    }
+
+    TruncateTableNode *truncate_table = &root->node_contents.truncate_table;
+
+    if (!truncate_table || truncate_table->table_name[0] == '\0') {
+        printf("bind_truncate_table: Invalid drop table node or target table name.\n");
+        return false;
+    }
+
+    if (!register_binding_relation(truncate_table->table_name, "", context)) {
+        printf("bind_truncate_table: Table could not be registered.\n");
+        return false;
+    }
+
+    Table *table = context->relations[0].table;
+
+    if (has_external_incoming_fk(context->db, table)) {
+        printf("bind_truncate_table: Target table has incoming FOREIGN KEY dependencies.\n");
+        return false;
+    }
+
+    // Publish validated output
+    truncate->table = table;
+    truncate->truncate_table = truncate_table;
+
+    return true;
+}
 
 // Bind ALTER TABLE
 bool bind_alter_table(ASTNode *root, BindingContext *context, BoundAlterTable *out_alter) {

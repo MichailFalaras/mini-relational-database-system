@@ -39,6 +39,7 @@ typedef struct bound_projection BoundProjection;
 typedef struct bound_insertion_values BoundInsertionValues;
 typedef struct bound_alter_table BoundAlterTable;
 typedef struct bound_drop_table BoundDropTable;
+typedef struct bound_truncate_table BoundTruncateTable;
 
 
 /* ---------- CREATE TABLE Pending Column Bindings ---------- */
@@ -108,7 +109,7 @@ bool bind_create_table(ASTNode *root, BindingContext *context);
 
 bool bind_drop_table(ASTNode *root, BindingContext *context, BoundDropTable *drop);
 
-bool bind_truncate_table(ASTNode *root, BindingContext *context);
+bool bind_truncate_table(ASTNode *root, BindingContext *context, BoundTruncateTable *truncate);
 
 bool bind_alter_table(ASTNode *root, BindingContext *context, BoundAlterTable *out_alter);
 

@@ -159,6 +159,15 @@ typedef struct bound_drop_table {
     DropTableNode *drop_table;
 } BoundDropTable;
 
+// Metadata for a validated TRUNCATE TABLE statement
+typedef struct bound_truncate_table {
+    // Existing table being truncated (non-owning)
+    Table *table;
+
+    // Validated TRUNCATE TABLE AST node (non-owning)
+    TruncateTableNode *truncate_table;
+} BoundTruncateTable;
+
 // Final Bound Statement
 typedef enum bound_statement_type {
     BOUND_STATEMENT_NONE = 0,
@@ -168,7 +177,8 @@ typedef enum bound_statement_type {
     BOUND_STATEMENT_DELETE = 4,
     BOUND_STATEMENT_CREATE_TABLE = 5,
     BOUND_STATEMENT_ALTER_TABLE = 6,
-    BOUND_STATEMENT_DROP_TABLE = 7
+    BOUND_STATEMENT_DROP_TABLE = 7,
+    BOUND_STATEMENT_TRUNCATE_TABLE = 8
 } BoundStatementType;
 
 typedef struct bound_statement {
@@ -182,6 +192,7 @@ typedef struct bound_statement {
         BoundCreateTable create_table;
         BoundAlterTable alter_table;
         BoundDropTable drop_table;
+        BoundTruncateTable truncate_table;
     } data;
 } BoundStatement;
 
@@ -203,6 +214,8 @@ extern void bound_create_table_free(BoundCreateTable *create_table);
 extern void bound_alter_table_free(BoundAlterTable *alter_table);
 
 extern void bound_drop_table_free(BoundDropTable *drop_table);
+
+extern void bound_truncate_table_free(BoundTruncateTable *drop_table);
 
 extern void bound_statement_free(BoundStatement *statement);
 
