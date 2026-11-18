@@ -362,34 +362,36 @@ bool generate_alter_constraint_name(const ConstraintNode *constraint,
 bool fk_runtime_types_compatible(const Column *left, const Column *right);
 
 // Validate a modified FOREIGN KEY constraint in ALTER TABLE MODIFY COLUMN
-bool validate_modified_foreign_key(const Constraint *constraint, const Table *table, 
-    const Schema *working_schema, const Database *db);
+bool validate_modified_foreign_key(const Constraint *constraint, const Table *table,
+    const Schema *working_schema, const Database *db, const char *current_table_name);
 
 // Reset Column reference indexes (-1) before binding the proposed modified CHECK constraint
 bool reset_check_column_refs(ExpressionNode *expr);
 
 // Validate a modified CHECK constraint in ALTER TABLE MODIFY COLUMN
 bool validate_modified_check_expression(const Constraint *constraint, Table *table,
-    Schema *working_schema, Database *db);
+    Schema *working_schema, Database *db, const char *current_table_name);
 
 // Validate a modified DEFAULT constraint in ALTER TABLE MODIFY COLUMN
 bool validate_modified_default(const Constraint *constraint, DataType new_type,
     DataTypeArgs new_args, BindingContext *context);
 
 // Validate incoming FOREIGN KEYS from other database tables
-bool validate_modify_incoming_foreign_keys(const Table *modified_table,
-    const Schema *proposed_schema, const Database *db);
+bool validate_modify_incoming_foreign_keys(const Table *modified_table, const Schema *proposed_schema,
+    const Database *db, const AlterColumnMap *map);
 
 // Check that the DEFAULT value validates new data type arguments 
 bool value_fits_type_args(const Value *value, DataType target_type, DataTypeArgs target_args);
 
 // Validate one existing index against the proposed table schema.
-bool validate_modified_index(const Index *index, Schema *working_schema, uint32_t column_index);
+bool validate_modified_index(const Index *index, Schema *working_schema,
+    uint32_t column_index, const AlterColumnMap *map);
 
 // Orchestrate validation of all indexes that are affected by the modified column
-bool validate_modified_column_indexes(Table *table, Schema *working_schema, uint32_t column_index);
+bool validate_modified_column_indexes(Table *table, Schema *working_schema,
+    uint32_t column_index, const AlterColumnMap *map);
 
-
+    
 /* ---------- ALTER TABLE ADD CONSTRAINT Validation Helpers ---------- */
 
 // Resolve constraint column references against a runtime schema
@@ -411,4 +413,15 @@ bool has_incoming_fk_dependency(const Database *db, const Table *target_table, u
 // Remove column from the working schema as a result of a DROP COLUMN action
 bool working_schema_drop_column(Schema *schema, uint32_t column_index, const char *table_name);
 
+
+/* ---------- ALTER TABLE RENAME Helpers ---------- */
+
+// Select between a proposed table name from an ALTER TABLE RENAME and the actual table name
+const char *binding_relation_current_name(const BindingRelation *relation);
+
+// only CHECK constraints require column-name rewriting in their stored expression trees 
+// for your current runtime representation
+bool rewrite_check_identifiers(ExpressionNode *expr, int32_t target_column_index,
+    const char *new_column_name, const char *old_table_name, const char *new_table_name,
+    bool apply);
 #endif

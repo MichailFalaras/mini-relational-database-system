@@ -187,7 +187,7 @@ bool bind_column_ref(ExpressionNode *expr, BindingContext *context, BoundExpress
         }
 
         if (column_ref->table_name[0] != '\0' &&
-            strcmp(column_ref->table_name, relation->table->name)) {
+            strcmp(column_ref->table_name, binding_relation_current_name(relation))) {
             printf("bind_column_ref: Invalid CHECK table qualifier.\n");
             return false;
         }
@@ -1534,6 +1534,15 @@ bool bind_alter_table(ASTNode *root, BindingContext *context, BoundAlterTable *o
         return false;
     }
 
+    // Initialize proposed table name as the current table name
+    BindingRelation *relation = &context->relations[0];
+
+    if (strlen(table->name) >= sizeof(relation->proposed_table_name)) {
+        return false;
+    }
+
+    strcpy(relation->proposed_table_name, table->name);
+
     // Deep copy table schema to update the copy in case of multiple alteration actions
     Schema *working_schema = schema_copy(table->table_schema);
 
@@ -1541,20 +1550,31 @@ bool bind_alter_table(ASTNode *root, BindingContext *context, BoundAlterTable *o
         return false;
     }
 
-    // Bind potentially multiple alter action nodes
+    // Initialize column mapping before a potential column addition/removal
+    AlterColumnMap map = {0};
+
+    if (!alter_column_map_init(&map, table->table_schema->num_columns)) {
+        schema_free(working_schema);
+        return false;
+    }
+
+    context->alter_column_map = &map;
+
+    bool success = false;
+
+    // Bind potentially multiple ALTER actions sequentially
     for (uint32_t i = 0; i < alter_table->num_actions; i++) {
         AlterActionNode *action = &alter_table->actions[i];
 
-        if (!action) {
-            printf("bind_alter_table: Invalid alter action node.\n");
-            schema_free(working_schema);
-            return false;
+        if (!bind_alter_action(action, context, working_schema)) {
+            printf("bind_alter_table: ALTER action binding failed.\n");
+            goto cleanup;
         }
 
-        if (!bind_alter_action(action, context, working_schema)) {
-            printf("bind_alter_table: Alter action node binding failed.\n");
-            schema_free(working_schema);
-            return false;
+        // The proposed schema and mapping must remain synchronized
+        if (map.num_columns != working_schema->num_columns) {
+            printf("bind_alter_table: Column mapping mismatch.\n");
+            goto cleanup;
         }
     }
 
@@ -1563,7 +1583,18 @@ bool bind_alter_table(ASTNode *root, BindingContext *context, BoundAlterTable *o
     out_alter->alter_table = alter_table;
     out_alter->result_schema = working_schema;
 
-    return true;
+    success = true;
+
+cleanup:
+    // The context must never retain a pointer to this local map
+    context->alter_column_map = NULL;
+    alter_column_map_free(&map);
+
+    if (!success) {
+        schema_free(working_schema);
+    }
+
+    return success;
 }
 
 bool bind_create_index(ASTNode *root, BindingContext *context);
@@ -2713,6 +2744,13 @@ bool bind_alter_add_col(AlterActionNode *action, BindingContext *context, Schema
         return false;
     }
 
+    // Resolve table name in case it's been renamed by another alteration operation
+    const char *current_table_name = binding_relation_current_name(&context->relations[0]);
+
+    if (!current_table_name || current_table_name[0] == '\0') {
+        return false;
+    }
+
     Table *table = context->relations[0].table;
     ColumnDefNode *column = action->alter_contents.alter_add.column;
 
@@ -2877,7 +2915,7 @@ bool bind_alter_add_col(AlterActionNode *action, BindingContext *context, Schema
 
                 // The column reference contents must match the column definition contents
                 if (strcmp(ref->column_name, column->column_name) ||
-                    (ref->table_name[0] != '\0' && strcmp(ref->table_name, table->name))) {
+                    (ref->table_name[0] != '\0' && strcmp(ref->table_name, current_table_name))) {
                     printf("bind_alter_add_col: Invalid key owner.\n");
                     return false;
                 }
@@ -2900,7 +2938,7 @@ bool bind_alter_add_col(AlterActionNode *action, BindingContext *context, Schema
                 if (new_not_null ||
                     column_ref->column_index != -1 || column_ref->relation_index != -1 ||
                     strcmp(column_ref->column_name, column->column_name) ||
-                    (column_ref->table_name[0] != '\0' && strcmp(column_ref->table_name, table->name))) {
+                    (column_ref->table_name[0] != '\0' && strcmp(column_ref->table_name, current_table_name))) {
                     printf("bind_alter_add_col: Invalid column reference inside NOT NULL.\n");
                     return false;
                 }
@@ -2997,9 +3035,23 @@ bool bind_alter_add_col(AlterActionNode *action, BindingContext *context, Schema
         return false;
     }
 
-    // Update working schema with new correctly-validated actio.
+    // Validate mapping before changing the working schema
+    if (!context->alter_column_map ||
+        !context->alter_column_map->working_to_original ||
+        context->alter_column_map->num_columns != working_schema->num_columns) {
+        printf("bind_alter_add_col: Invalid column mapping.\n");
+        return false;
+    }
+
+    // Update the proposed schema
     if (!working_schema_add_column(working_schema, column, context, table)) {
         printf("bind_alter_add_col: Working schema update failed.\n");
+        return false;
+    }
+
+    // The new column did not exist in the original table
+    if (!alter_column_map_add(context->alter_column_map)) {
+        printf("bind_alter_add_col: Column mapping update failed.\n");
         return false;
     }
 
@@ -3017,6 +3069,13 @@ bool bind_alter_drop_col(AlterActionNode *action, BindingContext *context, Schem
     if (!context || !context->db || !context->relations || 
         context->num_relations != 1 || !context->relations[0].table) {
         printf("bind_alter_drop_col: Invalid binding context.\n");
+        return false;
+    }
+
+    // Resolve table name in case it's been renamed by another alteration operation
+    const char *current_table_name = binding_relation_current_name(&context->relations[0]);
+
+    if (!current_table_name || current_table_name[0] == '\0') {
         return false;
     }
 
@@ -3086,7 +3145,8 @@ bool bind_alter_drop_col(AlterActionNode *action, BindingContext *context, Schem
                 case FOREIGN_KEY: {
                     bool local_dependency = foreign_key_uses_column(constraint, column_index);
 
-                    bool self_reference = strcmp(constraint->constraint_data.foreign_key.referenced_table_name, table->name) == 0;
+                    bool self_reference = 
+                        strcmp(constraint->constraint_data.foreign_key.referenced_table_name, current_table_name) == 0;
 
                     bool referenced_dependency =
                             self_reference &&
@@ -3111,15 +3171,27 @@ bool bind_alter_drop_col(AlterActionNode *action, BindingContext *context, Schem
         }
     }
 
-    if (has_incoming_fk_dependency(context->db, table, column_index)) {
-        printf("bind_alter_drop_col: Another table FOREIGN KEY references target column.\n");
+    uint32_t original_index;
+
+    if (!alter_map_get_original(context->alter_column_map, column_index, &original_index)) {
+        printf("bind_alter_drop_col: Failed to retrieve original column index.\n");
+        return false;
+    }
+
+    if (original_index != ALTER_NEW_COLUMN &&
+        has_incoming_fk_dependency(context->db, table, original_index)) {
+        printf("bind_alter_drop_col: Target column has incoming FOREIGN KEY constraint.\n");
         return false;
     }
 
     // Validate if the primary index references the target column
-    if (!table->primary_index ||
-        !table->primary_index->key ||
-        index_key_has_column(table->primary_index, column_index)) {
+    if (!table->primary_index || !table->primary_index->key) {
+        printf("bind_alter_drop_col: Invalid canonical index.\n");
+        return false;
+    }
+
+    if (original_index != ALTER_NEW_COLUMN &&
+        index_key_has_column(table->primary_index, original_index)) {
         printf("bind_alter_drop_col: Column is part of canonical index.\n");
         return false;
     }
@@ -3138,15 +3210,31 @@ bool bind_alter_drop_col(AlterActionNode *action, BindingContext *context, Schem
             return false;
         }
 
-        if (index_key_has_column(index, column_index)) {
+        if (original_index != ALTER_NEW_COLUMN && 
+            index_key_has_column(index, original_index)) {
             printf("bind_alter_drop_col: Column is part of secondary index.\n");
             return false;
         }
     }
+    
+    // Validate mapping before changing the working schema
+    if (!context->alter_column_map ||
+        !context->alter_column_map->working_to_original ||
+        context->alter_column_map->num_columns != working_schema->num_columns ||
+        column_index >= context->alter_column_map->num_columns) {
+        printf("bind_alter_drop_col: Invalid column mapping.\n");
+        return false;
+    }
 
-    // Update working schema
-    if (!working_schema_drop_column(working_schema, column_index, table->name)) {
-        printf("bind_alter_drop_col: Working schema couldn't be updated.\n");
+    // Remove the column from the proposed schema
+    if (!working_schema_drop_column(working_schema, column_index, current_table_name)) {
+        printf("bind_alter_drop_col: Working schema update failed.\n");
+        return false;
+    }
+
+    // Remove the corresponding position from the mapping
+    if (!alter_column_map_drop(context->alter_column_map, column_index)) {
+        printf("bind_alter_drop_col: Column mapping update failed.\n");
         return false;
     }
 
@@ -3156,7 +3244,7 @@ bool bind_alter_drop_col(AlterActionNode *action, BindingContext *context, Schem
 // Bind RENAME TABLE alteration node
 bool bind_alter_rename_table(AlterActionNode *action, BindingContext *context, Schema *working_schema) {
     if (!action || action->type != AST_ALTER_RENAME_TABLE) {
-        printf("bind_alter_rename_table: Invalid RENAME TABLE alteration node.\n");
+        printf("bind_alter_rename_table: Invalid RENAME TABLE action.\n");
         return false;
     }
 
@@ -3166,40 +3254,182 @@ bool bind_alter_rename_table(AlterActionNode *action, BindingContext *context, S
         printf("bind_alter_rename_table: Invalid binding context.\n");
         return false;
     }
+    
 
-    if (!working_schema || !working_schema->columns || working_schema->num_columns == 0 ||
+    if (!working_schema || !working_schema->columns ||
+        working_schema->num_columns == 0 ||
         (working_schema->num_constraints > 0 && !working_schema->constraints)) {
         printf("bind_alter_rename_table: Invalid working schema.\n");
         return false;
     }
 
-    char *new_table_name = action->alter_contents.alter_rename_table.new_table_name;
+    BindingRelation *relation = &context->relations[0];
 
-    if (new_table_name[0] == '\0') {
-        printf("bind_alter_rename_table: Empty new table name.\n");
+    const char *new_name = action->alter_contents.alter_rename_table.new_table_name;
+
+    if (new_name[0] == '\0' || strlen(new_name) >= sizeof(relation->proposed_table_name)) {
+        printf("bind_alter_rename_table: Invalid new table name.\n");
         return false;
     }
 
-    // Reject names already registered in the database, including the current table's existing name
-    if (database_find_table(context->db, new_table_name)) {
-        printf("bind_alter_rename_table: New table name is already is use.\n");
+    if (!strcmp(new_name, relation->proposed_table_name)) {
+        printf("bind_alter_rename_table: Table already has this name.\n");
         return false;
     }
+
+    // Check against all existing tables in the database
+    Table *existing = database_find_table(context->db, new_name);
+
+    // The original table object retains its original name during binding
+    // Allow a later rename back to that name, but reject any other table
+    if (existing && existing != relation->table) {
+        printf("bind_alter_rename_table: Table name already in use.\n");
+        return false;
+    }
+
+    const char *old_name = relation->proposed_table_name;
+
+    // First pass: validate all metadata that must be rewritten
+    for (uint32_t i = 0; i < working_schema->num_constraints; i++) {
+        Constraint *constraint = working_schema->constraints[i];
+
+        if (!constraint) {
+            return false;
+        }
+
+        if (constraint->type == FOREIGN_KEY) {
+            ForeignKeyConstraint *fk = &constraint->constraint_data.foreign_key;
+
+            if (!strcmp(fk->referenced_table_name, old_name) &&
+                strlen(new_name) >= sizeof(fk->referenced_table_name)) {
+                return false;
+            }
+        }
+
+        if (constraint->type == CHECK) {
+            if (!rewrite_check_identifiers(
+                    constraint->constraint_data.check.constraint_expr,
+                    -1, NULL,
+                    old_name, new_name,
+                    false)) {
+                return false;
+            }
+        }
+    }
+
+    // Second pass: update the working schema metadata
+    for (uint32_t i = 0; i < working_schema->num_constraints; i++) {
+        Constraint *constraint = working_schema->constraints[i];
+
+        if (constraint->type == FOREIGN_KEY) {
+            ForeignKeyConstraint *fk = &constraint->constraint_data.foreign_key;
+
+            if (!strcmp(fk->referenced_table_name, old_name)) {
+                strcpy(fk->referenced_table_name, new_name);
+            }
+        }
+
+        if (constraint->type == CHECK) {
+            rewrite_check_identifiers(
+                constraint->constraint_data.check.constraint_expr,
+                -1, NULL,
+                old_name, new_name,
+                true
+            );
+        }
+    }
+
+    // Update the table name only the proposed name of the bound relation
+    strcpy(relation->proposed_table_name, new_name);
 
     return true;
 }
 
+
 // Bind RENAME COLUMN alteration node
 bool bind_alter_rename_col(AlterActionNode *action, BindingContext *context, Schema *working_schema) {
     if (!action || action->type != AST_ALTER_RENAME_COLUMN) {
-        printf("bind_alter_rename_col: Invalid RENAME COLUMN alteration node.\n");
+        printf("bind_alter_rename_col: Invalid RENAME COLUMN action.\n");
         return false;
     }
 
-    if (!context) {
+    if (!context || !context->db ||
+        !context->relations || context->num_relations != 1 ||
+        !context->relations[0].table) {
         printf("bind_alter_rename_col: Invalid binding context.\n");
         return false;
     }
+
+    if (!working_schema || !working_schema->columns ||
+        working_schema->num_columns == 0 ||
+        (working_schema->num_constraints > 0 && !working_schema->constraints)) {
+        printf("bind_alter_rename_col: Invalid working schema.\n");
+        return false;
+    }
+
+    const char *old_name = action->alter_contents.alter_rename_col.old_col_name;
+    const char *new_name = action->alter_contents.alter_rename_col.new_col_name;
+
+    if (old_name[0] == '\0' || new_name[0] == '\0') {
+        printf("bind_alter_rename_col: Empty column name.\n");
+        return false;
+    }
+
+    // Validate that the old column name exists
+    int32_t old_index = schema_find_column_index(working_schema, old_name);
+
+    if (old_index < 0) {
+        printf("bind_alter_rename_col: Old column doesn't exist.\n");
+        return false;
+    }
+
+    // Validate that the new column name doesn't exist
+    if (schema_find_column_index(working_schema, new_name) >= 0) {
+        printf("bind_alter_rename_col: New column name already in use.\n");
+        return false;
+    }
+
+    Column *column = working_schema->columns[old_index];
+
+    if (!column || strlen(new_name) >= sizeof(column->name)) {
+        printf("bind_alter_rename_col: Invalid new column name.\n");
+        return false;
+    }
+
+    // First pass: validate every affected CHECK expression
+    for (uint32_t i = 0; i < working_schema->num_constraints; i++) {
+        Constraint *constraint = working_schema->constraints[i];
+
+        if (!constraint) {
+            return false;
+        }
+
+        if (constraint->type != CHECK) {
+            continue;
+        }
+
+        if (!rewrite_check_identifiers(
+                constraint->constraint_data.check.constraint_expr,
+                old_index, new_name, NULL, NULL, false)) {
+            return false;
+        }
+    }
+
+    // Second pass: apply the validated rewrites
+    for (uint32_t i = 0; i < working_schema->num_constraints; i++) {
+        Constraint *constraint = working_schema->constraints[i];
+
+        if (constraint->type == CHECK) {
+            if (!rewrite_check_identifiers(
+                    constraint->constraint_data.check.constraint_expr,
+                    old_index, new_name, NULL, NULL, true)) {
+                return false;
+            }
+        }
+    }
+
+    // Update the column name only the working schema
+    strcpy(column->name, new_name);
 
     return true;
 }
@@ -3215,6 +3445,13 @@ bool bind_alter_modify_col(AlterActionNode *action, BindingContext *context, Sch
         !context->relations || context->num_relations != 1 ||
         !context->relations[0].table) {
         printf("bind_alter_modify_col: Invalid binding context.\n");
+        return false;
+    }
+
+    // Resolve table name in case it's been renamed by another alteration operation
+    const char *current_table_name = binding_relation_current_name(&context->relations[0]);
+
+    if (!current_table_name || current_table_name[0] == '\0') {
         return false;
     }
 
@@ -3317,7 +3554,9 @@ bool bind_alter_modify_col(AlterActionNode *action, BindingContext *context, Sch
         else if (constraint->type == FOREIGN_KEY) {
             affected = 
                 foreign_key_uses_column(constraint, column_index) ||
-                (!strcmp(constraint->constraint_data.foreign_key.referenced_table_name,table->name) &&
+                (!strcmp(
+                    constraint->constraint_data.foreign_key.referenced_table_name,
+                    current_table_name) &&
                 foreign_key_references_column(constraint, column_index));
         }
         else {
@@ -3343,7 +3582,8 @@ bool bind_alter_modify_col(AlterActionNode *action, BindingContext *context, Sch
 
             case FOREIGN_KEY:
                 // Validate both sides using the proposed schema
-                if (!validate_modified_foreign_key(constraint, table, working_schema, context->db)) {
+                if (!validate_modified_foreign_key(
+                        constraint, table, working_schema, context->db, current_table_name)) {
                     printf("bind_alter_modify_col: FOREIGN KEY datatype mismatch.\n");
                     goto rollback;
                 }
@@ -3351,7 +3591,8 @@ bool bind_alter_modify_col(AlterActionNode *action, BindingContext *context, Sch
 
             case CHECK:
                 // Check expression types, not stored row values.
-                if (!validate_modified_check_expression(constraint, table, working_schema, context->db)) {
+                if (!validate_modified_check_expression(
+                        constraint, table, working_schema, context->db, current_table_name)) {
                     printf("bind_alter_modify_col: CHECK expression incompatible with new type.\n");
                     goto rollback;
                 }
@@ -3379,13 +3620,15 @@ bool bind_alter_modify_col(AlterActionNode *action, BindingContext *context, Sch
     }
 
     // Validate potential incoming (from other tables) FOREIGN KEY constraints
-    if (!validate_modify_incoming_foreign_keys(table, working_schema, context->db)) {
+    if (!validate_modify_incoming_foreign_keys(
+            table, working_schema, context->db, context->alter_column_map)) {
         printf("bind_alter_modify_col: Incoming FOREIGN KEY incompatibility.\n");
         goto rollback;
     }
 
     // Validate affected secondary indexes
-    if (!validate_modified_column_indexes(table, working_schema, column_index)) {
+    if (!validate_modified_column_indexes(
+            table, working_schema, column_index, context->alter_column_map)) {
         printf("bind_alter_modify_col: Index incompatibility.\n");
         goto rollback;
     }
@@ -3412,10 +3655,17 @@ bool bind_alter_add_constraint(AlterActionNode *action, BindingContext *context,
         return false;
     }
 
+    // Resolve table name in case it's been renamed by another alteration operation
+    const char *current_table_name = binding_relation_current_name(&context->relations[0]);
+
+    if (!current_table_name || current_table_name[0] == '\0') {
+        return false;
+    }
+
     if (!working_schema || 
         !working_schema->columns || working_schema->num_columns == 0 || 
         (working_schema->num_constraints > 0 && !working_schema->constraints)) {
-        printf("bind_alter_modify_col: Invalid working schema.\n");
+        printf("bind_alter_add_constraint: Invalid working schema.\n");
         return false;
     }
 
@@ -3440,7 +3690,7 @@ bool bind_alter_add_constraint(AlterActionNode *action, BindingContext *context,
     ConstraintNode *new_constraint = action->alter_contents.alter_add_constraint.constraint;
 
     if (!table || !new_constraint) {
-        printf("bind_alter_modify_col: Invalid table or constraint.\n");
+        printf("bind_alter_add_constraint: Invalid table or constraint.\n");
         return false;
     }
 
@@ -3450,12 +3700,12 @@ bool bind_alter_add_constraint(AlterActionNode *action, BindingContext *context,
             Constraint *existing = working_schema->constraints[i];
 
             if (!existing) {
-                printf("bind_alter_modify_col: Invalid existing constraint.\n");
+                printf("bind_alter_add_constraint: Invalid existing constraint.\n");
                 return false;
             }
 
             if (!strcmp(existing->constraint_name, new_constraint->constraint_name)) {
-                printf("bind_alter_modify_col: Duplicate constraint name.\n");
+                printf("bind_alter_add_constraint: Duplicate constraint name.\n");
                 return false;   
             }
         }
@@ -3518,7 +3768,7 @@ bool bind_alter_add_constraint(AlterActionNode *action, BindingContext *context,
                 goto failed;
             }
 
-            bool valid = resolve_constraint_column_refs(refs, count, working_schema, table->name, indexes);
+            bool valid = resolve_constraint_column_refs(refs, count, working_schema, current_table_name, indexes);
 
             for (uint32_t i = 0; valid && i < count; i++) {
                 DataType type = working_schema->columns[indexes[i]]->type;
@@ -3615,7 +3865,7 @@ bool bind_alter_add_constraint(AlterActionNode *action, BindingContext *context,
 
             const Schema *ref_schema = NULL;
 
-            if (!strcmp(fk->referenced_table_name, table->name)) {
+            if (!strcmp(fk->referenced_table_name, current_table_name)) {
                 ref_schema = working_schema;
             }
             else {
@@ -3647,7 +3897,7 @@ bool bind_alter_add_constraint(AlterActionNode *action, BindingContext *context,
                 fk->local_column_refs,
                 count,
                 working_schema,
-                table->name,
+                current_table_name,
                 local
             ) &&
             resolve_constraint_column_refs(
@@ -3705,6 +3955,16 @@ bool bind_alter_add_constraint(AlterActionNode *action, BindingContext *context,
             relation.table = table;
             relation.proposed_schema = working_schema;
             relation.proposed_column = NULL;
+
+            const char *current_table_name = binding_relation_current_name(&context->relations[0]);
+
+            if (!current_table_name ||
+                strlen(current_table_name) >= sizeof(relation.proposed_table_name)) {
+                expression_node_free(copy);
+                goto failed;
+            }
+
+            strcpy(relation.proposed_table_name, current_table_name);
 
             BindingContext check_context = {0};
             check_context.db = context->db;
@@ -3850,7 +4110,7 @@ bool bind_alter_add_constraint(AlterActionNode *action, BindingContext *context,
 
             uint32_t index = 0;
 
-            if (!resolve_constraint_column_refs(&ref, 1, working_schema, table->name, &index)) {
+            if (!resolve_constraint_column_refs(&ref, 1, working_schema, current_table_name, &index)) {
                 goto failed;
             }
 
@@ -3980,8 +4240,11 @@ bool bind_alter_drop_constraint(AlterActionNode *action, BindingContext *context
                         context->db,
                         table,
                         working_schema,
+                        binding_relation_current_name(&context->relations[0]),
+                        context->alter_column_map,
                         constraint,
-                        &referenced)) {
+                        &referenced
+                    )) {
                     printf("bind_alter_drop_constraint: FOREIGN KEY dependency inspection failed.\n");
                     return false;
                 }
@@ -6268,6 +6531,16 @@ bool validate_alter_column_fk(const ForeignKeyConstraintNode *fk, const ColumnDe
         return false;
     }
 
+    if (!context->relations || context->num_relations != 1) {
+        return false;
+    }
+
+    const char *current_table_name = binding_relation_current_name(&context->relations[0]);
+
+    if (!current_table_name) {
+        return false;
+    }
+
     if (fk->referenced_table_name[0] == '\0' || 
         !fk->local_column_refs || !fk->referenced_column_refs || 
         fk->num_local_columns != 1 || fk->num_referenced_columns != 1) {
@@ -6288,7 +6561,7 @@ bool validate_alter_column_fk(const ForeignKeyConstraintNode *fk, const ColumnDe
     ColumnRef *remote = &remote_expr->expression_data.column_value;
 
     if (strcmp(local->column_name, column->column_name) ||
-        (local->table_name[0] != '\0' && strcmp(local->table_name, table->name))) {
+        (local->table_name[0] != '\0' && strcmp(local->table_name, current_table_name))) {
         printf("validate_alter_column_fk: Invalid local column reference.\n");
         return false;
     }
@@ -6306,14 +6579,14 @@ bool validate_alter_column_fk(const ForeignKeyConstraintNode *fk, const ColumnDe
     }
 
     // Check if the FOREIGN KEY is a self referenced
-    bool self_reference = strcmp(fk->referenced_table_name, table->name) == 0;
+    bool self_reference = strcmp(fk->referenced_table_name, current_table_name) == 0;
 
     // Special case: FOREIGN KEY references the column being added now
     bool references_new_column = 
         self_reference && strcmp(remote->column_name, column->column_name) == 0;
 
     if (references_new_column) {
-        return alter_new_column_has_key(column, table->name);
+        return alter_new_column_has_key(column, current_table_name);
     }
 
     // Deduce the referenced schema based on FOREIGN KEY's self-reference status
@@ -6395,6 +6668,15 @@ bool validate_alter_column_check(ConstraintNode *constraint, ColumnDefNode *colu
     relation.proposed_schema = working_schema;
     relation.proposed_column = column;
 
+    const char *current_table_name = binding_relation_current_name(&context->relations[0]);
+
+    if (!current_table_name ||
+        strlen(current_table_name) >= sizeof(relation.proposed_table_name)) {
+        return false;
+    }
+
+    strcpy(relation.proposed_table_name, current_table_name);
+
     BindingContext check_context = {0};
 
     check_context.db = context->db;
@@ -6419,6 +6701,12 @@ Constraint *build_runtime_alter_constraint(const ConstraintNode *constraint,
     
     if (!constraint || !column || !working_schema || !context || !table) {
         printf("build_runtime_alter_constraint: Invalid inputs.\n");
+        return NULL;
+    }
+
+    const char *current_table_name = binding_relation_current_name(&context->relations[0]);
+
+    if (!current_table_name) {
         return NULL;
     }
 
@@ -6460,7 +6748,7 @@ Constraint *build_runtime_alter_constraint(const ConstraintNode *constraint,
 
             const ColumnRef *remote = &fk->referenced_column_refs[0]->expression_data.column_value;
 
-            bool self_reference = strcmp(fk->referenced_table_name, table->name) == 0;
+            bool self_reference = strcmp(fk->referenced_table_name, current_table_name) == 0;
 
             const Schema *ref_schema = NULL;
 
@@ -6944,8 +7232,8 @@ bool fk_runtime_types_compatible(const Column *left, const Column *right) {
 }
 
 // Validate a modified FOREIGN KEY constraint in ALTER TABLE MODIFY COLUMN
-bool validate_modified_foreign_key(const Constraint *constraint, const Table *table, 
-    const Schema *working_schema, const Database *db) {
+bool validate_modified_foreign_key(const Constraint *constraint, const Table *table,
+    const Schema *working_schema, const Database *db, const char *current_table_name) {
     if (!constraint || constraint->type != FOREIGN_KEY || !table || !working_schema || !db) {
         printf("validate_modified_foreign_key: Invalid inputs.\n");
         return false;
@@ -6961,7 +7249,7 @@ bool validate_modified_foreign_key(const Constraint *constraint, const Table *ta
 
     const Schema *referenced_schema = NULL;
 
-    if (!strcmp(fk->referenced_table_name, table->name)) {
+    if (!strcmp(fk->referenced_table_name, current_table_name)) {
         // Self-referencing FK: use proposed schema.
         referenced_schema = working_schema;
     }
@@ -7063,7 +7351,7 @@ bool reset_check_column_refs(ExpressionNode *expr) {
 
 // Validate a modified CHECK constraint in ALTER TABLE MODIFY COLUMN
 bool validate_modified_check_expression(const Constraint *constraint, Table *table,
-    Schema *working_schema, Database *db) {
+    Schema *working_schema, Database *db, const char *current_table_name) {
     if (!constraint || constraint->type != CHECK || !table || !working_schema || !db) {
         printf("validate_modified_check_expression: Invalid inputs.\n");
         return false;
@@ -7094,6 +7382,7 @@ bool validate_modified_check_expression(const Constraint *constraint, Table *tab
     relation.table = table;
     relation.proposed_schema = working_schema;
     relation.proposed_column = &proposed_column;
+    strcpy(relation.proposed_table_name, current_table_name);
 
     BindingContext check_context = {0};
     check_context.db = db;
@@ -7173,9 +7462,11 @@ bool validate_modified_default(const Constraint *constraint, DataType new_type,
 
 // Validate incoming FOREIGN KEYS from other database tables
 bool validate_modify_incoming_foreign_keys(const Table *modified_table,
-    const Schema *proposed_schema, const Database *db) {
+    const Schema *proposed_schema, const Database *db, const AlterColumnMap *map) {
 
-    if (!modified_table || !proposed_schema || !db || (db->table_count > 0 && !db->tables)) {
+    if (!modified_table || !proposed_schema || !db || !map ||
+        map->num_columns != proposed_schema->num_columns ||
+        !map->working_to_original || (db->table_count > 0 && !db->tables)) {
         printf("validate_modify_incoming_foreign_keys: Invalid inputs.\n");
         return false;
     }
@@ -7223,18 +7514,27 @@ bool validate_modify_incoming_foreign_keys(const Table *modified_table,
 
             for (uint32_t j = 0; j < fk->amount_columns; j++) {
                 uint32_t local_index = fk->foreign_key_columns[j];
-                uint32_t remote_index = fk->referenced_columns[j];
+
+                // External FK stores the ORIGINAL referenced column index
+                uint32_t remote_original = fk->referenced_columns[j];
+
+                uint32_t remote_working = 0;
 
                 if (local_index >= other_schema->num_columns ||
-                    remote_index >= proposed_schema->num_columns) {
-                    printf("validate_modify_incoming_foreign_keys: Invalid local/referenced column indexes.\n");
+                    remote_original >= modified_table->table_schema->num_columns) {
+                    return false;
+                }
+
+                if (!alter_map_find_working(map, remote_original, &remote_working)) {
+                    printf("validate_modify_incoming_foreign_keys: Referenced column missing in proposed schema.\n");
                     return false;
                 }
 
                 if (!fk_runtime_types_compatible(
                         other_schema->columns[local_index],
-                        proposed_schema->columns[remote_index])) {
-                    printf("validate_modify_incoming_foreign_keys: FOREIGN KEY data type mismatch.\n");
+                        proposed_schema->columns[remote_working]
+                    )) {
+                    printf("validate_modify_incoming_foreign_keys: FOREIGN KEY datatype mismatch.\n");
                     return false;
                 }
             }
@@ -7344,68 +7644,104 @@ bool value_fits_type_args(const Value *value, DataType target_type, DataTypeArgs
     return true;
 }
 
-// Validate one existing index against the proposed table schema.
-bool validate_modified_index(const Index *index, Schema *working_schema, uint32_t column_index) {
-    if (!index || !index->key ||
-        !index->key->column_index_array ||
-        index->key->num_columns == 0) {
-        printf("validate_modified_index: Invalid index.\n");
+// Validate one existing index against the proposed table schema
+bool validate_modified_index(const Index *index, Schema *working_schema,
+    uint32_t column_index, const AlterColumnMap *map) {
+    if (!index || !index->key || !index->key->column_index_array || index->key->num_columns == 0 ||
+        !working_schema || !working_schema->columns ||
+        !map || !map->working_to_original ||
+        map->num_columns != working_schema->num_columns ||
+        column_index >= working_schema->num_columns) {
         return false;
     }
 
-    // Physical storage validation is always required.
-    // Even non-key columns affect serialized row size.
-    if (!btree_index_definition_fits(index, working_schema)) {
-        printf("validate_modified_index: Index exceeds physical storage limits.\n");
+    uint32_t count = index->key->num_columns;
+
+    if ((size_t)count > SIZE_MAX / sizeof(uint32_t)) {
         return false;
     }
 
-    // If the modified column is not part of the index key,
-    // there is no need to recheck key datatype compatibility.
-    if (!index_key_has_column(index, column_index)) {
-        return true;
+    // Create a temporary key using WORKING indexes
+    uint32_t *working_indexes = malloc((size_t)count * sizeof(*working_indexes));
+
+    if (!working_indexes) {
+        return false;
     }
 
-    // Validate every column composing the affected key
-    for (uint32_t i = 0; i < index->key->num_columns; i++) {
-        uint32_t key_column_index = index->key->column_index_array[i];
+    bool valid = false;
+    bool affected = false;
 
-        if (key_column_index >= working_schema->num_columns) {
-            return false;
+    for (uint32_t i = 0; i < count; i++) {
+        uint32_t original_index = index->key->column_index_array[i];
+
+        if (!alter_map_find_working(map, original_index, &working_indexes[i])) {
+            goto cleanup;
         }
 
-        Column *column = working_schema->columns[key_column_index];
-
-        if (!column) {
-            return false;
+        if (working_indexes[i] >= working_schema->num_columns) {
+            goto cleanup;
         }
 
-        DataType type = column->type;
-
-        if (!supports_ordering(type) || !are_equality_compatible(type, type)) {
-            printf("validate_modified_index: Unsupported index key datatype.\n");
-            return false;
+        if (working_indexes[i] == column_index) {
+            affected = true;
         }
     }
 
-    return true;
+    // Stack-only copies of the metadata
+    // No ownership of the live index or key is transferred
+    IndexKey remapped_key = *index->key;
+    remapped_key.column_index_array = working_indexes;
+
+    Index remapped_index = *index;
+    remapped_index.key = &remapped_key;
+
+    // Check the physical definition against the correct columns
+    if (!btree_index_definition_fits(&remapped_index, working_schema)) {
+        goto cleanup;
+    }
+
+    if (affected) {
+        for (uint32_t i = 0; i < count; i++) {
+            Column *column = working_schema->columns[working_indexes[i]];
+
+            if (!column) {
+                goto cleanup;
+            }
+
+            DataType type = column->type;
+
+            if (!supports_ordering(type) || !are_equality_compatible(type, type)) {
+                goto cleanup;
+            }
+        }
+    }
+
+    valid = true;
+
+cleanup:
+    free(working_indexes);
+    return valid;
 }
 
 // Orchestrate validation of all indexes that are affected by the modified column
-bool validate_modified_column_indexes(Table *table, Schema *working_schema, uint32_t column_index) {
+bool validate_modified_column_indexes(Table *table, Schema *working_schema,
+    uint32_t column_index, const AlterColumnMap *map) {
     if (!table || !working_schema ||
         !working_schema->columns ||
         working_schema->num_columns == 0 ||
         column_index >= working_schema->num_columns ||
-        (table->total_secondary_indexes > 0 &&
-         !table->secondary_indexes)) {
+        (table->total_secondary_indexes > 0 && !table->secondary_indexes)) {
         printf("validate_modified_column_indexes: Invalid inputs.\n");
         return false;
     }
 
-    // Validate the canonical B+Tree index.
+    if (!map || !map->working_to_original || map->num_columns != working_schema->num_columns) {
+        return false;
+    }
+
+    // Validate the canonical B+ Tree index
     if (!table->primary_index ||
-        !validate_modified_index(table->primary_index, working_schema, column_index)) {
+        !validate_modified_index(table->primary_index, working_schema, column_index,map)) {
         printf("validate_modified_column_indexes: Primary index incompatibility.\n");
         return false;
     }
@@ -7414,7 +7750,7 @@ bool validate_modified_column_indexes(Table *table, Schema *working_schema, uint
     for (uint32_t i = 0; i < table->total_secondary_indexes; i++) {
         Index *index = table->secondary_indexes[i];
 
-        if (!validate_modified_index(index, working_schema, column_index)) {
+        if (!validate_modified_index(index, working_schema, column_index, map)) {
             printf("validate_modified_column_indexes: Secondary index incompatibility.\n");
             return false;
         }
@@ -8005,4 +8341,149 @@ failed:
     free(stack);
     printf("working_schema_drop_column: Schema update failed.\n");
     return false;
+}
+
+// Select between a proposed table name from an ALTER TABLE RENAME and the actual table name
+const char *binding_relation_current_name(const BindingRelation *relation) {
+    if (!relation || !relation->table) {
+        return NULL;
+    }
+
+    if (relation->proposed_table_name[0] != '\0') {
+        return relation->proposed_table_name;
+    }
+
+    return relation->table->name;
+}
+
+// only CHECK constraints require column-name rewriting in their stored expression trees 
+// for your current runtime representation
+bool rewrite_check_identifiers(ExpressionNode *expr, int32_t target_column_index,
+    const char *new_column_name, const char *old_table_name, const char *new_table_name,
+    bool apply) {
+    if (!expr) {
+        return false;
+    }
+
+    switch (expr->type) {
+        case EXPR_LITERAL:
+            return true;
+
+        case EXPR_COLUMN_REF: {
+            ColumnRef *ref = &expr->expression_data.column_value;
+
+            if (target_column_index >= 0 &&
+                ref->column_index == target_column_index) {
+
+                if (!new_column_name || strlen(new_column_name) >= sizeof(ref->column_name)) {
+                    return false;
+                }
+
+                if (apply) {
+                    strcpy(ref->column_name, new_column_name);
+                }
+            }
+
+            if (old_table_name && new_table_name && ref->table_name[0] != '\0' &&
+                !strcmp(ref->table_name, old_table_name)) {
+
+                if (strlen(new_table_name) >= sizeof(ref->table_name)) {
+                    return false;
+                }
+
+                if (apply) {
+                    strcpy(ref->table_name, new_table_name);
+                }
+            }
+
+            return true;
+        }
+
+        case EXPR_UNARY:
+            return rewrite_check_identifiers(
+                expr->expression_data.unary_expr.operand,
+                target_column_index, new_column_name,
+                old_table_name, new_table_name, apply
+            );
+
+        case EXPR_BINARY: {
+            Binary *binary = &expr->expression_data.binary_expr;
+
+            return
+                rewrite_check_identifiers(
+                    binary->left_operand,
+                    target_column_index, new_column_name,
+                    old_table_name, new_table_name, apply
+                ) &&
+                rewrite_check_identifiers(
+                    binary->right_operand,
+                    target_column_index, new_column_name,
+                    old_table_name, new_table_name, apply
+                );
+        }
+
+        case EXPR_IS_NULL:
+            return rewrite_check_identifiers(
+                expr->expression_data.is_null_expr.operand,
+                target_column_index, new_column_name,
+                old_table_name, new_table_name, apply
+            );
+
+        case EXPR_IS_NOT_NULL:
+            return rewrite_check_identifiers(
+                expr->expression_data.is_not_null_expr.operand,
+                target_column_index, new_column_name,
+                old_table_name, new_table_name, apply
+            );
+
+        case EXPR_IN: {
+            In *in = &expr->expression_data.in_expr;
+
+            if (!in->operand || (in->option_count > 0 && !in->set_options)) {
+                return false;
+            }
+
+            if (!rewrite_check_identifiers(
+                    in->operand,
+                    target_column_index, new_column_name,
+                    old_table_name, new_table_name, apply)) {
+                return false;
+            }
+
+            for (uint32_t i = 0; i < in->option_count; i++) {
+                if (!rewrite_check_identifiers(
+                        in->set_options[i],
+                        target_column_index, new_column_name,
+                        old_table_name, new_table_name, apply)) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        case EXPR_BETWEEN: {
+            Between *between = &expr->expression_data.between_expr;
+
+            return
+                rewrite_check_identifiers(
+                    between->operand,
+                    target_column_index, new_column_name,
+                    old_table_name, new_table_name, apply
+                ) &&
+                rewrite_check_identifiers(
+                    between->lower,
+                    target_column_index, new_column_name,
+                    old_table_name, new_table_name, apply
+                ) &&
+                rewrite_check_identifiers(
+                    between->upper,
+                    target_column_index, new_column_name,
+                    old_table_name, new_table_name, apply
+                );
+        }
+
+        default:
+            return false;
+    }
 }
