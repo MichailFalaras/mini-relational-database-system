@@ -12,6 +12,8 @@
 #include "../table/table_utils.h"
 #include "../../include/pager.h"
 #include "../../include/expressions.h"
+#include "../../include/semantic_binder.h"
+
 
 /* Helper function to deep-copy uint32_t array (of column_refs). */
 uint32_t *copy_uint32_array(const uint32_t *source, uint32_t amount) {
@@ -474,8 +476,14 @@ bool constraint_validate_row(Pager *pager, const Constraint *constraint, const S
 // Check whether a Primary Key or Unique constraint is referenced
 // by any Foreign Key in the database
 bool constraint_is_referenced_by_foreign_key(const Database *db, const Table *table,
-    const Schema *working_schema, const Constraint *target_constraint, bool *out_referenced) {
+    const Schema *working_schema, const char *proposed_table_name, const AlterColumnMap *map,
+    const Constraint *target_constraint, bool *out_referenced) {
+    
     if (!out_referenced) {
+        return false;
+    }
+
+    if (!proposed_table_name || proposed_table_name[0] == '\0') {
         return false;
     }
 
@@ -484,6 +492,14 @@ bool constraint_is_referenced_by_foreign_key(const Database *db, const Table *ta
     if (!db || !table || !working_schema || !target_constraint || table->name[0] == '\0' ||
         (db->table_count > 0 && !db->tables) ||
         (working_schema->num_constraints > 0 && !working_schema->constraints)) {
+        return false;
+    }
+
+    if (!map && working_schema != table->table_schema) {
+        return false;
+    }
+
+    if (map && (!map->working_to_original || map->num_columns != working_schema->num_columns)) {
         return false;
     }
 
@@ -530,6 +546,9 @@ bool constraint_is_referenced_by_foreign_key(const Database *db, const Table *ta
         // Other tables retain their existing live schemas
         const Schema *schema = current_table == table ? working_schema : current_table->table_schema;
 
+        const bool self_table = current_table == table;
+        const char *expected_table_name = self_table ? proposed_table_name : table->name;
+
         if (schema->num_constraints == 0) {
             continue;
         }
@@ -557,13 +576,17 @@ bool constraint_is_referenced_by_foreign_key(const Database *db, const Table *ta
             }
 
             // This FK references a different table
-            if (strcmp(fk->referenced_table_name, table->name)) {
+            if (strcmp(fk->referenced_table_name, expected_table_name)) {
                 continue;
             }
 
             // Validate references in the target table's index space
+            uint32_t referenced_column_count =
+                self_table ? working_schema->num_columns : table->table_schema->num_columns;
+
             for (uint32_t k = 0; k < fk->amount_referenced_columns; k++) {
-                if (fk->referenced_columns[k] >= working_schema->num_columns) {
+
+                if (fk->referenced_columns[k] >= referenced_column_count) {
                     return false;
                 }
             }
@@ -576,8 +599,21 @@ bool constraint_is_referenced_by_foreign_key(const Database *db, const Table *ta
             bool matches = true;
 
             for (uint32_t k = 0; k < target_column_count; k++) {
+                uint32_t expected_index = target_columns[k];
 
-                if (fk->referenced_columns[k] != target_columns[k]) {
+                if (!self_table) {
+                    // Target key uses WORKING indexes. External FK uses ORIGINAL indexes
+                    if (!alter_map_get_original(map, target_columns[k], &expected_index)) {
+                        return false;
+                    }
+
+                    if (expected_index == ALTER_NEW_COLUMN) {
+                        matches = false;
+                        break;
+                    }
+                }
+
+                if (fk->referenced_columns[k] != expected_index) {
                     matches = false;
                     break;
                 }

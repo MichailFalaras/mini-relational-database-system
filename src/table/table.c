@@ -2661,6 +2661,8 @@ bool table_remove_constraint(Table *table, Pager *pager, const char *constraint_
                     context->db,
                     table,
                     table->table_schema,
+                    table->name,
+                    NULL,
                     target_constraint,
                     &referenced)) {
                 return false;

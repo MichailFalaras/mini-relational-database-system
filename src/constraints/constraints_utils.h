@@ -8,6 +8,7 @@ typedef struct pager Pager;
 typedef struct row Row;
 typedef struct table Table;
 typedef struct evaluation_context EvaluationContext;
+typedef struct AlterColumnMap AlterColumnMap;
 
 
 extern uint32_t *copy_uint32_array(const uint32_t *source, uint32_t amount);
@@ -27,7 +28,8 @@ extern bool constraint_validate_row(Pager *pager, const Constraint *constraint, 
     const Row *row, const EvaluationContext *context);
 
 extern bool constraint_is_referenced_by_foreign_key(const Database *db, const Table *table,
-    const Schema *working_schema, const Constraint *target_constraint, bool *out_referenced);
+    const Schema *working_schema, const char *proposed_table_name, const AlterColumnMap *map,
+    const Constraint *target_constraint, bool *out_referenced);
 
 // Return a prefix based on the constraint type,
 // Used when internally assigning names to unnamed constraints in queries 
