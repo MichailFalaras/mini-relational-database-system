@@ -323,6 +323,35 @@ uint32_t database_find_table_index(const Database *db, const char *table_name) {
 }
 
 
+Index *database_find_index(const Database *db, const char *index_name, Table **out_table) {
+    if (!db || !index_name || index_name[0] == '\0' ||
+        !out_table ||
+        (db->table_count > 0 && !db->tables)) {
+        return NULL;
+    }
+
+    *out_table = NULL;
+
+    for (uint32_t i = 0; i < db->table_count; i++) {
+        Table *table = db->tables[i];
+
+        if (!table) {
+            return NULL;
+        }
+
+        // Reuse the existing table-level index lookup
+        Index *index = table_find_index(table, index_name);
+
+        if (index) {
+            *out_table = table;
+            return index;
+        }
+    }
+
+    return NULL;
+}
+
+
 /*
  * Remove and free a table owned by the Database.
  *
