@@ -12875,6 +12875,431 @@ cleanup:
     return result;
 }
 
+
+/* ---------- bind_drop_index unit tests ---------- */
+
+int test_bind_drop_index_basic() {
+    int result = 1;
+    DDLBinderTestFixture binder = {0};
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+    BoundDropIndex bound_index = {0};
+
+    TestToken tokens[] = {
+        {"DROP INDEX", KEYWORD}, {"idx_employees_name", IDENTIFIER}, {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_DROP_INDEX);
+
+    ASSERT(bind_drop_index(root, &binder.context, &bound_index));
+    
+    ASSERT(bound_index.table == &binder.tables[0]);
+    ASSERT(bound_index.index == &binder.employee_name_index);
+    ASSERT(bound_index.drop_index == &root->node_contents.drop_index);
+    ASSERT(!strcmp(bound_index.drop_index->index_name, "idx_employees_name"));
+
+    // Binding must preserve table and index metadata.
+    ASSERT(binder.db.table_count == 3);
+    ASSERT(binder.tables[0].primary_index == &binder.canonical_indexes[0]);
+    ASSERT(binder.tables[1].primary_index == &binder.canonical_indexes[1]);
+    ASSERT(binder.tables[2].primary_index == &binder.canonical_indexes[2]);
+    ASSERT(binder.tables[0].secondary_indexes == binder.employee_secondary_indexes);
+    ASSERT(binder.tables[0].secondary_indexes[0] == &binder.employee_name_index);
+    ASSERT(binder.tables[0].total_secondary_indexes == 1);
+
+    result = 0;
+
+cleanup:
+    bound_drop_index_free(&bound_index);
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_drop_index_other_table() {
+    int result = 1;
+    DDLBinderTestFixture binder = {0};
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+    BoundDropIndex bound_index = {0};
+
+    TestToken tokens[] = {
+        {"DROP INDEX", KEYWORD}, {"idx_departments_budget", IDENTIFIER}, {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+    
+    uint32_t department_column_ids[] = {2};
+    IndexKey department_key = {0};
+    department_key.column_index_array = department_column_ids;
+    department_key.num_columns = 1;
+    Index department_index = {0};
+    snprintf(department_index.name, sizeof(department_index.name), "%s", "idx_departments_budget");
+    department_index.type = SECONDARY_INDEX;
+    department_index.key = &department_key;
+    Index *department_secondary[] = {&department_index};
+    binder.tables[1].secondary_indexes = department_secondary;
+    binder.tables[1].total_secondary_indexes = 1;
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_DROP_INDEX);
+
+    ASSERT(bind_drop_index(root, &binder.context, &bound_index));
+    ASSERT(bound_index.table == &binder.tables[1]);
+    ASSERT(bound_index.index == &department_index);
+    ASSERT(bound_index.drop_index == &root->node_contents.drop_index);
+    ASSERT(!strcmp(bound_index.drop_index->index_name, "idx_departments_budget"));
+
+    // Binding must preserve table and index metadata.
+    ASSERT(binder.db.table_count == 3);
+    ASSERT(binder.tables[0].primary_index == &binder.canonical_indexes[0]);
+    ASSERT(binder.tables[1].primary_index == &binder.canonical_indexes[1]);
+    ASSERT(binder.tables[2].primary_index == &binder.canonical_indexes[2]);
+    ASSERT(binder.tables[0].secondary_indexes == binder.employee_secondary_indexes);
+    ASSERT(binder.tables[0].secondary_indexes[0] == &binder.employee_name_index);
+    ASSERT(binder.tables[0].total_secondary_indexes == 1);
+    ASSERT(binder.tables[1].secondary_indexes == department_secondary);
+    ASSERT(binder.tables[1].total_secondary_indexes == 1);
+    ASSERT(department_secondary[0] == &department_index);
+
+    result = 0;
+
+cleanup:
+    bound_drop_index_free(&bound_index);
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_drop_index_not_found() {
+    int result = 1;
+    DDLBinderTestFixture binder = {0};
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+    BoundDropIndex bound_index = {0};
+
+    TestToken tokens[] = {
+        {"DROP INDEX", KEYWORD}, {"idx_does_not_exist", IDENTIFIER}, {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_DROP_INDEX);
+
+    ASSERT(!bind_drop_index(root, &binder.context, &bound_index));
+    
+    ASSERT(bound_index.table == NULL);
+    ASSERT(bound_index.drop_index == NULL);
+    ASSERT(bound_index.index == NULL);
+
+    // Binding must preserve table and index metadata.
+    ASSERT(binder.db.table_count == 3);
+    ASSERT(binder.tables[0].primary_index == &binder.canonical_indexes[0]);
+    ASSERT(binder.tables[1].primary_index == &binder.canonical_indexes[1]);
+    ASSERT(binder.tables[2].primary_index == &binder.canonical_indexes[2]);
+    ASSERT(binder.tables[0].secondary_indexes == binder.employee_secondary_indexes);
+    ASSERT(binder.tables[0].secondary_indexes[0] == &binder.employee_name_index);
+    ASSERT(binder.tables[0].total_secondary_indexes == 1);
+
+    result = 0;
+
+cleanup:
+    bound_drop_index_free(&bound_index);
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_drop_index_primary_rejected() {
+    int result = 1;
+    
+    DDLBinderTestFixture binder = {0};
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+    BoundDropIndex bound_index = {0};
+
+    TestToken tokens[] = {
+        {"DROP INDEX", KEYWORD}, {"pk_departments", IDENTIFIER}, {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+    snprintf(binder.canonical_indexes[1].name,
+             sizeof(binder.canonical_indexes[1].name), "%s", "pk_departments");
+    binder.canonical_indexes[1].type = PRIMARY_INDEX;
+    binder.canonical_indexes[1].is_unique = true;
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_DROP_INDEX);
+
+    ASSERT(!bind_drop_index(root, &binder.context, &bound_index));
+    
+    ASSERT(bound_index.table == NULL);
+    ASSERT(bound_index.drop_index == NULL);
+    ASSERT(bound_index.index == NULL);
+
+    // Binding must preserve table and index metadata.
+    ASSERT(binder.db.table_count == 3);
+    ASSERT(binder.tables[0].primary_index == &binder.canonical_indexes[0]);
+    ASSERT(binder.tables[1].primary_index == &binder.canonical_indexes[1]);
+    ASSERT(binder.tables[2].primary_index == &binder.canonical_indexes[2]);
+    ASSERT(binder.tables[0].secondary_indexes == binder.employee_secondary_indexes);
+    ASSERT(binder.tables[0].secondary_indexes[0] == &binder.employee_name_index);
+    ASSERT(binder.tables[0].total_secondary_indexes == 1);
+
+    result = 0;
+
+cleanup:
+    bound_drop_index_free(&bound_index);
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_drop_index_unique_rejected() {
+    int result = 1;
+    DDLBinderTestFixture binder = {0};
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+    BoundDropIndex bound_index = {0};
+
+    TestToken tokens[] = {
+        {"DROP INDEX", KEYWORD}, {"idx_employees_name", IDENTIFIER}, {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+    binder.employee_name_index.is_unique = true;
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_DROP_INDEX);
+
+    ASSERT(!bind_drop_index(root, &binder.context, &bound_index));
+    
+    ASSERT(bound_index.table == NULL);
+    ASSERT(bound_index.drop_index == NULL);
+    ASSERT(bound_index.index == NULL);
+
+    // Binding must preserve table and index metadata.
+    ASSERT(binder.db.table_count == 3);
+    ASSERT(binder.tables[0].primary_index == &binder.canonical_indexes[0]);
+    ASSERT(binder.tables[1].primary_index == &binder.canonical_indexes[1]);
+    ASSERT(binder.tables[2].primary_index == &binder.canonical_indexes[2]);
+    ASSERT(binder.tables[0].secondary_indexes == binder.employee_secondary_indexes);
+    ASSERT(binder.tables[0].secondary_indexes[0] == &binder.employee_name_index);
+    ASSERT(binder.tables[0].total_secondary_indexes == 1);
+
+    result = 0;
+
+cleanup:
+    bound_drop_index_free(&bound_index);
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_drop_index_empty_name() {
+    int result = 1;
+    DDLBinderTestFixture binder = {0};
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+    BoundDropIndex bound_index = {0};
+
+    TestToken tokens[] = {
+        {"DROP INDEX", KEYWORD}, {"idx_employees_name", IDENTIFIER}, {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_DROP_INDEX);
+    root->node_contents.drop_index.index_name[0] = '\0';
+
+    ASSERT(!bind_drop_index(root, &binder.context, &bound_index));
+    
+    ASSERT(bound_index.table == NULL);
+    ASSERT(bound_index.drop_index == NULL);
+    ASSERT(bound_index.index == NULL);
+
+    // Binding must preserve table and index metadata.
+    ASSERT(binder.db.table_count == 3);
+    ASSERT(binder.tables[0].primary_index == &binder.canonical_indexes[0]);
+    ASSERT(binder.tables[1].primary_index == &binder.canonical_indexes[1]);
+    ASSERT(binder.tables[2].primary_index == &binder.canonical_indexes[2]);
+    ASSERT(binder.tables[0].secondary_indexes == binder.employee_secondary_indexes);
+    ASSERT(binder.tables[0].secondary_indexes[0] == &binder.employee_name_index);
+    ASSERT(binder.tables[0].total_secondary_indexes == 1);
+
+    result = 0;
+
+cleanup:
+    bound_drop_index_free(&bound_index);
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_drop_index_nonempty_output() {
+    int result = 1;
+    DDLBinderTestFixture binder = {0};
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+    BoundDropIndex bound_index = {0};
+
+    TestToken tokens[] = {
+        {"DROP INDEX", KEYWORD}, {"idx_employees_name", IDENTIFIER}, {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_DROP_INDEX);
+    bound_index.index = &binder.employee_name_index;
+
+    ASSERT(!bind_drop_index(root, &binder.context, &bound_index));
+    
+    ASSERT(bound_index.table == NULL);
+    ASSERT(bound_index.drop_index == NULL);
+    ASSERT(bound_index.index == &binder.employee_name_index);
+
+    // Binding must preserve table and index metadata.
+    ASSERT(binder.db.table_count == 3);
+    ASSERT(binder.tables[0].primary_index == &binder.canonical_indexes[0]);
+    ASSERT(binder.tables[1].primary_index == &binder.canonical_indexes[1]);
+    ASSERT(binder.tables[2].primary_index == &binder.canonical_indexes[2]);
+    ASSERT(binder.tables[0].secondary_indexes == binder.employee_secondary_indexes);
+    ASSERT(binder.tables[0].secondary_indexes[0] == &binder.employee_name_index);
+    ASSERT(binder.tables[0].total_secondary_indexes == 1);
+
+    result = 0;
+
+cleanup:
+    bound_drop_index_free(&bound_index);
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+    return result;
+}
+
+int test_bind_drop_index_wrong_ast_type() {
+    int result = 1;
+    
+    DDLBinderTestFixture binder = {0};
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+    BoundDropIndex bound_index = {0};
+
+    TestToken tokens[] = {
+        {"DROP TABLE", KEYWORD}, {"employees", IDENTIFIER}, {";", PUNCTUATION}
+    };
+
+    init_ddl_binder_fixture(&binder);
+
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+
+    root = parse(parser);
+    ASSERT(root != NULL);
+    ASSERT(root->type == AST_DROP_TABLE);
+
+    ASSERT(!bind_drop_index(root, &binder.context, &bound_index));
+    
+    ASSERT(bound_index.table == NULL);
+    ASSERT(bound_index.drop_index == NULL);
+    ASSERT(bound_index.index == NULL);
+
+    // Binding must preserve table and index metadata.
+    ASSERT(binder.db.table_count == 3);
+    ASSERT(binder.tables[0].primary_index == &binder.canonical_indexes[0]);
+    ASSERT(binder.tables[1].primary_index == &binder.canonical_indexes[1]);
+    ASSERT(binder.tables[2].primary_index == &binder.canonical_indexes[2]);
+    ASSERT(binder.tables[0].secondary_indexes == binder.employee_secondary_indexes);
+    ASSERT(binder.tables[0].secondary_indexes[0] == &binder.employee_name_index);
+    ASSERT(binder.tables[0].total_secondary_indexes == 1);
+
+    result = 0;
+
+cleanup:
+    bound_drop_index_free(&bound_index);
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+    return result;
+}
+
+// Regression for Option A: CREATE INDEX must reject names used on other tables.
+int test_bind_create_index_duplicate_name_other_table() {
+    int result = 1;
+    
+    DDLBinderTestFixture binder = {0};
+    Parser *parser = NULL;
+    ASTNode *root = NULL;
+    BoundCreateIndex bound = {0};
+    Index *department_secondary[MAX_INDEXES] = {0};
+    
+    TestToken tokens[] = {
+        {"CREATE INDEX", KEYWORD}, {"idx_employees_name", IDENTIFIER}, {"ON", KEYWORD},
+        {"departments", IDENTIFIER}, {"(", PUNCTUATION}, {"budget", IDENTIFIER},
+        {")", PUNCTUATION}, {";", PUNCTUATION}
+    };
+    
+    init_ddl_binder_fixture(&binder);
+    
+    for (uint32_t i = 0; i < 3; i++) {
+        binder.tables[i].is_materialized = true;
+    }
+    binder.tables[1].secondary_indexes = department_secondary;
+    
+    parser = create_test_parser(tokens, ARRAY_SIZE(tokens));
+    ASSERT(parser != NULL);
+    
+    root = parse(parser);
+    ASSERT(root != NULL && root->type == AST_CREATE_INDEX);
+    
+    ASSERT(!bind_create_index(root, &binder.context, &bound));
+    
+    ASSERT(!bound.table && !bound.create_index && !bound.column_indexes);
+    ASSERT(bound.num_columns == 0);
+    ASSERT(binder.tables[1].total_secondary_indexes == 0);
+    ASSERT(binder.tables[0].secondary_indexes[0] == &binder.employee_name_index);
+   
+    result = 0;
+    
+cleanup:
+    bound_create_index_free(&bound);
+    cleanup_ddl_binder_fixture(&binder);
+    free_test_parser(parser, root);
+    return result;
+}
+
 int main(int argc, char *argv[]) {
     int result;
 
@@ -13338,6 +13763,27 @@ int main(int argc, char *argv[]) {
     generate_output(result, 217, "test_bind_create_index_wrong_ast_type");
     result = test_bind_create_index_invalid_column_expression();
     generate_output(result, 218, "test_bind_create_index_invalid_column_expression");
+
+
+    /* ---------- bind_drop_index unit tests ---------- */
+    result = test_bind_drop_index_basic();
+    generate_output(result, 219, "test_bind_drop_index_basic");
+    result = test_bind_drop_index_other_table();
+    generate_output(result, 220, "test_bind_drop_index_other_table");
+    result = test_bind_drop_index_not_found();
+    generate_output(result, 221, "test_bind_drop_index_not_found");
+    result = test_bind_drop_index_primary_rejected();
+    generate_output(result, 222, "test_bind_drop_index_primary_rejected");
+    result = test_bind_drop_index_unique_rejected();
+    generate_output(result, 223, "test_bind_drop_index_unique_rejected");
+    result = test_bind_drop_index_empty_name();
+    generate_output(result, 224, "test_bind_drop_index_empty_name");
+    result = test_bind_drop_index_nonempty_output();
+    generate_output(result, 225, "test_bind_drop_index_nonempty_output");
+    result = test_bind_drop_index_wrong_ast_type();
+    generate_output(result, 226, "test_bind_drop_index_wrong_ast_type");
+    result = test_bind_create_index_duplicate_name_other_table();
+    generate_output(result, 227, "test_bind_create_index_duplicate_name_other_table");
 
     return 0;
 }
