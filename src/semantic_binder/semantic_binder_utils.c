@@ -1697,6 +1697,7 @@ cleanup:
     return success;
 }
 
+// Bind CREATE INDEX
 bool bind_create_index(ASTNode *root, BindingContext *context, BoundCreateIndex *create_index) {
     if (!root || root->type != AST_CREATE_INDEX || !create_index) {
         printf("bind_create_index: Invalid AST root node or output.\n");
@@ -1885,7 +1886,61 @@ bool bind_create_index(ASTNode *root, BindingContext *context, BoundCreateIndex 
     return true;
 }
 
-bool bind_drop_index(ASTNode *root, BindingContext *context);
+// Bind DROP INDEX
+bool bind_drop_index(ASTNode *root, BindingContext *context, BoundDropIndex *drop_index) {
+    if (!root || root->type != AST_DROP_INDEX || !drop_index) {
+        printf("bind_drop_index: Invalid AST root node or output.\n");
+        return false;
+    }
+
+    if (!context || !context->db) {
+        printf("bind_drop_index: Invalid binding context.\n");
+        return false;
+    }
+
+    // Empty context and bound output are required
+    if (context->relations || context->num_relations != 0 || context->aggregate_depth != 0) {
+        printf("bind_drop_index: Expected fresh binding state.\n");
+        return false;
+    }
+
+    if (drop_index->drop_index || drop_index->index || drop_index->table) {
+        printf("bind_drop_index: Invalid initialized output.\n");
+        return false;
+    }
+
+    DropIndexNode *index = &root->node_contents.drop_index;
+
+    if (!index || index->index_name[0] == '\0') {
+        printf("bind_drop_index: Invalid create index node.\n");
+        return false;
+    }
+
+    // Validate that the target index actually exists
+    Table *existing_owner = NULL;
+
+    Index *target_index = database_find_index(context->db, index->index_name, &existing_owner);
+    
+    if (!target_index) {
+        printf("bind_drop_index: Index name doesn't exists in database.\n");
+        return false;
+    }
+
+    if (!existing_owner || !existing_owner->table_schema ||
+        target_index == existing_owner->primary_index ||
+        target_index->type != SECONDARY_INDEX ||
+        target_index->is_unique) {
+        printf("bind_drop_index: Cannot drop a primary or unique/constraint-backed index.\n");
+        return false;
+    }
+
+    // Publish validated output
+    drop_index->drop_index = index;
+    drop_index->table = existing_owner;
+    drop_index->index = target_index;
+
+    return true;
+}
 
 /* ---------- Parsing of Inner Query Components ---------- */
 

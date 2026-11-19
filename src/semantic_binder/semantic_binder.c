@@ -141,11 +141,20 @@ bool bind_statement(ASTNode *root, Database *db, BoundStatement *out_statement) 
 
             break;
         }
-#if 0
-        case AST_DROP_INDEX:
-            success = bind_drop_index(root, &context);
+
+        case AST_DROP_INDEX: {
+            BoundDropIndex drop_index = {0};
+
+            success = bind_drop_index(root, &context, &drop_index);
+
+            if (success) {
+                out_statement->type = BOUND_STATEMENT_DROP_INDEX;
+                out_statement->data.drop_index = drop_index;
+            }
+
             break;
-#endif           
+        }
+      
         default:
             fprintf(stderr, "ASTNodeType does not match.\n");
             success = false;
@@ -250,6 +259,14 @@ void bound_create_index_free(BoundCreateIndex *create_index) {
     *create_index = (BoundCreateIndex){0};
 }
 
+void bound_drop_index_free(BoundDropIndex *drop_index) {
+    if (!drop_index) {
+        return;
+    }
+
+    *drop_index = (BoundDropIndex){0};
+}
+
 /* Free bound statement metadata */
 void bound_statement_free(BoundStatement *statement) {
     if (!statement) {
@@ -291,6 +308,10 @@ void bound_statement_free(BoundStatement *statement) {
 
         case BOUND_STATEMENT_CREATE_INDEX:
             bound_create_index_free(&statement->data.create_index);
+            break;
+
+        case BOUND_STATEMENT_DROP_INDEX:
+            bound_drop_index_free(&statement->data.drop_index);
             break;
 
         default:

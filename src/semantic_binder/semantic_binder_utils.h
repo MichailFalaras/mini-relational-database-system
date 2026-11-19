@@ -41,6 +41,7 @@ typedef struct bound_alter_table BoundAlterTable;
 typedef struct bound_drop_table BoundDropTable;
 typedef struct bound_truncate_table BoundTruncateTable;
 typedef struct bound_create_index BoundCreateIndex;
+typedef struct bound_drop_index BoundDropIndex;
 
 
 /* ---------- CREATE TABLE Pending Column Bindings ---------- */
@@ -116,7 +117,7 @@ bool bind_alter_table(ASTNode *root, BindingContext *context, BoundAlterTable *o
 
 bool bind_create_index(ASTNode *root, BindingContext *context, BoundCreateIndex *create_index);
 
-bool bind_drop_index(ASTNode *root, BindingContext *context);
+bool bind_drop_index(ASTNode *root, BindingContext *context, BoundDropIndex *drop_index);
 
 /* ---------- Parsing of Inner Query Components ---------- */
 
