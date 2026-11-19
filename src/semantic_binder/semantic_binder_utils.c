@@ -1823,9 +1823,11 @@ bool bind_create_index(ASTNode *root, BindingContext *context, BoundCreateIndex 
     }
 
 
-    // Validate that no other index has the same name
-    if (table_find_index(table, index->index_name)) {
-        printf("bind_create_index: Index name is already in use.\n");
+    // Validate that no other index in the database has the same name
+    Table *existing_owner = NULL;
+
+    if (database_find_index(context->db, index->index_name, &existing_owner)) {
+        printf("bind_create_index: Index name already exists in database.\n");
         free(resolved_indexes);
         return false;
     }
