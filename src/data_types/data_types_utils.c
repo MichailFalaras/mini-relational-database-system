@@ -618,7 +618,7 @@ bool convert_to_timestamp(Value *value) {
  * for easy access through BTreeIndexSpec → Schema. 
  * 
  * (NOTE: BLOB/JSONB not supported yet)*/
-uint32_t get_serialized_value_size(DataType type, uint32_t type_parameter) {
+uint32_t get_serialized_value_size(DataType type, DataTypeArgs type_args) {
 
     switch (type) {
         case INTEGER:
@@ -633,7 +633,7 @@ uint32_t get_serialized_value_size(DataType type, uint32_t type_parameter) {
             return sizeof(double);
         case CHAR:
         case VARCHAR:
-            return type_parameter;
+            return type_args.length;
         case TEXT:
             return DATA_TYPE_TEXT_SIZE;
         case DATE:

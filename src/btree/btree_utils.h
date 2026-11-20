@@ -332,4 +332,7 @@ extern bool btree_collection_contains(const BTreePageCollection *visited_pages, 
 /* Helper that recursively traverses internal nodes, and backtracking at leaf nodes */
 extern BTreeStatus btree_traverse_page_recursive(BTree *btree, uint32_t page_num, BTreePageCollection *visited_pages);
 
+// Check if an index definition can fit in the B+ Tree page format
+extern bool btree_index_definition_fits(const Index *index, Schema *schema);
+ 
 #endif

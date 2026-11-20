@@ -21,10 +21,12 @@ typedef struct column {
     char name[64];
     DataType type;
 
-    // DataType Parameter
+    // DataType Parameter for CHAR(n) / VARCHAR(n) / NUMERIC(p,s)
+    // For example,
     // VARCHAR(64) → type_parameter = 64
     // UNSIGNED_INTEGER → type_parameter = 0
-    uint32_t type_parameter;
+    DataTypeArgs type_args;
+
     // Store serialized size before serializing anything
     uint32_t serialized_size;
 
@@ -70,7 +72,7 @@ extern bool schema_validate_row(const Schema *schema, const Row *row, const Eval
 
 extern Schema *schema_copy(const Schema *schema);
 
-extern Column *column_alloc(char *column_name, DataType type, uint32_t type_parameter, uint32_t not_null_rows,
+extern Column *column_alloc(char *column_name, DataType type, DataTypeArgs type_args, uint32_t not_null_rows,
     uint32_t null_rows);
 
 extern void schema_free(Schema *schema);

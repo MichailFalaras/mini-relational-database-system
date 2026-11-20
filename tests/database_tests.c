@@ -39,42 +39,24 @@ static bool allocate_mock_root_page(Pager *pager, uint32_t *page_num) {
     );
 }
 
-static Schema *create_mock_schema(void) {
+static Schema *create_mock_schema() {
     Schema *schema = NULL;
     Column **columns = calloc(3, sizeof(Column *));
     if (!columns) {
         return NULL;
     }
 
-    columns[0] = column_alloc(
-        "id",
-        UNSIGNED_INTEGER,
-        0,
-        0,
-        0
-    );
+    columns[0] = column_alloc("id", UNSIGNED_INTEGER, (DataTypeArgs){0}, 0, 0);
     if (!columns[0]) {
         goto cleanup;
     }
 
-    columns[1] = column_alloc(
-        "name",
-        VARCHAR,
-        64,
-        0,
-        0
-    );
+    columns[1] = column_alloc("name", VARCHAR, (DataTypeArgs){.length = 64}, 0, 0);
     if (!columns[1]) {
         goto cleanup;
     }
 
-    columns[2] = column_alloc(
-        "age",
-        UNSIGNED_INTEGER,
-        0,
-        0,
-        0
-    );
+    columns[2] = column_alloc("age", UNSIGNED_INTEGER, (DataTypeArgs){0}, 0, 0);
     if (!columns[2]) {
         goto cleanup;
     }
@@ -259,7 +241,7 @@ static int test_invalid_database_open() {
 
     /* ----- INVALID CATALOG ROOT ----- */
     {
-        const char *pathname = "build/database_db1_2.db";
+        const char *pathname = "build/database_db1_3.db";
         Pager *pager = pager_open(pathname);
         if (!pager) { return -1; }
 
@@ -278,7 +260,17 @@ static int test_invalid_database_open() {
 
         /* But, THERE'S NO CATALOG ROOT. */
         superblock_page.catalog_root = UINT32_MAX;
-        pager_close(pager);
+
+        uint8_t *write_offset = pager->pages[SUPERBLOCK_PAGE_NUM]->page_data;
+
+        if (!serialize_page_zero_metadata(&write_offset, &superblock_page)) {
+            pager_close(pager);
+            return -1;
+        }
+
+        if (!pager_close(pager)) {
+            return -1;
+        }
 
         Database *db = database_open(pathname);
         ASSERT(db == NULL);
@@ -336,6 +328,7 @@ static int test_invalid_database_close() {
     if (res == -1) { return -1; }
 
     ASSERT(!database_close(NULL));
+    ASSERT(database_close(db));
     return 0;
 }
 
@@ -517,10 +510,28 @@ static int test_metadata_reconstruction_and_metadata_page_update() {
 
     /* ----- MODIFY TABLE/INDEX OBJECTS IN MEMORY ----- */
     for (uint32_t i = 0; i < db->table_count; i++) {
+        DataType type = (DataType)(i % 12);
+        DataTypeArgs args = {0};
+
+        switch (type) {
+            case CHAR:
+            case VARCHAR:
+                args.length = 64;
+                break;
+
+            case NUMERIC:
+                args.precision = 10;
+                args.scale = 2;
+                break;
+
+            default:
+                break;
+        }
+
         Column col = {
             .name = "new_col",
-            .type = i%12,
-            .type_parameter = 0,
+            .type = type,
+            .type_args = args,
             .null_rows = 0,
             .non_null_rows = 0
         };

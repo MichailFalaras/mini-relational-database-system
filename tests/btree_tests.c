@@ -152,11 +152,19 @@ static bool btree_test_context_init(BTreeTestContext *ctx, const char *pathname)
     
     char column_name[64] = {0};
     DataType column_data_types[] = {UNSIGNED_INTEGER, VARCHAR, VARCHAR, NUMERIC, TIMESTAMP, BOOL};
-    uint32_t type_parameters[] = {0, 64, 128, 0, 0, 0};
+    DataTypeArgs type_args[] = {
+        (DataTypeArgs){0}, 
+        (DataTypeArgs){.length = 64}, 
+        (DataTypeArgs){.length = 128}, 
+        (DataTypeArgs){.precision = 10, .scale = 2},
+        (DataTypeArgs){0},
+        (DataTypeArgs){0},
+    };
+
     for (uint32_t i = 0; i < amount_columns; i++) {
         snprintf(column_name, sizeof(column_name), "%s%u", "col", i);
 
-        columns[i] = column_alloc(column_name, column_data_types[i], type_parameters[i], 0, 0);
+        columns[i] = column_alloc(column_name, column_data_types[i], type_args[i], 0, 0);
         if (!columns[i]) {
             goto cleanup;
         }
@@ -367,7 +375,7 @@ static bool create_index_key_values(Value **key_values, BTreeIndexSpec *index_sp
     }
 
     varchar_n_t username_varchar = {0};
-    username_varchar.max_n = get_key_column(index_spec, 1)->type_parameter;
+    username_varchar.max_n = get_key_column(index_spec, 1)->type_args.length;
     username_varchar.string = (char *) username;
 
     key_values[0] = value_create(get_key_column(index_spec, 0)->type, &active);

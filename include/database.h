@@ -6,6 +6,7 @@
 
 typedef struct pager Pager;
 typedef struct table Table;
+typedef struct index Index;
 typedef struct catalog Catalog;
 
 #define MAX_TABLES 16  
@@ -53,6 +54,9 @@ extern Table *database_find_table(const Database *db, const char *table_name);
     
 /* Return a Table's registry index, or UINT32_MAX if not found. */
 extern uint32_t database_find_table_index(const Database *db, const char *table_name);
+
+/* Check if the database contains an index */
+Index *database_find_index(const Database *db, const char *index_name, Table **out_table);
 
 /* Remove and free table metadata owned by the Database. On success, existing pointers to the removed Table become invalid. */
 extern bool database_remove_table(Database *db, const char *table_name);

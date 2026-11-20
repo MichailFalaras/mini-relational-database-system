@@ -2616,12 +2616,9 @@ bool table_add_constraint(Table *table, Pager *pager, Constraint *new_constraint
  */
 bool table_remove_constraint(Table *table, Pager *pager, const char *constraint_name, const EvaluationContext *context) {
     // Validate inputs
-    if (!table ||
-        table->name[0] == '\0' ||
-        !table->table_schema ||
-        !table->is_materialized ||
-        table->is_deleted ||
-        !table->secondary_indexes) {
+    if (!table || table->name[0] == '\0' ||
+        !table->table_schema || !table->is_materialized || table->is_deleted ||
+        (table->total_secondary_indexes > 0 && !table->secondary_indexes)) {
         return false;
     }
 
@@ -2641,14 +2638,13 @@ bool table_remove_constraint(Table *table, Pager *pager, const char *constraint_
         return false;
     }
 
-    // Validate that a constraint with the same name doesn't exists
+    // Find the target constraint in the table's live schema
     int32_t constraint_index = schema_find_constraint_index(table->table_schema, constraint_name);
-    
+
     if (constraint_index < 0) {
         return false;
     }
 
-    // Remove the actual constraint on the table's schema
     Constraint *target_constraint = table->table_schema->constraints[constraint_index];
 
     if (!target_constraint) {
@@ -2656,34 +2652,68 @@ bool table_remove_constraint(Table *table, Pager *pager, const char *constraint_
     }
 
     switch (target_constraint->type) {
-        // PRIMARY KEY constraint removal is unsupported
-        // because the primary index is the canonical table row store
         case PRIMARY_KEY:
-            return false;
+        case UNIQUE: {
+            bool referenced = false;
 
-        // First check if another table's Foreign Key depends on this UNIQUE candidate key
-        case UNIQUE: 
-            if (constraint_is_referenced_by_foreign_key(context->db, table, target_constraint)) {
+            // Ensure no FOREIGN KEY depends on this candidate key
+            if (!constraint_is_referenced_by_foreign_key(
+                    context->db,
+                    table,
+                    table->table_schema,
+                    table->name,
+                    NULL,
+                    target_constraint,
+                    &referenced)) {
                 return false;
             }
 
-            if (!table_drop_index(table, target_constraint->constraint_name, pager)) {
+            if (referenced) {
                 return false;
             }
+
+            // Only UNIQUE constraints own secondary indexes.
+            // PRIMARY KEY removal must preserve the canonical index.
+            if (target_constraint->type == UNIQUE) {
+                const UniqueConstraint *unique =
+                    &target_constraint->constraint_data.unique_cols;
+
+                Index *index = table_find_index(table, target_constraint->constraint_name);
+
+                // Ensure the index is a valid secondary index
+                if (!index ||
+                    index == table->primary_index ||
+                    index->type != SECONDARY_INDEX ||
+                    !index->is_unique) {
+                    return false;
+                }
+
+                // Verify that the index belongs to the UNIQUE constraint
+                if (!index_key_matches_key(index, unique->column_refs, unique->amount_columns)) {
+                    return false;
+                }
+
+                // Remove the constraint-owned physical secondary index
+                if (!table_drop_index(table, index->name, pager)) {
+                    return false;
+                }
+            }
+
             break;
+        }
 
-        // These constraint types don't require an index to be dropped
+        // These constraints do not own physical indexes
         case FOREIGN_KEY:
         case CHECK:
         case NOT_NULL:
         case DEFAULT:
             break;
-            
+
         default:
             return false;
-
     }
 
+    // Remove the logical constraint from the live schema
     if (!schema_drop_constraint(table->table_schema, target_constraint->constraint_name)) {
         return false;
     }

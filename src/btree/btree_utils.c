@@ -2067,3 +2067,59 @@ BTreeStatus btree_node_delete_at(Pager *pager, BTreePage *btree_page, uint16_t c
 
     return BTREE_SUCCESS;
 }
+
+// Check if an index definition can fit in the B+ Tree page format
+bool btree_index_definition_fits(const Index *index, Schema *schema) {
+    if (!index || !schema || !schema->columns || schema->num_columns == 0) {
+        return false;
+    }
+
+    BTreeIndexSpec spec = {0};
+
+    // Validate index column references, calculate serialized composite key size
+    // and ensure the key size fits in a uint16_t 
+    if (!btree_index_spec_init(index, schema, BTREE_ROW_PAYLOAD, &spec)) {
+        return false;
+    }
+
+    bool valid = true;
+
+    uint64_t key_size = spec.key_size;
+
+    // Calculare the serialized row payload size
+    // size = is_deleted + n_columns + NULL bitmap + each serialized column size
+    uint64_t row_size = sizeof(uint8_t) + sizeof(uint32_t) + ((uint64_t)schema->num_columns + 7) / 8;
+
+    for (uint32_t i = 0; i < schema->num_columns; i++) {
+        Column *column = schema->columns[i];
+
+        if (!column || column->serialized_size == 0) {
+            index_btree_spec_free(&spec);
+            return false;
+        }
+
+        row_size += column->serialized_size;
+    }
+
+    uint64_t internal_cell_size = key_size + sizeof(uint32_t);
+    uint64_t leaf_cell_size = key_size + row_size;
+
+    // Cell sizes are stored in uint16_t.
+    if (internal_cell_size > UINT16_MAX || leaf_cell_size > UINT16_MAX) {
+        index_btree_spec_free(&spec);
+        return false;
+    }
+
+    // Account for page headers and cell-pointer entries
+    uint64_t internal_required = BTREE_INTERNAL_HEADER_SIZE + sizeof(uint32_t) + internal_cell_size;
+    uint64_t leaf_required = BTREE_LEAF_HEADER_SIZE + sizeof(uint32_t) + leaf_cell_size;
+
+    // Both cell types must fit in an empty B+Tree page.
+    if (internal_required > PAGE_SIZE || leaf_required > PAGE_SIZE) {
+        index_btree_spec_free(&spec);
+        return false;
+    }
+
+    index_btree_spec_free(&spec);
+    return true;
+}

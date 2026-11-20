@@ -19,7 +19,7 @@ ExpressionNode *expression_node_create(ExpressionType type) {
     ExpressionNode *expr_node = (ExpressionNode*) calloc(1, sizeof(ExpressionNode));
     if (expr_node == NULL) {
         perror("ExpressionNode");
-        exit(1);
+        return NULL;
     }
     expr_node->type = type;
 
@@ -129,9 +129,22 @@ ExpressionNode *expression_node_copy(const ExpressionNode *source) {
 
     ExpressionNode *copy = expression_node_create(source->type);
 
+    if (!copy) {
+        return NULL;
+    }
+
     switch (source->type) {
         case EXPR_LITERAL:
-            copy->expression_data.literal_value.literal = value_copy(source->expression_data.literal_value.literal);
+            copy->expression_data.literal_value.is_untyped_null = source->expression_data.literal_value.is_untyped_null;
+
+            if (!source->expression_data.literal_value.is_untyped_null) {
+                copy->expression_data.literal_value.literal = value_copy(source->expression_data.literal_value.literal);
+
+                if (!copy->expression_data.literal_value.literal) {
+                    expression_node_free(copy);
+                    return NULL;
+                }
+            }
             break;
         case EXPR_COLUMN_REF:
             copy->expression_data.column_value = source->expression_data.column_value;
@@ -142,29 +155,69 @@ ExpressionNode *expression_node_copy(const ExpressionNode *source) {
         case EXPR_UNARY:
             copy->expression_data.unary_expr.op = source->expression_data.unary_expr.op;
             copy->expression_data.unary_expr.operand = expression_node_copy(source->expression_data.unary_expr.operand);
+
+            if (!copy->expression_data.unary_expr.operand) {
+                expression_node_free(copy);
+                return NULL;
+            }
+
             break;
         case EXPR_BINARY:
             copy->expression_data.binary_expr.op = source->expression_data.binary_expr.op;
             copy->expression_data.binary_expr.left_operand = expression_node_copy(source->expression_data.binary_expr.left_operand);
             copy->expression_data.binary_expr.right_operand = expression_node_copy(source->expression_data.binary_expr.right_operand);
+
+            if (!copy->expression_data.binary_expr.left_operand ||
+                !copy->expression_data.binary_expr.right_operand) {
+                expression_node_free(copy);
+                return NULL;
+            }
+
             break;
         case EXPR_IS_NULL:
             copy->expression_data.is_null_expr.operand = expression_node_copy(source->expression_data.is_null_expr.operand);
+
+            if (!copy->expression_data.is_null_expr.operand) {
+                expression_node_free(copy);
+                return NULL;
+            }
+
             break;
         case EXPR_IS_NOT_NULL:
             copy->expression_data.is_not_null_expr.operand = expression_node_copy(source->expression_data.is_not_null_expr.operand);
+
+            if (!copy->expression_data.is_not_null_expr.operand) {
+                expression_node_free(copy);
+                return NULL;
+            }
+
             break;
         case EXPR_IN:
             copy->expression_data.in_expr.option_count = source->expression_data.in_expr.option_count;
             copy->expression_data.in_expr.operand = expression_node_copy(source->expression_data.in_expr.operand);
-            copy->expression_data.in_expr.set_options = (ExpressionNode **) malloc(source->expression_data.in_expr.option_count*sizeof(ExpressionNode *));
-            if (copy->expression_data.in_expr.set_options == NULL) {
-                perror("expression_node_copy");
-                exit(1);
+
+            if (!copy->expression_data.in_expr.operand) {
+                expression_node_free(copy);
+                return NULL;
+            }
+
+            copy->expression_data.in_expr.set_options = (ExpressionNode **) calloc(
+                source->expression_data.in_expr.option_count,
+                sizeof(ExpressionNode *)
+            );
+
+            if (!copy->expression_data.in_expr.set_options) {
+                expression_node_free(copy);
+                return NULL;
             }
 
             for (uint32_t i = 0; i < source->expression_data.in_expr.option_count; i++) {
                 copy->expression_data.in_expr.set_options[i] = expression_node_copy(source->expression_data.in_expr.set_options[i]);
+
+                if (!copy->expression_data.in_expr.set_options[i]) {
+                    expression_node_free(copy);
+                    return NULL;
+                }
             }
 
             break;
@@ -172,10 +225,24 @@ ExpressionNode *expression_node_copy(const ExpressionNode *source) {
             copy->expression_data.between_expr.operand = expression_node_copy(source->expression_data.between_expr.operand);
             copy->expression_data.between_expr.lower = expression_node_copy(source->expression_data.between_expr.lower);
             copy->expression_data.between_expr.upper = expression_node_copy(source->expression_data.between_expr.upper);
+
+            if (!copy->expression_data.between_expr.operand ||
+                !copy->expression_data.between_expr.lower ||
+                !copy->expression_data.between_expr.upper) {
+                expression_node_free(copy);
+                return NULL;
+            }
+
             break;
         case EXPR_FUNCTIONS:
             copy->expression_data.aggregate_func_expr.type = source->expression_data.aggregate_func_expr.type;
             copy->expression_data.aggregate_func_expr.expression = expression_node_copy(source->expression_data.aggregate_func_expr.expression);
+
+            if (!copy->expression_data.aggregate_func_expr.expression) {
+                expression_node_free(copy);
+                return NULL;
+            }
+
             copy->expression_data.aggregate_func_expr.wildcard = source->expression_data.aggregate_func_expr.wildcard;
             break;
         default:
