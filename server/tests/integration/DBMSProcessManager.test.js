@@ -67,6 +67,18 @@ describe("DBMSProcessManager", () => {
 		expect(manager.pendingStartup).toBeNull();
 	});
 
+	it("READY messages split across chunks", async() => {
+		const manager = createManager(
+			resolve(__dirname, "../fixtures/mock_dbms", "mock_dbms_split_ready.exe")
+		);
+
+		await manager.start();
+
+		expect(manager.state).toBe("ready");
+		expect(manager.child).not.toBeNull();
+		expect(manager.pendingStartup).toBeNull();
+	});
+
 	it("Rejects duplicate startup", async () => {
 		const manager = createManager();
 		
@@ -218,6 +230,58 @@ describe("DBMSProcessManager", () => {
 		expect(manager.pendingRequest).toBeNull();
 		expect(manager.state).toBe("ready");
 	});
+
+	it("Reassembles a response split across stdout chunks", async () => {
+		const manager = createManager();
+
+		await manager.start();
+
+		const response = await manager.sendRequest(createQuery("req-001", "MOCK_SPLIT_RESPONSE"));
+
+		expect(response.id).toBe("req-001");
+		expect(response.status).toBe("success");
+		expect(manager.state).toBe("ready");
+		expect(manager.pendingRequest).toBeNull();
+	});
+
+	it("Accepts split UTF-8 JSONL responses", async () => {
+		const manager = createManager();
+
+		await manager.start();
+
+		const response = await manager.sendRequest(createQuery("req-001", "MOCK_SPLIT_UTF8"));
+
+		expect(response.status).toBe("success");
+		expect(manager.state).toBe("ready");
+	});
+
+	it("Accepts CRLF-terminated JSONL responses", async () => {
+		const manager = createManager();
+
+		await manager.start();
+
+		const response = await manager.sendRequest(createQuery("req-001", "MOCK_CRLF_RESPONSE"));
+
+		expect(response.status).toBe("success");
+		expect(manager.state).toBe("ready");
+	});
+
+	it("Accepts a response frame of exactly 8 MiB", async () => {
+		const manager = createManager();
+
+		await manager.start();
+
+		const response = await manager.sendRequest(
+			createQuery("req-001", "MOCK_MAX_SIZE_RESPONSE")
+		);
+
+		expect(response.id).toBe("req-001");
+		expect(response.status).toBe("success");
+		expect(response.result.kind).toBe("rows");
+
+		expect(manager.state).toBe("ready");
+		expect(manager.pendingRequest).toBeNull();
+	}, 15000);
 
 	/* ---------- REQUEST REJECTION ---------- */
 
@@ -398,6 +462,32 @@ describe("DBMSProcessManager", () => {
 		expect(manager.child).toBeNull();
 	});
 
+	it("Rejects invalid UTF-8 received from MiniDB", async () => {
+		const manager = createManager();
+
+		await manager.start();
+
+		await expect(manager.sendRequest(createQuery("req-001", "MOCK_INVALID_UTF8")))
+			.rejects
+			.toThrow("Invalid UTF-8 received from MiniDB");
+
+		expect(manager.state).toBe("failed");
+		expect(manager.pendingRequest).toBeNull();
+	});
+
+	it("Rejects an oversized incomplete JSONL frame", async () => {
+		const manager = createManager();
+
+		await manager.start();
+
+		await expect(manager.sendRequest(createQuery("req-001", "MOCK_OVERSIZED_INCOMPLETE_FRAME")))
+			.rejects
+			.toThrow("DBMS response exceeds 8MB");
+
+		expect(manager.state).toBe("failed");
+		expect(manager.pendingRequest).toBeNull();
+	});
+
 	/* ---------- CHILD PROCESS FAILURES ---------- */
 
 	it("Rejects a pending request when the child process exits", async () => {
@@ -448,4 +538,17 @@ describe("DBMSProcessManager", () => {
 		expect(manager.state).toBe("failed");
 		expect(manager.pendingRequest).toBeNull();
 	});
+
+	it("Rejects a request when MiniDB does not respond", async () => {
+		const manager = createManager();
+
+		await manager.start();
+
+		await expect(manager.sendRequest(createQuery("req-001", "MOCK_NO_RESPONSE")))
+			.rejects
+			.toThrow("DBMS request timed out");
+
+		expect(manager.state).toBe("failed");
+		expect(manager.pendingRequest).toBeNull();
+	}, 15000);
 });
