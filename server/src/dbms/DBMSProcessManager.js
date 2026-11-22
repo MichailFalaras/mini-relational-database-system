@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { StringDecoder } from "node:string_decoder";
+import { Buffer } from "node:buffer";
 import { isValidResponse, isValidReadyMessage, isValidRequest } from "./dbmsProtocol.js";
 
 
@@ -57,31 +57,43 @@ export class DBMSProcessManager {
 
 
 		// Node.js process receives output on the child process' stdout stream
-		const decoder = new StringDecoder("utf8");
-		let stdoutBuffer = "";
+		let stdoutBuffer = Buffer.alloc(0);
+
+		const decoder = new TextDecoder("utf-8", {
+			fatal: true
+		});
 
 		child.stdout.on("data", (chunk) => {
-			stdoutBuffer += decoder.write(chunk);
-
+			stdoutBuffer = Buffer.concat([stdoutBuffer, chunk]);
 			let newlineIndex;
 
-			while ((newlineIndex = stdoutBuffer.indexOf("\n")) !== -1) {
-				let line = stdoutBuffer.slice(0, newlineIndex);
-				stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
+			while ((newlineIndex = stdoutBuffer.indexOf(0x0A)) !== -1) {
+				let frame = stdoutBuffer.subarray(0, newlineIndex);
 
-				// Support optional CRLF line endings
-				if (line.endsWith("\r")) {
-					line = line.slice(0, -1);
-				}
+				stdoutBuffer = stdoutBuffer.subarray(newlineIndex + 1);
 
 				// Validate JSONL line length < 8MB
-				if (Buffer.byteLength(line, "utf8") > MAX_FRAME_SIZE) {
+				if (frame.length > MAX_FRAME_SIZE) {
 					this.failProcess(new Error("DBMS response exceeds 8MB"));
 					this.terminateFailedProcess(child);
 					return;
 				}
 
+				// Support optional CRLF (\r\n) line endings 
+				if (frame.at(-1) === 0x0D) {
+					frame = frame.subarray(0, frame.length - 1);
+				}
+
+				let line;
 				let message;
+
+				try {
+					line = decoder.decode(frame);
+				} catch (error) {
+					this.failProcess(new Error("Invalid UTF-8 received from MiniDB"));
+					this.terminateFailedProcess(child);
+					return;
+				}
 
 				try {
 					message = JSON.parse(line);
@@ -119,13 +131,14 @@ export class DBMSProcessManager {
 					}
 
 					this.pendingRequest = null;
+					clearTimeout(pending.timeout);
 					pending.resolve(message);
 				}
 			}
 
 			// Validate buffer length < 8MB, when no '\n' is received yet
-			if (Buffer.byteLength(stdoutBuffer, "utf8") > MAX_FRAME_SIZE) {
-				this.failProcess(new Error("DBMS response exceeds 8BM"));
+			if (stdoutBuffer.length > MAX_FRAME_SIZE) {
+				this.failProcess(new Error("DBMS response exceeds 8MB"));
 				this.terminateFailedProcess(child);
 				return;
 			}
@@ -164,9 +177,6 @@ export class DBMSProcessManager {
 		// and its standard I/O streams have closed
 		child.on("close", (code, signal) => {
 			if (this.child !== child) return;
-
-			// Flush any remaining decoded UTF-8 characters
-			stdoutBuffer += decoder.end();
 
 			// Any remaining bytes without a '\n' form an incomplete JSONL frame
 			const hasIncompleteFrame = stdoutBuffer.length > 0;
@@ -225,13 +235,21 @@ export class DBMSProcessManager {
 		}
 
 		return new Promise((resolve, reject) => {
+			const child = this.child;
+			
 			this.pendingRequest = {
 				id: request.id,
 				resolve,
-				reject
+				reject,
+				timeout: null
 			};
 
-			const child = this.child;
+			this.pendingRequest.timeout = setTimeout(() => {
+				if (this.pendingRequest !== null && this.pendingRequest.id === request.id) {
+					this.failProcess(new Error("DBMS request timed out."));
+					this.terminateFailedProcess(child);
+				}
+			}, 10000);
 
 			try {
 				child.stdin.write(serialized + "\n", (error) => {
@@ -270,6 +288,7 @@ export class DBMSProcessManager {
 			const pending = this.pendingRequest;
 			this.pendingRequest = null;
 
+			clearTimeout(pending.timeout);
 			pending.reject(error);
 		}
 	}
