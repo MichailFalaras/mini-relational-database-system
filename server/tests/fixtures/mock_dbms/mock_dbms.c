@@ -1,6 +1,6 @@
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
+#include <windows.h>
 
 #define BUFFER_SIZE 8192
 #define ID_SIZE 129
@@ -160,6 +160,38 @@ int main(int argc, char *argv[]) {
             continue;
         }
 
+        if (strstr(buffer, "MOCK_MAXSIZE_RESPONSE") != NULL) {
+            char prefix[256];
+
+            int prefix_len = snprintf(
+                prefix,
+                sizeof(prefix),
+                "{\"version\":1,\"id\":\"%s\",\"status\":\"success\","
+                "\"result\":{\"kind\":\"rows\",\"columns\":[\"data\"],"
+                "\"rows\":[[\"",
+                id
+            );
+
+            const char *suffix = "\"]],\"rowCount\":1}}\n";
+
+            if (prefix_len < 0 || (size_t)prefix_len >= sizeof(prefix)) {
+                return 0;
+            }
+
+            size_t suffix_len = strlen(suffix) - 1; // Exclude LF
+            size_t padding = (8 * 1024 * 1024) - (size_t)prefix_len - suffix_len;
+
+            fwrite(prefix, 1, (size_t)prefix_len, stdout);
+
+            for (size_t i = 0; i < padding; i++) {
+                fputc('A', stdout);
+            }
+
+            fputs(suffix, stdout);
+            fflush(stdout);
+            continue;
+        }
+
         if (strstr(buffer, "MOCK_OVERSIZED_RESPONSE") != NULL) {
             const size_t oversized = 8 * 1024 * 1024 + 1;
 
@@ -170,6 +202,26 @@ int main(int argc, char *argv[]) {
             putchar('\n');
             fflush(stdout);
             continue;
+        }
+
+        if (strstr(buffer, "MOCK_OVERSIZED_INCOMPLETE_FRAME") != NULL) {
+            char buffer[4906];
+            memset(buffer, 'A', sizeof(buffer));
+
+            size_t remaining = 8 * 1024 * 1024 + 1;
+
+            while (remaining > 0) {
+                size_t amount = remaining < sizeof(buffer) ? remaining : sizeof(buffer);
+
+                if (fwrite(buffer, 1, amount, stdout) != amount) {
+                    return 0;
+                }
+
+                remaining -= amount;
+            }
+
+            fflush(stdout);
+            return 1;
         }
 
         if (strstr(buffer, "MOCK_UNSOLICITED_RESPONSE") != NULL) {
@@ -197,6 +249,55 @@ int main(int argc, char *argv[]) {
 
             fflush(stdout);
 
+            return 1;
+        }
+
+        if (strstr(buffer, "MOCK_SPLIT_RESPONSE") != NULL) {
+            printf("{\"version\":1,\"id\":\"%s\",\"status\":\"success\",", id);
+            fflush(stdout);
+
+            Sleep(500); // 500ms wait between chunks
+
+            printf("\"result\":{\"kind\":\"schema\",\"tables\":[],\"indexes\":[]}}\n");
+            fflush(stdout);
+            return 1;
+        }
+
+        if (strstr(buffer, "MOCK_SPLIT_UTF8") != NULL) {
+            printf(
+                "{\"version\":1,\"id\":\"%s\",\"status\":\"success\","
+                "\"result\":{\"kind\":\"command\",\"command\":\"ΕΝΤ",
+                id
+            );
+            fflush(stdout);
+
+            Sleep(500); // 500ms wait between chunks
+
+            printf("ΟΛΗ\",\"rowsAffected\":0}}\n");
+            fflush(stdout);
+            return 1;
+        }
+
+        if (strstr(buffer, "MOCK_INVALID_UTF8") != NULL) {
+            printf(
+                "{\"version\":1,\"id\":\"%s\",\"status\":\"success\","
+                "\"result\":{\"kind\":\"command\",\"command\":\"",
+                id
+            );
+
+            unsigned char invalid_utf8[] = {0xC3, 0x28};
+
+            fwrite(invalid_utf8, 1, sizeof(invalid_utf8), stdout);
+            
+            printf("\",\"rowsAffected\":0}}\n");
+            fflush(stdout);
+            return 1;
+        }
+
+        if (strstr(buffer, "MOCK_CLRF_RESPONSE") != NULL) {
+            printf("{\"version\":1,\"id\":\"%s\",\"status\":\"success\","
+                   "\"result\":{\"kind\":\"schema\",\"tables\":[],\"indexes\":[]}}\r\n", id);
+            fflush(stdout);
             return 1;
         }
 
