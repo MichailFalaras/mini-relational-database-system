@@ -23,6 +23,7 @@ export class DBMSProcessManager {
 		this.state = DBMS_STATES.STOPPED;
 		this.pendingStartup = null;
 		this.pendingRequest = null;
+		this.pendingShutdown = null;
 	}
 
 	// Initiate DBMS child process
@@ -185,7 +186,9 @@ export class DBMSProcessManager {
 				this.failProcess(new Error("Incomplete DBMS JSONL frame at EOF"));
 			}
 			else if (this.state === DBMS_STATES.STOPPING && code === 0) {
+				this.child = null;
 				this.state = DBMS_STATES.STOPPED;
+				this.resolveShutdown();
 			}
 			else if (this.state !== DBMS_STATES.FAILED) {
 				this.failProcess(new Error(`DBMS process closed unexpectedly: ${code} ${signal}`));
@@ -236,7 +239,7 @@ export class DBMSProcessManager {
 
 		return new Promise((resolve, reject) => {
 			const child = this.child;
-			
+
 			this.pendingRequest = {
 				id: request.id,
 				resolve,
@@ -266,7 +269,83 @@ export class DBMSProcessManager {
 	}
 
 	async shutdown() {
-		throw new Error("Not implemented yet");
+		// Already stopped DMBS child process
+		if (this.state === DBMS_STATES.STOPPED && this.child === null) {
+			return;
+		}
+
+		// Child process actively stopping
+		if (this.state === DBMS_STATES.STOPPING) {
+			return this.pendingShutdown.promise;
+		}
+
+		// Invalid shutdown non-READY state
+		if (this.state !== DBMS_STATES.READY) {
+			return Promise.reject(new Error(`Cannot gracefully shut down DBMS in state: ${this.state}`));
+		}
+
+		// Invalid shutdown for currently pending request
+		if (this.pendingRequest !== null) {
+			return Promise.reject(new Error("Cannot shut down DBMS while a request is pending"));
+		}
+
+		const child = this.child;
+
+		this.state = DBMS_STATES.STOPPING;
+
+		const promise = new Promise((resolve, reject) => {
+			this.pendingShutdown = {
+				resolve,
+				reject,
+				promise: null,
+				timeout: null
+			};
+		});
+
+		this.pendingShutdown.promise = promise;
+
+		this.pendingShutdown.timeout = setTimeout(() => {
+			if (this.child === child && this.state === DBMS_STATES.STOPPING) {
+				this.failProcess(new Error("DBMS shutdown timed out"));
+				this.terminateFailedProcess(child);
+			}
+		}, 10000);
+
+		// Close child process' stdin stream 
+		try {
+			child.stdin.end();
+		} catch(error) {
+			this.failProcess(error);
+			this.terminateFailedProcess(child);
+		}
+
+		return promise;
+	}
+
+	// Successful shutdown resolution helper
+	resolveShutdown() {
+		const pending = this.pendingShutdown;
+
+		if (pending === null) {
+			return;
+		}
+
+		this.pendingShutdown = null;
+		clearTimeout(pending.timeout);
+		pending.resolve();
+	}
+
+	// Unuccessful shutdown rejection helper
+	rejectShutdown(error) {
+		const pending = this.pendingShutdown;
+
+		if (pending === null) {
+			return;
+		}
+
+		this.pendingShutdown = null;
+		clearTimeout(pending.timeout);
+		pending.reject(error);
 	}
 
 	// Centralized error handling that handles potential startup failures
@@ -291,6 +370,9 @@ export class DBMSProcessManager {
 			clearTimeout(pending.timeout);
 			pending.reject(error);
 		}
+
+		// Prevent shutdown timeout from remaining active after failure
+		this.rejectShutdown(error);
 	}
 
 	terminateFailedProcess(child) {
