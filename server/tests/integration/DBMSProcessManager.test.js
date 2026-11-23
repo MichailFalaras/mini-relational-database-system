@@ -551,4 +551,144 @@ describe("DBMSProcessManager", () => {
 		expect(manager.state).toBe("failed");
 		expect(manager.pendingRequest).toBeNull();
 	}, 15000);
+
+	/* ---------- GRACEFUL SHUTDOWN ---------- */
+
+	it("Gracefully shuts down the DBMS", async () => {
+		const manager = createManager();
+
+		await manager.start();
+
+		expect(manager.state).toBe("ready");
+
+		await manager.shutdown();
+
+		expect(manager.state).toBe("stopped");
+		expect(manager.child).toBeNull();
+		expect(manager.pendingShutdown).toBeNull();
+		expect(manager.pendingRequest).toBeNull();
+		expect(manager.pendingStartup).toBeNull();
+	});
+
+	it("Allows shutdown when the process is already stopped", async () => {
+		const manager = createManager();
+
+		await expect(manager.shutdown()).resolves.toBeUndefined();
+
+		expect(manager.state).toBe("stopped");
+		expect(manager.child).toBeNull();
+		expect(manager.pendingShutdown).toBeNull();
+	});
+
+	it("Handles multiple shutdown calls safely", async () => {
+		const manager = createManager();
+
+		await manager.start();
+
+		const first = manager.shutdown();
+		const second = manager.shutdown();
+
+		expect(manager.state).toBe("stopping");
+
+		await Promise.all([first, second]);
+
+		expect(manager.state).toBe("stopped");
+		expect(manager.child).toBeNull();
+		expect(manager.pendingShutdown).toBeNull();
+	});
+
+	it("Rejects requests while the DBMS is stopping", async () => {
+		const manager = createManager();
+
+		await manager.start();
+
+		const shutdownPromise = manager.shutdown();
+
+		expect(manager.state).toBe("stopping");
+
+		await expect(manager.sendRequest(createRequest("req-001", "schema", {})))
+			.rejects
+			.toThrow("DBMS process is not available");
+
+		await shutdownPromise;
+	});
+
+	it("Rejects shutdown while a request is pending", async () => {
+		const manager = createManager();
+
+		await manager.start();
+
+		const requestPromise = manager.sendRequest(createQuery("req-001", "MOCK_NO_RESPONSE"));
+
+		const rejection = expect(requestPromise).rejects.toThrow("Test cleanup");
+
+		await expect(manager.shutdown())
+			.rejects
+			.toThrow("Cannot shut down DBMS while a request is pending");
+
+		expect(manager.state).toBe("ready");
+		expect(manager.pendingRequest?.id).toBe("req-001");
+
+		manager.failProcess(new Error("Test cleanup"));
+		manager.terminateFailedProcess(manager.child);
+
+		await rejection;
+	});
+
+	it("Rejects shutdown during startup", async () => {
+		const manager = createManager();
+
+		const startupPromise = manager.start();
+
+		expect(manager.state).toBe("starting");
+
+		await expect(manager.shutdown())
+			.rejects
+			.toThrow("Cannot gracefully shut down DBMS in state: starting");
+
+		await startupPromise;
+
+		expect(manager.state).toBe("ready");
+		expect(manager.child).not.toBeNull();
+		expect(manager.pendingStartup).toBeNull();
+	});
+
+	it("Rejects graceful shutdown in FAILED state", async () => {
+		const manager = createManager();
+
+		await manager.start();
+
+		await expect(manager.sendRequest(createQuery("req-001", "MOCK_BAD_JSON")))
+			.rejects
+			.toThrow("Invalid JSON received from MiniDB");
+
+		expect(manager.state).toBe("failed");
+
+		await expect(manager.shutdown())
+			.rejects
+			.toThrow("Cannot gracefully shut down DBMS in state: failed");
+	});
+
+	it("Terminates the DBMS when graceful shutdown times out", async () => {
+		const manager = createManager(
+			resolve(__dirname, "../fixtures/mock_dbms", "mock_dbms_ignore_eof.exe")
+		);
+
+		await manager.start();
+
+		const child = manager.child;
+
+		await expect(manager.shutdown())
+			.rejects
+			.toThrow("DBMS shutdown timed out");
+
+		expect(manager.state).toBe("failed");
+		expect(manager.pendingShutdown).toBeNull();
+
+		if (manager.child !== null) {
+			await new Promise(resolve => child.once("close", resolve));
+		}
+
+		expect(manager.child).toBeNull();
+	}, 15000);
 });
