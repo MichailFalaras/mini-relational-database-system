@@ -691,4 +691,177 @@ describe("DBMSProcessManager", () => {
 
 		expect(manager.child).toBeNull();
 	}, 15000);
+
+	/* ---------- PROCESS LIFECYCLE VALIDATION ---------- */
+
+	it("Completes a full DBMS lifecycle", async () => {
+		const manager = createManager();
+
+		await manager.start();
+
+		expect(manager.state).toBe("ready");
+
+		const schema = await manager.sendRequest(createRequest("req-001", "schema", {}));
+		const query = await manager.sendRequest(createQuery("req-002", "SELECT * FROM users;"));
+
+		expect(schema.status).toBe("success");
+		expect(query.status).toBe("success");
+
+		await manager.shutdown();
+		
+		expect(manager.state).toBe("stopped");
+		expect(manager.child).toBeNull();
+		expect(manager.pendingStartup).toBeNull();
+		expect(manager.pendingRequest).toBeNull();
+		expect(manager.pendingShutdown).toBeNull();
+	});
+
+	it("Restarts after graceful shutdown", async () => {
+		const manager = createManager();
+
+		await manager.start();
+
+		const firstChild = manager.child;
+
+		expect(manager.state).toBe("ready");
+
+		await manager.shutdown();
+
+		expect(manager.state).toBe("stopped");
+
+		await manager.start();
+
+		expect(manager.state).toBe("ready");
+		expect(manager.child).not.toBe(firstChild);
+
+		const response = await manager.sendRequest(createRequest("req-001", "schema", {}));
+
+		expect(response.status).toBe("success");
+
+		await manager.shutdown();
+
+		expect(manager.state).toBe("stopped");
+	});
+
+	it("Supports multiple startup and shutdown cycles", async () => {
+		const manager = createManager();
+
+		for (let i = 0; i < 3; i++) {
+			await manager.start();
+
+			expect(manager.state).toBe("ready");
+
+			const response = await manager.sendRequest(
+				createRequest(`req-${i}`, "schema", {})
+			);
+
+			expect(response.status).toBe("success");
+
+			await manager.shutdown();
+
+			expect(manager.state).toBe("stopped");
+			expect(manager.child).toBeNull();
+			expect(manager.pendingStartup).toBeNull();
+			expect(manager.pendingRequest).toBeNull();
+			expect(manager.pendingShutdown).toBeNull();
+		}
+	});
+
+	it("Rejects requests after graceful shutdown", async () => {
+		const manager = createManager();
+
+		await manager.start();
+		await manager.shutdown();
+
+		await expect(manager.sendRequest(createRequest("req-001", "schema", {})))
+			.rejects
+			.toThrow("DBMS process is not available");
+
+		expect(manager.state).toBe("stopped");
+    	expect(manager.child).toBeNull();
+	});
+
+	it("Restarts after a protocol failure", async () => {
+		const manager = createManager();
+
+		await manager.start();
+
+		const child = manager.child;
+
+		const closed = new Promise(resolve => {
+			child.once("close", resolve);
+		});
+
+		await expect(manager.sendRequest(createQuery("req-001", "MOCK_BAD_JSON")))
+			.rejects
+			.toThrow("Invalid JSON received from MiniDB");
+
+		await closed;
+
+		expect(manager.state).toBe("failed");
+		expect(manager.child).toBeNull();
+
+		await manager.start();
+
+		expect(manager.state).toBe("ready");
+
+		const response = await manager.sendRequest(createRequest("req-002", "schema", {}));
+
+		expect(response.status).toBe("success");
+
+		await manager.shutdown();
+
+		expect(manager.state).toBe("stopped");
+	});
+
+	it("Restart after unexpected child termination", async () => {
+		const manager = createManager();
+
+		await manager.start();
+
+		const child = manager.child;
+
+		const closed = new Promise(resolve => {
+			child.once("close", resolve);
+		});
+
+		child.kill();
+
+		await closed;
+
+		expect(manager.state).toBe("failed");
+		expect(manager.child).toBeNull();
+
+		await manager.start();
+
+		expect(manager.state).toBe("ready");
+
+		await manager.shutdown();
+
+		expect(manager.state).toBe("stopped");
+	});
+
+	it("Manages multiple DBMS instances independently", async () => {
+		const first = createManager();
+		const second = createManager();
+
+		await Promise.all([first.start(), second.start()]);
+
+		expect(first.state).toBe("ready");
+		expect(second.state).toBe("ready");
+		expect(first.child).not.toBe(second.child);
+
+		await first.shutdown();
+
+		expect(first.state).toBe("stopped");
+		expect(second.state).toBe("ready");
+
+		const response = await second.sendRequest(createRequest("req-001", "schema", {}));
+
+		expect(response.status).toBe("success");
+
+		await second.shutdown();
+
+		expect(second.state).toBe("stopped");
+	});
 });
